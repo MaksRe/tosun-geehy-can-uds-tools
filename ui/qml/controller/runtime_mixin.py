@@ -1,0 +1,303 @@
+from __future__ import annotations
+
+from datetime import datetime
+
+from PySide6.QtCore import QThread, QUrl, Slot
+from PySide6.QtGui import QColor
+
+from colors import RowColor
+from j1939.j1939_can_identifier import J1939CanIdentifier
+from uds.uds_identifiers import UdsIdentifiers
+
+from .contract import AppControllerContract
+from .workers import FirmwareLoadWorker
+
+class AppControllerRuntimeMixin(AppControllerContract):
+
+    def _on_bootloader_state(self, text, color):
+        self._append_log(text, color)
+
+    def _on_data_sent(self, value):
+        clamped_value = min(max(value, 0), self._progress_max)
+        if self._progress_value == clamped_value:
+            return
+        self._progress_value = clamped_value
+        self.progressChanged.emit()
+
+    def _on_programming_finished(self, success):
+        if self._programming_start_timer.isActive():
+            self._programming_start_timer.stop()
+        self._pending_programming_after_reset = False
+        self._set_programming_active(False)
+        if not success:
+            return
+
+        self._progress_value = self._progress_max
+        self.progressChanged.emit()
+        self._append_log("Программирование успешно завершено", RowColor.green)
+
+        if not self._can.is_connect:
+            self.infoMessage.emit(
+                "Программирование",
+                "Программирование завершено, но CAN отключен: автосброс в основное ПО не отправлен.",
+            )
+            return
+
+        try:
+            self._ui_ecu_reset_service.ecu_software_reset()
+            self._append_log("Автосброс: отправлена команда перехода в основное ПО", RowColor.blue)
+            self.infoMessage.emit(
+                "Программирование",
+                "Программирование завершено. Отправлена команда запуска основного ПО.",
+            )
+        except Exception:
+            self._append_log("Автосброс: ошибка отправки команды перехода в основное ПО", RowColor.red)
+            self.infoMessage.emit(
+                "Программирование",
+                "Программирование завершено, но автосброс в основное ПО не отправлен.",
+            )
+
+    def _on_trace_state_event(self):
+        self._rx_time_anchor_raw = None
+        self._rx_time_anchor_wall = None
+        if not self._can.is_trace:
+            self._stop_calibration_poll_timer()
+        elif self._calibration_active and (not self._calibration_waiting_session):
+            self._start_calibration_poll_timer()
+        self.traceStateChanged.emit()
+
+    @Slot(int, bool)
+    def _on_source_address_applied(self, source_address, success):
+        self._set_source_address_busy(False)
+        if success:
+            self._source_address_text = f"0x{int(source_address) & 0xFF:02X}"
+            self.sourceAddressTextChanged.emit()
+            self._refresh_uds_identifier_texts()
+            self.infoMessage.emit("Протокол", f"Source Address изменен: {self._source_address_text}.")
+        else:
+            self._source_address_text = f"0x{UdsIdentifiers.rx.src:02X}"
+            self.sourceAddressTextChanged.emit()
+            self._refresh_uds_identifier_texts()
+            self.infoMessage.emit("Протокол", "Не удалось применить Source Address.")
+
+    @Slot(int, bool)
+    def _on_source_address_read(self, source_address, success):
+        self._set_source_address_busy(False)
+        if success:
+            self._source_address_text = f"0x{int(source_address) & 0xFF:02X}"
+            self.sourceAddressTextChanged.emit()
+            self._refresh_uds_identifier_texts()
+            self.infoMessage.emit("Протокол", f"Source Address считан: {self._source_address_text}.")
+        else:
+            self.infoMessage.emit("Протокол", "Не удалось прочитать Source Address.")
+
+    @Slot(str, bool, bytes, str)
+    def _on_firmware_loaded(self, _file_path, success, binary_content, error_text):
+        try:
+            if not success:
+                self._append_log("Ошибка загрузки BIN файла", RowColor.red)
+                self.infoMessage.emit("Прошивка", error_text if error_text else "Не удалось открыть BIN файл.")
+                return
+
+            self._bootloader.set_firmware(binary_content)
+
+            file_size = len(binary_content)
+            self._progress_max = max(file_size, 1)
+            self._progress_value = 0
+            self.progressChanged.emit()
+
+            self._append_log(f"BIN файл загружен ({file_size} байт)", RowColor.green)
+            self.infoMessage.emit("Прошивка", f"BIN файл успешно загружен. Размер: {file_size} байт.")
+        finally:
+            self._set_firmware_loading(False)
+
+    def _start_firmware_loading(self, file_path: str):
+        self._firmware_loader_thread = QThread(self)
+        self._firmware_loader_worker = FirmwareLoadWorker(file_path)
+        self._firmware_loader_worker.moveToThread(self._firmware_loader_thread)
+
+        self._firmware_loader_thread.started.connect(self._firmware_loader_worker.run)
+        self._firmware_loader_worker.finished.connect(self._on_firmware_loaded)
+        self._firmware_loader_worker.finished.connect(self._firmware_loader_thread.quit)
+        self._firmware_loader_worker.finished.connect(self._firmware_loader_worker.deleteLater)
+        self._firmware_loader_thread.finished.connect(self._firmware_loader_thread.deleteLater)
+        self._firmware_loader_thread.finished.connect(self._clear_firmware_loader)
+        self._firmware_loader_thread.start()
+
+    def _clear_firmware_loader(self):
+        self._firmware_loader_thread = None
+        self._firmware_loader_worker = None
+
+    def _refresh_device_info(self):
+        hw_index = self._selected_hw_index()
+        if hw_index < 0:
+            self._manufacturer = ""
+            self._product = ""
+            self._serial = ""
+            self.deviceInfoChanged.emit()
+            return
+
+        self._can.update_device_info(hw_index)
+        info = self._can.device_info
+
+        self._manufacturer = self._decode_bytes(getattr(info.manufacturer, "value", None))
+        self._product = self._decode_bytes(getattr(info.product, "value", None))
+        self._serial = self._decode_bytes(getattr(info.serial, "value", None))
+        self.deviceInfoChanged.emit()
+
+    def _selected_hw_index(self) -> int:
+        if self._selected_device_index < 0 or self._selected_device_index >= len(self._device_indices):
+            return -1
+        return self._device_indices[self._selected_device_index]
+
+    @staticmethod
+    def _decode_bytes(raw_value):
+        if raw_value is None:
+            return ""
+        if isinstance(raw_value, bytes):
+            try:
+                return raw_value.decode("utf-8")
+            except UnicodeDecodeError:
+                return raw_value.decode("cp1251", errors="ignore")
+        return str(raw_value)
+
+    @staticmethod
+    def _parse_uint_field(text, minimum: int, maximum: int, field_name: str) -> int:
+        raw = str(text).strip()
+        if not raw:
+            raise ValueError(f"Поле '{field_name}' не заполнено.")
+
+        base = 16 if raw.lower().startswith("0x") else 10
+        try:
+            value = int(raw, base)
+        except ValueError as exc:
+            raise ValueError(f"Поле '{field_name}' содержит некорректное число.") from exc
+
+        if value < minimum or value > maximum:
+            raise ValueError(f"Поле '{field_name}' вне диапазона {minimum}..{maximum}.")
+
+        return value
+
+    def _refresh_uds_identifier_texts(self, emit_signal: bool = True):
+        tx = UdsIdentifiers.tx
+        rx = UdsIdentifiers.rx
+
+        self._tx_priority_text = str(int(tx.priority) & 0x7)
+        self._tx_pgn_text = f"0x{int(tx.pgn) & 0xFFFF:04X}"
+        self._tx_src_text = f"0x{int(tx.src) & 0xFF:02X}"
+        self._tx_dst_text = f"0x{int(tx.dst) & 0xFF:02X}"
+        self._tx_identifier_text = f"0x{int(tx.identifier) & 0x1FFFFFFF:08X}"
+
+        self._rx_priority_text = str(int(rx.priority) & 0x7)
+        self._rx_pgn_text = f"0x{int(rx.pgn) & 0xFFFF:04X}"
+        self._rx_src_text = f"0x{int(rx.src) & 0xFF:02X}"
+        self._rx_dst_text = f"0x{int(rx.dst) & 0xFF:02X}"
+        self._rx_identifier_text = f"0x{int(rx.identifier) & 0x1FFFFFFF:08X}"
+        self._refresh_options_target_node_options(emit_signal=emit_signal)
+
+        if emit_signal:
+            self.udsIdentifiersChanged.emit()
+
+    @staticmethod
+    def _parse_source_address(text):
+        raw = str(text).strip()
+        if not raw:
+            raise ValueError("Empty Source Address")
+
+        base = 16 if raw.lower().startswith("0x") else 10
+        value = int(raw, base)
+        if value < 0 or value > 0xFF:
+            raise ValueError("Source Address out of range")
+        return value
+
+    @staticmethod
+    def _to_local_path(path_or_url):
+        if not path_or_url:
+            return ""
+
+        if isinstance(path_or_url, QUrl):
+            parsed = path_or_url
+        else:
+            parsed = QUrl(path_or_url)
+
+        if parsed.isLocalFile():
+            return parsed.toLocalFile()
+
+        if parsed.scheme() == "file":
+            return parsed.toLocalFile()
+
+        return str(path_or_url)
+
+    def _set_programming_active(self, active):
+        value = bool(active)
+        if not value:
+            if self._programming_start_timer.isActive():
+                self._programming_start_timer.stop()
+            self._pending_programming_after_reset = False
+            if self._calibration_active and self._can.is_trace and (not self._calibration_waiting_session):
+                self._start_calibration_poll_timer()
+        else:
+            self._stop_calibration_poll_timer()
+
+        if self._programming_active == value:
+            return
+        self._programming_active = value
+        self.programmingActiveChanged.emit()
+
+    def _start_programming_after_reset(self):
+        if not self._pending_programming_after_reset:
+            return
+        self._pending_programming_after_reset = False
+        self._append_log("Автосброс завершен, запуск сценария программирования", RowColor.blue)
+        self._start_programming_flow()
+
+    def _start_programming_flow(self):
+        if not self._bootloader.start():
+            self._set_programming_active(False)
+
+    def _set_source_address_busy(self, busy):
+        value = bool(busy)
+        if self._source_address_busy == value:
+            return
+        self._source_address_busy = value
+        if not value:
+            self._set_source_address_operation("")
+        self.sourceAddressBusyChanged.emit()
+
+    def _set_source_address_operation(self, operation: str):
+        value = str(operation).strip().lower()
+        if value not in ("", "read", "write"):
+            value = ""
+        if self._source_address_operation == value:
+            return
+        self._source_address_operation = value
+        self.sourceAddressOperationChanged.emit()
+
+    def _set_firmware_loading(self, loading):
+        value = bool(loading)
+        if self._firmware_loading == value:
+            return
+        self._firmware_loading = value
+        self.firmwareLoadingChanged.emit()
+
+    def _append_log(self, text, color):
+        if isinstance(color, QColor):
+            color_value = color.name()
+        else:
+            color_value = "#cbd5e1"
+
+        self._logs.append(
+            {
+                "time": datetime.now().strftime("%H:%M:%S"),
+                "text": str(text),
+                "color": color_value,
+            }
+        )
+
+        if len(self._logs) > 2000:
+            self._logs = self._logs[-2000:]
+
+        self.logsChanged.emit()
+
+        if self._programming_active and isinstance(color, QColor) and color == RowColor.red:
+            self._set_programming_active(False)
