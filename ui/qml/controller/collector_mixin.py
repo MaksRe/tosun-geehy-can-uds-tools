@@ -62,6 +62,28 @@ class AppControllerCollectorMixin(AppControllerContract):
             return float(normalized)
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _decode_signed(raw_value: int, bits: int) -> int:
+        width = max(1, int(bits))
+        mask = (1 << width) - 1
+        sign_bit = 1 << (width - 1)
+        value = int(raw_value) & mask
+        if value & sign_bit:
+            return value - (1 << width)
+        return value
+
+    @staticmethod
+    def _normalize_legacy_csv_temperature(temperature_c: float) -> tuple[float, bool]:
+        value = float(temperature_c)
+        # Legacy CSV files could store signed int16 raw temperature as unsigned tenths.
+        # Example: 6553.5 means -0.1 C.
+        if value > 3276.7:
+            raw_u16 = int(round(value * 10.0)) & 0xFFFF
+            signed_value = AppControllerCollectorMixin._decode_signed(raw_u16, 16)
+            return (signed_value / 10.0, True)
+        return (value, False)
+
     @staticmethod
     def _resolve_collector_csv_indexes(header: list[str]) -> dict[str, int]:
         idx_time = -1
@@ -108,6 +130,7 @@ class AppControllerCollectorMixin(AppControllerContract):
             return None
 
         points: list[dict[str, object]] = []
+        legacy_temp_fix_count = 0
         try:
             with resolved_path.open("r", encoding="utf-8-sig", newline="") as file:
                 reader = csv.reader(file, delimiter=";")
@@ -137,6 +160,9 @@ class AppControllerCollectorMixin(AppControllerContract):
                     fuel_value = self._parse_collector_csv_number(normalized_row[idx_fuel])
                     if temperature_value is None or fuel_value is None:
                         continue
+                    normalized_temperature, was_fixed = self._normalize_legacy_csv_temperature(temperature_value)
+                    if was_fixed:
+                        legacy_temp_fix_count += 1
 
                     idx_time = int(indexes.get("time", -1))
                     if 0 <= idx_time < len(normalized_row):
@@ -147,7 +173,7 @@ class AppControllerCollectorMixin(AppControllerContract):
                     points.append(
                         {
                             "fuel": float(fuel_value),
-                            "temperature": float(temperature_value),
+                            "temperature": float(normalized_temperature),
                             "time": str(time_text),
                         }
                     )
@@ -166,6 +192,7 @@ class AppControllerCollectorMixin(AppControllerContract):
             "points": points,
             "path": str(resolved_path),
             "source": "csv",
+            "legacyTemperatureCorrections": int(legacy_temp_fix_count),
         }
     @staticmethod
     def _resolve_project_root_directory() -> Path:
@@ -552,7 +579,9 @@ class AppControllerCollectorMixin(AppControllerContract):
             has_trend_update = True
             nodes_changed = True
         elif did == int(UdsData.raw_temperature.pid):
-            temperature = value / 10.0
+            bits = max(8, int(UdsData.raw_temperature.size) * 8)
+            signed_value = self._decode_signed(value, bits)
+            temperature = signed_value / 10.0
             node["temperature"] = temperature
             node["temperatureCount"] = int(node.get("temperatureCount", 0)) + 1
             self._append_collector_csv(node_sa, node, timestamp)

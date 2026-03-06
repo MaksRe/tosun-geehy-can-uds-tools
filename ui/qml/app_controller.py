@@ -174,7 +174,8 @@ class AppController(
         self._collector_poll_phase = 0
         self._collector_trend_points: list[dict[str, object]] = []
         self._collector_trend_max_points = 180
-        self._collector_trend_history_limit = 600
+        # 0 means unlimited history to keep all points since collector start.
+        self._collector_trend_history_limit = 0
         self._collector_trend_caption = "Ожидание данных от узлов..."
         self._collector_trend_latest_fuel = 0.0
         self._collector_trend_latest_temperature = 0.0

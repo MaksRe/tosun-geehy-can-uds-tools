@@ -307,13 +307,25 @@ ApplicationWindow {
                     onSelectOutputDirectoryRequested: collectorDirDialog.open()
                 }
 
-                CollectorTrendCard {
+                SpoilerSection {
                     Layout.fillWidth: true
-                    appController: window.backendController
+                    title: "Графики и параметры узлов CAN"
+                    hintText: "Показать/скрыть блок анализа"
+                    expanded: false
                     cardColor: window.cardColor
                     cardBorder: window.cardBorder
                     textMain: window.textMain
                     textSoft: window.textSoft
+                    accentColor: window.inputFocus
+
+                    CollectorTrendCard {
+                        Layout.fillWidth: true
+                        appController: window.backendController
+                        cardColor: window.cardColor
+                        cardBorder: window.cardBorder
+                        textMain: window.textMain
+                        textSoft: window.textSoft
+                    }
                 }
             }
         }

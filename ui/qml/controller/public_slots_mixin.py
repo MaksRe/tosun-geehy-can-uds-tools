@@ -1169,6 +1169,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
         appended_count = 0
         total_points = 0
+        total_temp_fixes = 0
         for csv_path in paths:
             parsed = self._parse_collector_trend_csv_file(csv_path)
             if parsed is None:
@@ -1176,6 +1177,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             loaded_by_path[str(parsed.get("path", ""))] = parsed
             appended_count += 1
             total_points += int(parsed.get("count", 0))
+            total_temp_fixes += int(parsed.get("legacyTemperatureCorrections", 0))
 
         if appended_count <= 0:
             self.infoMessage.emit("Графики", "Не удалось загрузить данные из выбранных CSV файлов.")
@@ -1183,6 +1185,11 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
         self._collector_trend_csv_series = list(loaded_by_path.values())
         self.collectorTrendChanged.emit()
+        if total_temp_fixes > 0:
+            self._append_log(
+                f"Collector CSV: legacy temperature auto-fix applied to {total_temp_fixes} points.",
+                RowColor.yellow,
+            )
         self.infoMessage.emit("Графики", f"Загружено CSV файлов: {appended_count}, точек: {total_points}.")
 
     @Slot()
