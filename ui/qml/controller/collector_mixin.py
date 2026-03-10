@@ -11,7 +11,7 @@ from j1939.j1939_can_identifier import J1939CanIdentifier
 from uds.data_identifiers import UdsData
 from uds.services.read_data_by_id import ServiceReadDataById
 from uds.uds_identifiers import UdsIdentifiers
-from ui.qml.collector_csv_manager import CollectorCsvManager
+from ui.qml.collector_csv_manager import CollectorCombinedCsvManager, CollectorCsvManager
 
 from .contract import AppControllerContract
 
@@ -40,6 +40,7 @@ class AppControllerCollectorMixin(AppControllerContract):
                 self.collectorStateChanged.emit()
             self._collector_session_dir = None
             self._collector_csv_managers = {}
+            self._collector_combined_csv_manager = None
             self._collector_nodes = {}
             self._collector_node_order = []
             self._collector_nodes_view = []
@@ -320,6 +321,63 @@ class AppControllerCollectorMixin(AppControllerContract):
             "delta": delta,
         }
 
+    @staticmethod
+    def _calc_point_key_stats(points: list[dict[str, object]], key: str) -> dict[str, float]:
+        if len(points) == 0:
+            return {
+                "last": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "mean": 0.0,
+                "std": 0.0,
+                "span": 0.0,
+                "delta": 0.0,
+            }
+
+        count = 0
+        minimum = 0.0
+        maximum = 0.0
+        mean = 0.0
+        m2 = 0.0
+        last = 0.0
+        prev = 0.0
+
+        for point in points:
+            raw_value = point.get(key, 0.0)
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError):
+                value = 0.0
+
+            if count == 0:
+                minimum = value
+                maximum = value
+            else:
+                minimum = min(minimum, value)
+                maximum = max(maximum, value)
+
+            count += 1
+            delta = value - mean
+            mean += delta / float(count)
+            delta2 = value - mean
+            m2 += delta * delta2
+
+            prev = last
+            last = value
+
+        variance = (m2 / float(count)) if count > 0 else 0.0
+        std = math.sqrt(max(0.0, variance))
+        delta_value = (last - prev) if count > 1 else 0.0
+        return {
+            "last": last,
+            "min": minimum,
+            "max": maximum,
+            "mean": mean,
+            "std": std,
+            "span": maximum - minimum,
+            "delta": delta_value,
+        }
+
     def _schedule_collector_views_update(self, *, nodes: bool = False, trend: bool = False):
         if nodes:
             self._collector_view_update_pending_nodes = True
@@ -348,7 +406,7 @@ class AppControllerCollectorMixin(AppControllerContract):
         entries: list[dict[str, object]] = []
         for node_sa in self._collector_node_order:
             normalized_sa = int(node_sa) & 0xFF
-            points = list(self._collector_trend_points_by_node.get(normalized_sa, []))
+            points = self._collector_trend_points_by_node.get(normalized_sa, [])
             node = self._collector_nodes.get(normalized_sa, {})
 
             if len(points) == 0:
@@ -357,10 +415,8 @@ class AppControllerCollectorMixin(AppControllerContract):
                 fallback_time = str(node.get("lastSeen", "-"))
                 points = [{"fuel": fallback_fuel, "temperature": fallback_temp, "time": fallback_time}]
 
-            fuel_values = [float(point.get("fuel", 0.0)) for point in points]
-            temp_values = [float(point.get("temperature", 0.0)) for point in points]
-            fuel_stats = self._calc_series_stats(fuel_values)
-            temp_stats = self._calc_series_stats(temp_values)
+            fuel_stats = self._calc_point_key_stats(points, "fuel")
+            temp_stats = self._calc_point_key_stats(points, "temperature")
 
             latest_time = str(points[-1].get("time", "-"))
             fuel_error_pct = abs(fuel_stats["std"] / fuel_stats["mean"] * 100.0) if abs(fuel_stats["mean"]) > 1e-9 else 0.0
@@ -451,17 +507,26 @@ class AppControllerCollectorMixin(AppControllerContract):
             "node": f"0x{normalized_sa:02X}",
             "time": str(timestamp),
         }
-        points = list(self._collector_trend_points)
+        points = self._collector_trend_points
         points.append(sample)
         if len(points) > self._collector_trend_max_points:
-            points = points[-self._collector_trend_max_points:]
-        self._collector_trend_points = points
+            del points[: len(points) - self._collector_trend_max_points]
 
-        node_points = list(self._collector_trend_points_by_node.get(normalized_sa, []))
+        node_points = self._collector_trend_points_by_node.get(normalized_sa)
+        if node_points is None:
+            node_points = []
+            self._collector_trend_points_by_node[normalized_sa] = node_points
         node_points.append(sample)
         if self._collector_trend_history_limit > 0 and len(node_points) > self._collector_trend_history_limit:
-            node_points = node_points[-self._collector_trend_history_limit:]
-        self._collector_trend_points_by_node[normalized_sa] = node_points
+            keep_tail = max(1, int(self._collector_trend_history_limit // 2))
+            if keep_tail < len(node_points):
+                head = node_points[:-keep_tail]
+                tail = node_points[-keep_tail:]
+                # Thin older half to preserve the full-period trend with bounded RAM.
+                thinned_head = head[::2] if len(head) > 1 else head
+                node_points[:] = thinned_head + tail
+            if len(node_points) > self._collector_trend_history_limit:
+                del node_points[: len(node_points) - self._collector_trend_history_limit]
 
         self._collector_trend_caption = f"Узел {sample['node']} | Последнее обновление: {sample['time']}"
         self._collector_trend_latest_fuel = fuel
@@ -523,6 +588,33 @@ class AppControllerCollectorMixin(AppControllerContract):
             period_ticks=int(node.get("period", 0)),
             temperature_c=float(node.get("temperature", 0.0)),
             fuel_percent=float(node.get("fuelLevel", 0.0)),
+        )
+        self._append_collector_combined_csv(timestamp)
+
+    def _collector_snapshot_for_combined_csv(self) -> dict[str, dict[str, object]]:
+        snapshot: dict[str, dict[str, object]] = {}
+        for node_sa in self._collector_node_order:
+            node = self._collector_nodes.get(node_sa)
+            if not isinstance(node, dict):
+                continue
+            node_hex = f"0x{int(node_sa) & 0xFF:02X}".lower()
+            snapshot[node_hex] = {
+                "period": int(node.get("period", 0)),
+                "fuel": float(node.get("fuelLevel", 0.0)),
+                "temperature": float(node.get("temperature", 0.0)),
+            }
+        return snapshot
+
+    def _append_collector_combined_csv(self, timestamp: str):
+        manager: CollectorCombinedCsvManager | None = self._collector_combined_csv_manager
+        if manager is None:
+            return
+        snapshot = self._collector_snapshot_for_combined_csv()
+        if len(snapshot) == 0:
+            return
+        manager.append_snapshot(
+            measurement_time=str(timestamp),
+            nodes_snapshot=snapshot,
         )
 
     def _handle_collector_frame(self, timestamp: str, parsed_id: J1939CanIdentifier, payload: list[int]):

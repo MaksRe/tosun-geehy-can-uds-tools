@@ -15,7 +15,7 @@ from uds.services.security_access import ServiceSecurityAccess
 from uds.services.session import ServiceSession
 from uds.services.write_data_by_id import ServiceWriteDataById
 from uds.uds_identifiers import UdsIdentifiers
-from ui.qml.collector_csv_manager import CollectorCsvManager
+from ui.qml.collector_csv_manager import CollectorCombinedCsvManager, CollectorCsvManager
 
 from .controller import (
     AppControllerCalibrationMixin,
@@ -169,13 +169,16 @@ class AppController(
             self._apply_collector_output_directory(Path.cwd() / "logs", emit_signal=False)
         self._collector_session_dir: Path | None = None
         self._collector_csv_managers: dict[int, CollectorCsvManager] = {}
+        self._collector_combined_csv_manager: CollectorCombinedCsvManager | None = None
         self._collector_poll_vars = [UdsData.curr_fuel_tank, UdsData.raw_fuel_level, UdsData.raw_temperature]
         self._collector_poll_node_index = 0
         self._collector_poll_phase = 0
         self._collector_trend_points: list[dict[str, object]] = []
         self._collector_trend_max_points = 180
-        # 0 means unlimited history to keep all points since collector start.
-        self._collector_trend_history_limit = 0
+        # Bounded in-memory history per node to keep collector UI responsive.
+        # Old points are thinned adaptively in mixin to preserve full-period trend shape.
+        # Full raw history is still persisted to CSV while recording.
+        self._collector_trend_history_limit = 12000
         self._collector_trend_caption = "Ожидание данных от узлов..."
         self._collector_trend_latest_fuel = 0.0
         self._collector_trend_latest_temperature = 0.0
@@ -302,7 +305,7 @@ class AppController(
         self._collector_view_update_pending_trend = False
         self._collector_view_update_timer = QTimer(self)
         self._collector_view_update_timer.setSingleShot(True)
-        self._collector_view_update_timer.setInterval(120)
+        self._collector_view_update_timer.setInterval(220)
         self._collector_view_update_timer.timeout.connect(self._flush_collector_views_update)
 
         self._options_timeout_timer = QTimer(self)

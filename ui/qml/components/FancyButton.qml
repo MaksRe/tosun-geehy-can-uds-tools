@@ -1,4 +1,5 @@
 import QtQuick 2.15
+import QtQuick.Controls 2.15
 
 /*
   FancyButton
@@ -19,7 +20,9 @@ Item {
     property bool loading: false
     property int fontPixelSize: 14
     property string fontFamily: "Bahnschrift"
+    property string toolTipText: ""
     readonly property bool interactiveEnabled: btn.enabled && !btn.loading
+    readonly property bool hovered: hitArea.containsMouse
 
     signal clicked()
 
@@ -112,4 +115,9 @@ Item {
             btn.clicked()
         }
     }
+
+    ToolTip.visible: btn.hovered && btn.toolTipText.length > 0
+    ToolTip.delay: 250
+    ToolTip.timeout: 8000
+    ToolTip.text: btn.toolTipText
 }

@@ -1,8 +1,7 @@
-import QtQuick 2.15
+﻿import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 import QtQuick.Dialogs
-import QtQuick.Window 2.15
 import "."
 
 Card {
@@ -11,7 +10,7 @@ Card {
     property var appController
     property color textMain: "#1f2d3d"
     property color textSoft: "#607084"
-    readonly property int contentPadding: 12
+    readonly property int contentPadding: 8
 
     property int viewMode: 2
     property int selectedNodeIndex: 0
@@ -19,7 +18,7 @@ Card {
     property bool showPointLabels: false
     property bool includeLoadedCsv: true
     property bool swapAxes: false
-    property bool compactExpandedUi: true
+    property bool showAdvancedControls: false
     property int rangeStartIndex: 0
     property int rangeEndIndex: -1
     readonly property bool collectorEnabled: root.appController ? root.appController.collectorEnabled : false
@@ -27,7 +26,7 @@ Card {
     readonly property var nodePalette: ["#2563eb", "#10b981", "#f97316", "#8b5cf6", "#ef4444", "#14b8a6", "#0ea5e9", "#a855f7"]
 
     Layout.fillWidth: true
-    implicitHeight: contentColumn.implicitHeight + (contentPadding * 2)
+    implicitHeight: 620
     enabled: collectorEnabled
     opacity: collectorEnabled ? 1.0 : 0.5
 
@@ -137,16 +136,6 @@ Card {
         return result
     }
 
-    function overlaySeries() {
-        var result = liveOverlaySeries()
-        if (root.includeLoadedCsv) {
-            var csvItems = csvOverlaySeries(result.length)
-            for (var i = 0; i < csvItems.length; i++)
-                result.push(csvItems[i])
-        }
-        return result
-    }
-
     function popupUseOverlayMode() {
         if (root.viewMode !== 0)
             return true
@@ -230,26 +219,70 @@ Card {
         if (total <= 0)
             return "Точки: нет данных"
         var endValue = root.rangeEndIndex >= 0 ? root.rangeEndIndex : (total - 1)
-        return "Диапазон индексов: " + root.rangeStartIndex + " ... " + endValue + " из " + total
+        return "Диапазон: " + root.rangeStartIndex + "..." + endValue + " из " + total
     }
 
     function csvSummaryText() {
         var files = csvSeries()
         if (files.length === 0)
-            return "CSV не загружены"
+            return "CSV: 0"
         var total = 0
         for (var i = 0; i < files.length; i++) {
             var count = Number(files[i].count)
             if (!isNaN(count))
                 total += count
         }
-        return "CSV файлов: " + files.length + ", точек: " + total
+        return "CSV: " + files.length + ", точек: " + total
     }
 
-    function axisModeText() {
-        return root.swapAxes
-            ? "Оси: X - уровень топлива, Y - температура"
-            : "Оси: X - температура, Y - уровень топлива"
+    function _toLocalFilePath(pathOrUrl) {
+        if (!pathOrUrl)
+            return ""
+
+        var raw = ""
+        if (typeof pathOrUrl === "string")
+            raw = pathOrUrl
+        else if (pathOrUrl.toString)
+            raw = pathOrUrl.toString()
+
+        raw = String(raw).trim()
+        if (raw.length === 0)
+            return ""
+
+        if (raw.indexOf("file:///") === 0) {
+            var decoded = decodeURIComponent(raw.substring(8))
+            if (decoded.length > 2 && decoded.charAt(0) === "/" && decoded.charAt(2) === ":")
+                decoded = decoded.substring(1)
+            return decoded
+        }
+
+        return raw
+    }
+
+    function _ensurePngExtension(pathText) {
+        var normalized = String(pathText)
+        var lowered = normalized.toLowerCase()
+        if (lowered.length >= 4 && lowered.substring(lowered.length - 4) === ".png")
+            return normalized
+        return normalized + ".png"
+    }
+
+    function exportCurrentTrendPng(pathOrUrl) {
+        var localPath = _toLocalFilePath(pathOrUrl)
+        if (!localPath || localPath.length === 0)
+            return
+        localPath = _ensurePngExtension(localPath)
+
+        if (!summaryTrendCanvas || summaryTrendCanvas.width < 2 || summaryTrendCanvas.height < 2)
+            return
+
+        summaryTrendCanvas.grabToImage(function(result) {
+            var ok = result.saveToFile(localPath)
+            exportStatusDialog.text = ok
+                ? ("PNG сохранён: " + localPath)
+                : "Не удалось сохранить PNG. Проверьте путь и права доступа."
+            exportStatusDialog.open()
+        }, Qt.size(1920, 1080))
     }
 
     function nodesSummaryText() {
@@ -258,7 +291,7 @@ Card {
         for (var i = 0; i < nodes.length; i++)
             if (isNodeVisible(String(nodes[i].node)))
                 visible += 1
-        return "Узлов: " + nodes.length + ", отображается: " + visible
+        return "Узлов: " + nodes.length + ", видно: " + visible
     }
 
     Component.onCompleted: {
@@ -276,73 +309,75 @@ Card {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
+        anchors.bottom: parent.bottom
         anchors.leftMargin: root.contentPadding
         anchors.rightMargin: root.contentPadding
         anchors.topMargin: root.contentPadding
-        spacing: 8
-
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 8
-
-            Text {
-                text: "Графики параметров узлов CAN"
-                color: root.textMain
-                font.pixelSize: 16
-                font.bold: true
-                font.family: "Bahnschrift"
-            }
-
-            Item { Layout.fillWidth: true }
-
-            Text {
-                text: root.nodesSummaryText()
-                color: root.textSoft
-                font.pixelSize: 11
-                font.family: "Bahnschrift"
-            }
-        }
-
-        Text {
-            Layout.fillWidth: true
-            text: root.axisModeText()
-            color: root.textSoft
-            font.pixelSize: 11
-            font.family: "Bahnschrift"
-            wrapMode: Text.Wrap
-        }
+        anchors.bottomMargin: root.contentPadding
+        spacing: 4
 
         Rectangle {
             Layout.fillWidth: true
-            radius: 10
+            radius: 8
             color: "#f8fbff"
             border.color: "#d6e2ef"
             border.width: 1
-            implicitHeight: controlsLayout.implicitHeight + 12
+            implicitHeight: panelColumn.implicitHeight + 8
 
             ColumnLayout {
-                id: controlsLayout
+                id: panelColumn
                 anchors.fill: parent
-                anchors.margins: 8
-                spacing: 6
-
-                Text {
-                    Layout.fillWidth: true
-                    text: root.rangeInfoText() + " | " + root.csvSummaryText()
-                    color: root.textSoft
-                    font.pixelSize: 11
-                    font.family: "Bahnschrift"
-                    wrapMode: Text.Wrap
-                }
+                anchors.margins: 4
+                spacing: 4
 
                 RowLayout {
                     Layout.fillWidth: true
-                    spacing: 6
+                    spacing: 4
+
+                    FancyComboBox {
+                        Layout.preferredWidth: 166
+                        Layout.preferredHeight: 28
+                        model: ["Выбранный узел", "Все узлы", "Все + CSV"]
+                        currentIndex: root.viewMode
+                        onCurrentIndexChanged: root.viewMode = currentIndex
+                    }
+
+                    FancyComboBox {
+                        Layout.preferredWidth: 126
+                        Layout.preferredHeight: 28
+                        enabled: root.viewMode === 0
+                        model: root.nodeLabelList()
+                        currentIndex: root.selectedNodeIndex
+                        onCurrentIndexChanged: root.selectedNodeIndex = currentIndex
+                    }
 
                     FancyButton {
-                        Layout.preferredWidth: 130
-                        Layout.preferredHeight: 32
-                        text: "Загрузить CSV"
+                        Layout.preferredWidth: 62
+                        Layout.preferredHeight: 28
+                        fontPixelSize: 10
+                        text: root.swapAxes ? "Y/X" : "X/Y"
+                        toolTipText: "Поменять оси местами: X=температура, Y=топливо или наоборот."
+                        tone: "#7c3aed"
+                        toneHover: "#6d28d9"
+                        tonePressed: "#5b21b6"
+                        onClicked: root.swapAxes = !root.swapAxes
+                    }
+
+                    FancyButton {
+                        Layout.preferredWidth: 82
+                        Layout.preferredHeight: 28
+                        fontPixelSize: 10
+                        text: root.includeLoadedCsv ? "CSV ON" : "CSV OFF"
+                        toolTipText: "Показать или скрыть на графике серии, загруженные из внешних CSV файлов."
+                        onClicked: root.includeLoadedCsv = !root.includeLoadedCsv
+                    }
+
+                    FancyButton {
+                        Layout.preferredWidth: 58
+                        Layout.preferredHeight: 28
+                        fontPixelSize: 10
+                        text: "CSV+"
+                        toolTipText: "Загрузить один или несколько CSV файлов для сравнения с текущими данными."
                         tone: "#0f766e"
                         toneHover: "#115e59"
                         tonePressed: "#134e4a"
@@ -350,9 +385,11 @@ Card {
                     }
 
                     FancyButton {
-                        Layout.preferredWidth: 120
-                        Layout.preferredHeight: 32
-                        text: "Очистить CSV"
+                        Layout.preferredWidth: 58
+                        Layout.preferredHeight: 28
+                        fontPixelSize: 10
+                        text: "CSV-"
+                        toolTipText: "Удалить все загруженные CSV-серии из графика (онлайн-данные не затрагиваются)."
                         enabled: root.csvSeries().length > 0
                         tone: "#64748b"
                         toneHover: "#55657a"
@@ -361,44 +398,140 @@ Card {
                     }
 
                     FancyButton {
-                        Layout.preferredWidth: 150
-                        Layout.preferredHeight: 32
-                        text: root.includeLoadedCsv ? "CSV на графике: ВКЛ" : "CSV на графике: ВЫКЛ"
-                        onClicked: root.includeLoadedCsv = !root.includeLoadedCsv
+                        Layout.preferredWidth: 66
+                        Layout.preferredHeight: 28
+                        fontPixelSize: 10
+                        text: "Период"
+                        toolTipText: "Сбросить фильтрацию диапазона и показать весь доступный период точек."
+                        onClicked: root.resetRange()
                     }
 
                     FancyButton {
-                        Layout.preferredWidth: 170
-                        Layout.preferredHeight: 32
-                        text: root.swapAxes ? "Поменять оси: ВКЛ" : "Поменять оси: ВЫКЛ"
-                        tone: "#7c3aed"
-                        toneHover: "#6d28d9"
-                        tonePressed: "#5b21b6"
-                        onClicked: root.swapAxes = !root.swapAxes
+                        Layout.preferredWidth: 56
+                        Layout.preferredHeight: 28
+                        fontPixelSize: 10
+                        text: "PNG"
+                        toolTipText: "Сохранить текущий вид графика в PNG с учетом всех выбранных настроек."
+                        tone: "#0f766e"
+                        toneHover: "#115e59"
+                        tonePressed: "#134e4a"
+                        onClicked: pngSaveDialog.open()
                     }
 
                     FancyButton {
-                        Layout.preferredWidth: 170
-                        Layout.preferredHeight: 32
-                        text: "Расширенный режим"
+                        Layout.preferredWidth: 92
+                        Layout.preferredHeight: 28
+                        fontPixelSize: 10
+                        text: root.showAdvancedControls ? "Свернуть" : "Расширить"
+                        toolTipText: "Показать или скрыть дополнительные инструменты анализа и фильтрации узлов."
                         tone: "#1d4ed8"
                         toneHover: "#1e40af"
                         tonePressed: "#1e3a8a"
-                        onClicked: {
-                            trendWindow.visible = true
-                            trendWindow.raise()
-                            trendWindow.requestActivate()
-                        }
+                        onClicked: root.showAdvancedControls = !root.showAdvancedControls
                     }
 
                     Item { Layout.fillWidth: true }
+
+                    Text {
+                        text: root.nodesSummaryText()
+                        color: root.textSoft
+                        font.pixelSize: 10
+                        font.family: "Bahnschrift"
+                        Layout.alignment: Qt.AlignVCenter
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 4
+                    visible: root.showAdvancedControls
+                    Layout.minimumHeight: root.showAdvancedControls ? implicitHeight : 0
+                    Layout.maximumHeight: root.showAdvancedControls ? implicitHeight : 0
+
+                    FancyButton {
+                        Layout.preferredWidth: 82
+                        Layout.preferredHeight: 26
+                        fontPixelSize: 10
+                        text: root.showPointLabels ? "Метки ON" : "Метки OFF"
+                        toolTipText: "Включить/выключить подписи значений возле точек графика."
+                        onClicked: root.showPointLabels = !root.showPointLabels
+                    }
+
+                    FancyButton {
+                        Layout.preferredWidth: 54
+                        Layout.preferredHeight: 26
+                        fontPixelSize: 10
+                        text: "Все"
+                        toolTipText: "Сделать видимыми на графике все узлы."
+                        onClicked: root.setAllNodesVisible(true)
+                    }
+
+                    FancyButton {
+                        Layout.preferredWidth: 64
+                        Layout.preferredHeight: 26
+                        fontPixelSize: 10
+                        text: "Скрыть"
+                        toolTipText: "Скрыть на графике все узлы. Далее можно включить нужные узлы вручную."
+                        onClicked: root.setAllNodesVisible(false)
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: root.rangeInfoText() + " | " + root.csvSummaryText() + " | ЛКМ: zoom, ПКМ: pan"
+                        color: root.textSoft
+                        font.pixelSize: 10
+                        font.family: "Bahnschrift"
+                        elide: Text.ElideRight
+                    }
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 32
+                    radius: 6
+                    color: "#ffffff"
+                    border.color: "#d6e2ef"
+                    border.width: 1
+                    visible: root.showAdvancedControls
+
+                    Flickable {
+                        anchors.fill: parent
+                        anchors.margins: 2
+                        clip: true
+                        interactive: true
+                        contentWidth: nodesRow.implicitWidth
+                        contentHeight: nodesRow.implicitHeight
+
+                        Row {
+                            id: nodesRow
+                            spacing: 4
+
+                            Repeater {
+                                model: root.trendNodes()
+                                delegate: FancyButton {
+                                    readonly property string nodeLabel: String(modelData.node)
+                                    width: 82
+                                    height: 24
+                                    fontPixelSize: 10
+                                    text: nodeLabel
+                                    toolTipText: "Показать или скрыть серию узла " + nodeLabel + " на графике."
+                                    tone: root.isNodeVisible(nodeLabel) ? "#1d4ed8" : "#94a3b8"
+                                    toneHover: root.isNodeVisible(nodeLabel) ? "#1e40af" : "#7f8fa6"
+                                    tonePressed: root.isNodeVisible(nodeLabel) ? "#1e3a8a" : "#6b7d95"
+                                    onClicked: root.toggleNodeVisible(nodeLabel)
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
 
         TrendCanvas {
+            id: summaryTrendCanvas
             Layout.fillWidth: true
-            Layout.preferredHeight: 280
+            Layout.fillHeight: true
+            Layout.minimumHeight: 220
             points: {
                 var selected = root.selectedNodeEntry()
                 if (!root.popupUseOverlayMode() && selected && selected.points)
@@ -410,260 +543,32 @@ Card {
             emptyText: root.viewMode === 0 ? "Нет данных для выбранного узла" : "Нет выбранных узлов для графика"
             rangeStart: root.rangeStartIndex
             rangeEnd: root.rangeEndIndex
-            showPointLabels: false
-            maxRenderPoints: 500
-            maxPointLabels: 0
+            showPointLabels: root.showPointLabels
+            maxRenderPoints: root.showAdvancedControls ? 0 : 500
+            maxPointLabels: root.showAdvancedControls ? 80 : 0
             swapAxes: root.swapAxes
         }
     }
 
-    Window {
-        id: trendWindow
-        width: 1120
-        height: 720
-        minimumWidth: 900
-        minimumHeight: 520
-        modality: Qt.NonModal
-        visible: false
-        title: "Графики узлов CAN (расширенный режим)"
-        transientParent: root.Window.window
-
-        Rectangle {
-            anchors.fill: parent
-            color: "#eef5fc"
+    FileDialog {
+        id: pngSaveDialog
+        title: "Сохранить итоговый график PNG"
+        fileMode: FileDialog.SaveFile
+        nameFilters: ["PNG файлы (*.png)", "Все файлы (*)"]
+        defaultSuffix: "png"
+        onAccepted: {
+            var output = selectedFile
+            if ((!output || String(output).length === 0) && selectedFiles && selectedFiles.length > 0)
+                output = selectedFiles[0]
+            root.exportCurrentTrendPng(output)
         }
+    }
 
-        ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: root.compactExpandedUi ? 8 : 12
-            spacing: root.compactExpandedUi ? 6 : 10
-
-            RowLayout {
-                Layout.fillWidth: true
-
-                Text {
-                    text: "Расширенный просмотр"
-                    color: root.textMain
-                    font.pixelSize: 15
-                    font.bold: true
-                    font.family: "Bahnschrift"
-                }
-
-                Item { Layout.fillWidth: true }
-
-                FancyButton {
-                    Layout.preferredWidth: 110
-                    Layout.preferredHeight: 32
-                    text: "Закрыть"
-                    onClicked: trendWindow.visible = false
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                radius: 8
-                color: "#ffffff"
-                border.color: "#d6e2ef"
-                border.width: 1
-                implicitHeight: expandedControlsLayout.implicitHeight + 12
-
-                ColumnLayout {
-                    id: expandedControlsLayout
-                    anchors.fill: parent
-                    anchors.margins: 8
-                    spacing: 6
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 6
-
-                        Text {
-                            text: "Режим:"
-                            color: root.textSoft
-                            font.pixelSize: 11
-                            font.bold: true
-                            font.family: "Bahnschrift"
-                            verticalAlignment: Text.AlignVCenter
-                        }
-
-                        FancyComboBox {
-                            Layout.preferredWidth: 220
-                            Layout.preferredHeight: 32
-                            model: ["Выбранный узел", "Все узлы (реальное время)", "Все узлы + CSV"]
-                            currentIndex: root.viewMode
-                            onCurrentIndexChanged: root.viewMode = currentIndex
-                        }
-
-                        FancyComboBox {
-                            Layout.preferredWidth: 220
-                            Layout.preferredHeight: 32
-                            enabled: root.viewMode === 0
-                            model: root.nodeLabelList()
-                            currentIndex: root.selectedNodeIndex
-                            onCurrentIndexChanged: root.selectedNodeIndex = currentIndex
-                        }
-
-                        FancyButton {
-                            Layout.preferredWidth: 170
-                            Layout.preferredHeight: 32
-                            text: root.swapAxes ? "Поменять оси: ВКЛ" : "Поменять оси: ВЫКЛ"
-                            tone: "#7c3aed"
-                            toneHover: "#6d28d9"
-                            tonePressed: "#5b21b6"
-                            onClicked: root.swapAxes = !root.swapAxes
-                        }
-
-                        FancyButton {
-                            Layout.preferredWidth: 170
-                            Layout.preferredHeight: 32
-                            text: root.showPointLabels ? "Подписи точек: ВКЛ" : "Подписи точек: ВЫКЛ"
-                            onClicked: root.showPointLabels = !root.showPointLabels
-                        }
-
-                        Item { Layout.fillWidth: true }
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 6
-
-                        FancyButton {
-                            Layout.preferredWidth: 130
-                            Layout.preferredHeight: 32
-                            text: "Загрузить CSV"
-                            tone: "#0f766e"
-                            toneHover: "#115e59"
-                            tonePressed: "#134e4a"
-                            onClicked: csvFileDialog.open()
-                        }
-
-                        FancyButton {
-                            Layout.preferredWidth: 120
-                            Layout.preferredHeight: 32
-                            text: "Очистить CSV"
-                            enabled: root.csvSeries().length > 0
-                            tone: "#64748b"
-                            toneHover: "#55657a"
-                            tonePressed: "#475569"
-                            onClicked: if (root.appController) root.appController.clearCollectorTrendCsv()
-                        }
-
-                        FancyButton {
-                            Layout.preferredWidth: 150
-                            Layout.preferredHeight: 32
-                            text: root.includeLoadedCsv ? "CSV на графике: ВКЛ" : "CSV на графике: ВЫКЛ"
-                            onClicked: root.includeLoadedCsv = !root.includeLoadedCsv
-                        }
-
-                        FancyButton {
-                            Layout.preferredWidth: 120
-                            Layout.preferredHeight: 32
-                            text: "Весь период"
-                            onClicked: root.resetRange()
-                        }
-
-                        Item { Layout.fillWidth: true }
-
-                        FancyButton {
-                            Layout.preferredWidth: 80
-                            Layout.preferredHeight: 32
-                            text: "Все"
-                            onClicked: root.setAllNodesVisible(true)
-                        }
-
-                        FancyButton {
-                            Layout.preferredWidth: 80
-                            Layout.preferredHeight: 32
-                            text: "Скрыть"
-                            onClicked: root.setAllNodesVisible(false)
-                        }
-                    }
-
-                    Text {
-                        Layout.fillWidth: true
-                        text: root.rangeInfoText() + " | " + root.csvSummaryText()
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                        wrapMode: Text.Wrap
-                    }
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                radius: 8
-                color: "#ffffff"
-                border.color: "#d6e2ef"
-                border.width: 1
-                implicitHeight: 52
-
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.margins: 8
-                    spacing: 8
-
-                    Text {
-                        Layout.preferredWidth: 130
-                        text: "Видимость узлов"
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.bold: true
-                        font.family: "Bahnschrift"
-                        verticalAlignment: Text.AlignVCenter
-                    }
-
-                    Flickable {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 34
-                        clip: true
-                        interactive: true
-                        contentWidth: popupNodesRow.implicitWidth
-                        contentHeight: 34
-
-                        Row {
-                            id: popupNodesRow
-                            y: 0
-                            spacing: 6
-
-                            Repeater {
-                                model: root.trendNodes()
-                                delegate: FancyButton {
-                                    readonly property string nodeLabel: String(modelData.node)
-                                    width: 96
-                                    height: 32
-                                    text: nodeLabel
-                                    fontPixelSize: 12
-                                    tone: root.isNodeVisible(nodeLabel) ? "#1d4ed8" : "#94a3b8"
-                                    toneHover: root.isNodeVisible(nodeLabel) ? "#1e40af" : "#7f8fa6"
-                                    tonePressed: root.isNodeVisible(nodeLabel) ? "#1e3a8a" : "#6b7d95"
-                                    onClicked: root.toggleNodeVisible(nodeLabel)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            TrendCanvas {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                points: {
-                    var selected = root.selectedNodeEntry()
-                    if (!root.popupUseOverlayMode() && selected && selected.points)
-                        return selected.points
-                    return []
-                }
-                overlayMode: root.popupUseOverlayMode()
-                series: root.popupSeries()
-                emptyText: root.viewMode === 0 ? "Нет данных для выбранного узла" : "Нет выбранных узлов для графика"
-                rangeStart: root.rangeStartIndex
-                rangeEnd: root.rangeEndIndex
-                showPointLabels: root.showPointLabels
-                maxRenderPoints: 0
-                swapAxes: root.swapAxes
-            }
-        }
+    MessageDialog {
+        id: exportStatusDialog
+        title: "Экспорт графика"
+        text: ""
+        buttons: MessageDialog.Ok
     }
 
     FileDialog {

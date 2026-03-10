@@ -12,6 +12,7 @@ from uds.data_identifiers import UdsData
 from uds.options_catalog import get_option_by_index
 from uds.services.session import Session
 from uds.uds_identifiers import UdsIdentifiers
+from ui.qml.collector_csv_manager import CollectorCombinedCsvManager
 
 from .contract import AppControllerContract
 from .workers import UdsOptionProxy
@@ -834,6 +835,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             self.collectorStateChanged.emit()
             self._collector_session_dir = None
             self._collector_csv_managers = {}
+            self._collector_combined_csv_manager = None
             self._collector_nodes = {}
             self._collector_node_order = []
             self._collector_nodes_view = []
@@ -1100,8 +1102,19 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
                 self._collector_session_dir = base_dir / datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             self._collector_session_dir.mkdir(parents=True, exist_ok=True)
             self._collector_csv_managers = {}
+            try:
+                self._collector_combined_csv_manager = CollectorCombinedCsvManager(self._collector_session_dir)
+            except Exception:
+                self._collector_combined_csv_manager = None
+                self._append_log("Коллектор: не удалось создать сводный CSV файл all_nodes.csv.", RowColor.yellow)
             self._append_log(f"Сессия записи: {self._collector_session_dir}", RowColor.green)
         else:
+            if self._collector_combined_csv_manager is None:
+                try:
+                    self._collector_combined_csv_manager = CollectorCombinedCsvManager(self._collector_session_dir)
+                except Exception:
+                    self._collector_combined_csv_manager = None
+                    self._append_log("Коллектор: не удалось создать сводный CSV файл all_nodes.csv.", RowColor.yellow)
             self._append_log("Продолжение записи CSV.", RowColor.blue)
 
         self._collector_state = "recording"
@@ -1126,6 +1139,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._set_programming_active(False)
         self._collector_session_dir = None
         self._collector_csv_managers = {}
+        self._collector_combined_csv_manager = None
         self._append_log("Запись CSV остановлена.", RowColor.blue)
 
     @Slot()

@@ -104,6 +104,7 @@ class AppControllerContract:
     _can_filter_values: Any
     _can_journal_enabled: Any
     _can_traffic_logs: Any
+    _collector_combined_csv_manager: Any
     _collector_csv_managers: Any
     _collector_cycle_pause_ms: Any
     _collector_enabled: Any

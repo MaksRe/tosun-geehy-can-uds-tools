@@ -284,50 +284,59 @@ ApplicationWindow {
             }
         }
 
-        ScrollView {
+        ColumnLayout {
             anchors.fill: parent
             anchors.margins: 14
-            clip: true
-            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+            spacing: 0
 
-            ColumnLayout {
-                width: Math.max(0, parent.width)
-                spacing: 12
-
-                CollectorCard {
-                    Layout.fillWidth: true
-                    appController: window.backendController
-                    cardColor: window.cardColor
-                    cardBorder: window.cardBorder
-                    textMain: window.textMain
-                    textSoft: window.textSoft
-                    inputBg: window.inputBg
-                    inputBorder: window.inputBorder
-                    inputFocus: window.inputFocus
-                    onSelectOutputDirectoryRequested: collectorDirDialog.open()
-                }
-
-                SpoilerSection {
-                    Layout.fillWidth: true
-                    title: "Графики и параметры узлов CAN"
-                    hintText: "Показать/скрыть блок анализа"
-                    expanded: false
-                    cardColor: window.cardColor
-                    cardBorder: window.cardBorder
-                    textMain: window.textMain
-                    textSoft: window.textSoft
-                    accentColor: window.inputFocus
-
-                    CollectorTrendCard {
-                        Layout.fillWidth: true
-                        appController: window.backendController
-                        cardColor: window.cardColor
-                        cardBorder: window.cardBorder
-                        textMain: window.textMain
-                        textSoft: window.textSoft
-                    }
+            CollectorCard {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                appController: window.backendController
+                cardColor: window.cardColor
+                cardBorder: window.cardBorder
+                textMain: window.textMain
+                textSoft: window.textSoft
+                inputBg: window.inputBg
+                inputBorder: window.inputBorder
+                inputFocus: window.inputFocus
+                onSelectOutputDirectoryRequested: collectorDirDialog.open()
+                onOpenTrendWindowRequested: {
+                    collectorTrendWindow.visible = true
+                    collectorTrendWindow.raise()
+                    collectorTrendWindow.requestActivate()
                 }
             }
+        }
+    }
+
+    Window {
+        id: collectorTrendWindow
+        width: 1480
+        height: 980
+        minimumWidth: 1180
+        minimumHeight: 760
+        visible: false
+        modality: Qt.NonModal
+        transientParent: window
+        title: "Графики и параметры узлов CAN"
+
+        Rectangle {
+            anchors.fill: parent
+            gradient: Gradient {
+                GradientStop { position: 0.0; color: window.bgStart }
+                GradientStop { position: 1.0; color: window.bgEnd }
+            }
+        }
+
+        CollectorTrendCard {
+            anchors.fill: parent
+            anchors.margins: 14
+            appController: window.backendController
+            cardColor: window.cardColor
+            cardBorder: window.cardBorder
+            textMain: window.textMain
+            textSoft: window.textSoft
         }
     }
 

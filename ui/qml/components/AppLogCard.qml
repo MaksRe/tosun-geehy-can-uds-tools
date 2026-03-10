@@ -74,32 +74,32 @@ Card {
                 anchors.fill: parent
                 anchors.margins: 8
                 clip: true
-                spacing: 2
+                spacing: 1
                 model: root.appController ? root.appController.logs : []
 
                 onCountChanged: if (count > 0) positionViewAtEnd()
 
                 delegate: Rectangle {
                     width: logList.width
-                    height: Math.max(28, logRow.implicitHeight + 6)
-                    radius: 6
+                    height: Math.max(24, logRow.implicitHeight + 4)
+                    radius: 5
                     color: index % 2 === 0 ? "#f8fbff" : "#edf3fa"
 
                     RowLayout {
                         id: logRow
                         anchors.fill: parent
-                        anchors.leftMargin: 6
-                        anchors.rightMargin: 6
-                        spacing: 6
+                        anchors.leftMargin: 5
+                        anchors.rightMargin: 5
+                        spacing: 5
 
                         Text {
-                            Layout.preferredWidth: 84
-                            Layout.minimumWidth: 84
+                            Layout.preferredWidth: 80
+                            Layout.minimumWidth: 80
                             Layout.alignment: Qt.AlignVCenter
                             Layout.fillHeight: true
                             text: modelData.time
                             color: root.textSoft
-                            font.pixelSize: 11
+                            font.pixelSize: 10
                             font.family: "Consolas"
                             horizontalAlignment: Text.AlignLeft
                             verticalAlignment: Text.AlignVCenter
@@ -108,8 +108,8 @@ Card {
                         Rectangle {
                             Layout.preferredWidth: 4
                             Layout.fillHeight: true
-                            Layout.topMargin: 3
-                            Layout.bottomMargin: 3
+                            Layout.topMargin: 2
+                            Layout.bottomMargin: 2
                             radius: 2
                             color: modelData.color ? modelData.color : "#94a3b8"
                             opacity: 0.9
@@ -124,7 +124,7 @@ Card {
                             color: modelData.color ? modelData.color : root.textMain
                             wrapMode: Text.Wrap
                             verticalAlignment: Text.AlignVCenter
-                            font.pixelSize: 11
+                            font.pixelSize: 10
                             font.family: "Bahnschrift"
                         }
                     }
