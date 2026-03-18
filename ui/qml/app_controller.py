@@ -106,7 +106,7 @@ class AppController(
         self._source_address_text = f"0x{UdsIdentifiers.rx.src:02X}"
         self._source_address_busy = False
         self._source_address_operation = ""
-        self._can_journal_enabled = True
+        self._can_journal_enabled = False
         self._auto_detect_enabled = True
 
         self._calibration_active = False
@@ -155,12 +155,14 @@ class AppController(
         self._collector_read_service = ServiceReadDataById()
         self._collector_read_service.set_byte_order("big")
         self._collector_enabled = False
+        self._collector_trend_enabled = False
         self._collector_nodes: dict[int, dict[str, object]] = {}
         self._collector_node_order: list[int] = []
         self._collector_nodes_view: list[dict[str, str]] = []
         self._collector_state = "stopped"
-        self._collector_poll_interval_ms = 1000
-        self._collector_cycle_pause_ms = 1000
+        self._collector_poll_interval_ms = 220
+        self._collector_cycle_pause_ms = 120
+        self._collector_calibration_refresh_cycles = 24
         self._project_root_directory = self._resolve_project_root_directory()
         self._collector_output_directory = ""
         self._collector_output_is_session_dir = False
@@ -170,9 +172,20 @@ class AppController(
         self._collector_session_dir: Path | None = None
         self._collector_csv_managers: dict[int, CollectorCsvManager] = {}
         self._collector_combined_csv_manager: CollectorCombinedCsvManager | None = None
-        self._collector_poll_vars = [UdsData.curr_fuel_tank, UdsData.raw_fuel_level, UdsData.raw_temperature]
+        self._collector_poll_vars = [
+            UdsData.curr_fuel_tank,
+            UdsData.raw_temperature,
+        ]
         self._collector_poll_node_index = 0
         self._collector_poll_phase = 0
+        self._collector_pending_requests: dict[tuple[int, int], dict[str, float | int | str]] = {}
+        self._collector_pending_timeout_ms = 1400
+        self._collector_max_pending_requests = 1
+        self._collector_min_inter_request_ms = 40
+        self._collector_last_request_monotonic = 0.0
+        self._collector_error_logs: list[dict[str, str]] = []
+        self._collector_error_log_limit = 500
+        self._collector_diagnostics_rate_limit: dict[str, float] = {}
         self._collector_trend_points: list[dict[str, object]] = []
         self._collector_trend_max_points = 180
         # Bounded in-memory history per node to keep collector UI responsive.

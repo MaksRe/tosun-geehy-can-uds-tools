@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 from copy import copy
+from datetime import datetime
 import logging
 import math
 from pathlib import Path
@@ -44,9 +45,14 @@ class AppControllerCollectorMixin(AppControllerContract):
             self._collector_nodes = {}
             self._collector_node_order = []
             self._collector_nodes_view = []
+            self._collector_pending_requests = {}
+            self._collector_last_request_monotonic = 0.0
+            self._collector_error_logs = []
+            self._collector_diagnostics_rate_limit = {}
             self._collector_poll_node_index = 0
             self._collector_poll_phase = 0
             self.collectorNodesChanged.emit()
+            self.collectorDiagnosticsChanged.emit()
             self._reset_collector_trend()
             self._set_programming_active(False)
 
@@ -73,6 +79,21 @@ class AppControllerCollectorMixin(AppControllerContract):
         if value & sign_bit:
             return value - (1 << width)
         return value
+
+    @staticmethod
+    def _calc_fuel_from_period_x10(period_ticks: int, empty_ticks: int, full_ticks: int) -> int:
+        delta = int(full_ticks) - int(empty_ticks)
+        if delta <= 0:
+            return 0
+        numerator = (int(period_ticks) - int(empty_ticks)) * 1000
+        return int(numerator / delta)
+
+    def _recompute_collector_node_fuel_from_period(self, node: dict[str, object]):
+        period_ticks = int(node.get("period", 0))
+        empty_ticks = int(node.get("emptyPeriod", 0))
+        full_ticks = int(node.get("fullPeriod", 0))
+        fuel_x10 = self._calc_fuel_from_period_x10(period_ticks, empty_ticks, full_ticks)
+        node["fuelLevelX10"] = int(fuel_x10)
 
     @staticmethod
     def _normalize_legacy_csv_temperature(temperature_c: float) -> tuple[float, bool]:
@@ -121,6 +142,16 @@ class AppControllerCollectorMixin(AppControllerContract):
             "fuel": idx_fuel,
         }
 
+    @staticmethod
+    def _is_collector_csv_header_row(row: list[str]) -> bool:
+        if len(row) == 0:
+            return False
+        joined = ";".join(str(value).strip() for value in row).casefold()
+        has_time = ("время" in joined) or ("time" in joined)
+        has_temp = ("температ" in joined) or ("temp" in joined)
+        has_fuel = ("топлив" in joined) or ("fuel" in joined)
+        return has_time and has_temp and has_fuel
+
     def _parse_collector_trend_csv_file(self, csv_path: Path) -> dict[str, object] | None:
         try:
             resolved_path = Path(csv_path).expanduser().resolve()
@@ -146,6 +177,8 @@ class AppControllerCollectorMixin(AppControllerContract):
                         continue
 
                     if header is None:
+                        if not self._is_collector_csv_header_row(normalized_row):
+                            continue
                         header = normalized_row
                         indexes = self._resolve_collector_csv_indexes(header)
                         continue
@@ -232,7 +265,17 @@ class AppControllerCollectorMixin(AppControllerContract):
                 "nodeSa": normalized,
                 "period": 0,
                 "fuelLevel": 0.0,
+                "fuelLevelX10": 0,
+                "emptyPeriod": 0,
+                "fullPeriod": 0,
+                "emptyKnown": False,
+                "fullKnown": False,
                 "temperature": 0.0,
+                "temperatureKnown": False,
+                "calibrationRefreshCountdown": int(self._collector_calibration_refresh_cycles),
+                "calibrationRefreshPhase": 0,
+                "timeoutStreak": 0,
+                "nextPollAfter": 0.0,
                 "fuelCount": 0,
                 "temperatureCount": 0,
                 "lastSeen": "-",
@@ -245,8 +288,144 @@ class AppControllerCollectorMixin(AppControllerContract):
 
     def _collector_node_stale_timeout_sec(self) -> float:
         nodes_count = max(1, len(self._collector_node_order))
-        cycle_estimate_sec = (float(self._collector_poll_interval_ms) + float(self._collector_cycle_pause_ms)) * nodes_count / 1000.0
+        # Fast poll vars + occasional refresh of calibration DIDs.
+        vars_count = max(1, len(self._collector_poll_vars)) + 2
+        cycle_estimate_sec = (
+            (float(self._collector_poll_interval_ms) * float(vars_count)) + float(self._collector_cycle_pause_ms)
+        ) * nodes_count / 1000.0
         return max(6.0, cycle_estimate_sec * 2.5)
+
+    def _collector_effective_poll_interval_ms(self, nodes_count: int) -> int:
+        base_interval = max(30, int(self._collector_poll_interval_ms))
+        normalized_nodes = max(1, int(nodes_count))
+        if normalized_nodes <= 1:
+            return base_interval
+        # Keep full per-node fast update round under ~2.5s as node count grows.
+        adaptive_interval = max(40, int(2500 / normalized_nodes))
+        return min(base_interval, adaptive_interval)
+
+    @staticmethod
+    def _collector_did_name(did: int) -> str:
+        normalized = int(did) & 0xFFFF
+        labels = {
+            int(UdsData.curr_fuel_tank.pid) & 0xFFFF: "curr_fuel_tank",
+            int(UdsData.empty_fuel_tank.pid) & 0xFFFF: "empty_fuel_tank",
+            int(UdsData.full_fuel_tank.pid) & 0xFFFF: "full_fuel_tank",
+            int(UdsData.raw_temperature.pid) & 0xFFFF: "raw_temperature",
+            int(UdsData.raw_fuel_level.pid) & 0xFFFF: "raw_fuel_level",
+        }
+        return labels.get(normalized, f"DID_0x{normalized:04X}")
+
+    def _collector_append_error_log(
+        self,
+        message: str,
+        *,
+        node_sa: int | None = None,
+        did: int | None = None,
+        dedup_key: str | None = None,
+        min_repeat_sec: float = 1.5,
+    ):
+        now = time.monotonic()
+        key = str(dedup_key) if dedup_key else str(message)
+        last_emit = float(self._collector_diagnostics_rate_limit.get(key, 0.0))
+        if (now - last_emit) < max(0.0, float(min_repeat_sec)):
+            return
+        self._collector_diagnostics_rate_limit[key] = now
+
+        row = {
+            "time": datetime.now().strftime("%H:%M:%S.%f")[:-3],
+            "node": "-" if node_sa is None else f"0x{int(node_sa) & 0xFF:02X}",
+            "did": "-" if did is None else f"0x{int(did) & 0xFFFF:04X}",
+            "message": str(message),
+        }
+        self._collector_error_logs.append(row)
+        if len(self._collector_error_logs) > int(self._collector_error_log_limit):
+            self._collector_error_logs = self._collector_error_logs[-int(self._collector_error_log_limit):]
+        self.collectorDiagnosticsChanged.emit()
+
+    def _collector_request_timeout_sec(self, nodes_count: int) -> float:
+        configured_timeout = max(0.2, float(self._collector_pending_timeout_ms) / 1000.0)
+        adaptive = max(0.6, float(self._collector_effective_poll_interval_ms(nodes_count)) * 4.0 / 1000.0)
+        return max(configured_timeout, adaptive)
+
+    def _collector_register_pending_request(self, node_sa: int, did: int, *, timeout_sec: float):
+        key = (int(node_sa) & 0xFF, int(did) & 0xFFFF)
+        now = time.monotonic()
+        existing = self._collector_pending_requests.get(key)
+        if isinstance(existing, dict):
+            sent_at = float(existing.get("sent_at", 0.0))
+            if sent_at > 0.0 and (now - sent_at) > timeout_sec:
+                self._collector_append_error_log(
+                    (
+                        f"Таймаут ожидания ответа 0x62/0x7F для {self._collector_did_name(key[1])} "
+                        f"(узел 0x{key[0]:02X}, DID 0x{key[1]:04X}). Возможна перегрузка шины или проигрыш арбитража CAN."
+                    ),
+                    node_sa=key[0],
+                    did=key[1],
+                    dedup_key=f"collector_timeout_resend_{key[0]:02X}_{key[1]:04X}",
+                    min_repeat_sec=2.0,
+                )
+        self._collector_pending_requests[key] = {
+            "sent_at": now,
+            "timeout_sec": float(timeout_sec),
+        }
+
+    def _collector_resolve_pending_response_did(self, node_sa: int, did_hint: int | None = None) -> int | None:
+        normalized_sa = int(node_sa) & 0xFF
+        if did_hint is not None:
+            normalized_did = int(did_hint) & 0xFFFF
+            key = (normalized_sa, normalized_did)
+            if key in self._collector_pending_requests:
+                self._collector_pending_requests.pop(key, None)
+                return normalized_did
+
+        oldest_key: tuple[int, int] | None = None
+        oldest_sent_at = 0.0
+        for key, entry in self._collector_pending_requests.items():
+            if key[0] != normalized_sa:
+                continue
+            sent_at = float(entry.get("sent_at", 0.0)) if isinstance(entry, dict) else 0.0
+            if oldest_key is None or sent_at < oldest_sent_at:
+                oldest_key = key
+                oldest_sent_at = sent_at
+
+        if oldest_key is None:
+            return None
+        self._collector_pending_requests.pop(oldest_key, None)
+        return int(oldest_key[1]) & 0xFFFF
+
+    def _collector_cleanup_pending_requests(self, *, timeout_sec: float):
+        now = time.monotonic()
+        expired: list[tuple[int, int]] = []
+        for key, entry in self._collector_pending_requests.items():
+            sent_at = float(entry.get("sent_at", 0.0)) if isinstance(entry, dict) else 0.0
+            if sent_at <= 0.0:
+                continue
+            if (now - sent_at) >= float(timeout_sec):
+                expired.append(key)
+
+        for node_sa, did in expired:
+            self._collector_pending_requests.pop((node_sa, did), None)
+            node = self._collector_nodes.get(int(node_sa) & 0xFF)
+            if isinstance(node, dict):
+                try:
+                    streak = int(node.get("timeoutStreak", 0))
+                except (TypeError, ValueError):
+                    streak = 0
+                streak = min(max(0, streak) + 1, 8)
+                node["timeoutStreak"] = streak
+                node["nextPollAfter"] = now + min(2.0, 0.08 * (2 ** (streak - 1)))
+            self._collector_append_error_log(
+                (
+                    f"Нет ответа на UDS-запрос {self._collector_did_name(did)} "
+                    f"(узел 0x{int(node_sa) & 0xFF:02X}, DID 0x{int(did) & 0xFFFF:04X}). "
+                    "Вероятно высокая загрузка шины/арбитраж CAN, либо узел не отвечает."
+                ),
+                node_sa=node_sa,
+                did=did,
+                dedup_key=f"collector_timeout_{int(node_sa) & 0xFF:02X}_{int(did) & 0xFFFF:04X}",
+                min_repeat_sec=2.0,
+            )
 
     def _prune_collector_inactive_nodes(self):
         if len(self._collector_node_order) == 0:
@@ -278,6 +457,11 @@ class AppControllerCollectorMixin(AppControllerContract):
         for node_sa in removed_set:
             self._collector_nodes.pop(node_sa, None)
             self._collector_trend_points_by_node.pop(node_sa, None)
+        if len(removed_set) > 0 and len(self._collector_pending_requests) > 0:
+            pending_keys = list(self._collector_pending_requests.keys())
+            for key in pending_keys:
+                if int(key[0]) & 0xFF in removed_set:
+                    self._collector_pending_requests.pop(key, None)
 
         self._collector_node_order = [node_sa for node_sa in kept_nodes if node_sa not in removed_set]
         if len(self._collector_node_order) == 0:
@@ -381,7 +565,7 @@ class AppControllerCollectorMixin(AppControllerContract):
     def _schedule_collector_views_update(self, *, nodes: bool = False, trend: bool = False):
         if nodes:
             self._collector_view_update_pending_nodes = True
-        if trend:
+        if trend and bool(self._collector_trend_enabled):
             self._collector_view_update_pending_trend = True
 
         if self._collector_view_update_pending_nodes or self._collector_view_update_pending_trend:
@@ -498,6 +682,9 @@ class AppControllerCollectorMixin(AppControllerContract):
         }
 
     def _append_collector_trend_sample(self, node_sa: int, node: dict[str, object], timestamp: str):
+        if not bool(self._collector_trend_enabled):
+            return
+
         normalized_sa = int(node_sa) & 0xFF
         fuel = float(node.get("fuelLevel", 0))
         temperature = float(node.get("temperature", 0.0))
@@ -579,6 +766,8 @@ class AppControllerCollectorMixin(AppControllerContract):
     def _append_collector_csv(self, node_sa: int, node: dict[str, object], timestamp: str):
         if (not self._collector_enabled) or self._collector_state != "recording" or self._collector_session_dir is None:
             return
+        if not bool(node.get("temperatureKnown", False)):
+            return
         manager = self._collector_csv_managers.get(node_sa)
         if manager is None:
             manager = CollectorCsvManager(f"0x{int(node_sa) & 0xFF:02X}", self._collector_session_dir)
@@ -588,6 +777,11 @@ class AppControllerCollectorMixin(AppControllerContract):
             period_ticks=int(node.get("period", 0)),
             temperature_c=float(node.get("temperature", 0.0)),
             fuel_percent=float(node.get("fuelLevel", 0.0)),
+            fuel_from_period_x10=int(node.get("fuelLevelX10", int(round(float(node.get("fuelLevel", 0.0)) * 10.0)))),
+            empty_ticks=int(node.get("emptyPeriod", 0)),
+            full_ticks=int(node.get("fullPeriod", 0)),
+            empty_known=bool(node.get("emptyKnown", False)),
+            full_known=bool(node.get("fullKnown", False)),
         )
         self._append_collector_combined_csv(timestamp)
 
@@ -602,6 +796,11 @@ class AppControllerCollectorMixin(AppControllerContract):
                 "period": int(node.get("period", 0)),
                 "fuel": float(node.get("fuelLevel", 0.0)),
                 "temperature": float(node.get("temperature", 0.0)),
+                "fuelPeriodX10": int(node.get("fuelLevelX10", int(round(float(node.get("fuelLevel", 0.0)) * 10.0)))),
+                "emptyPeriod": int(node.get("emptyPeriod", 0)),
+                "fullPeriod": int(node.get("fullPeriod", 0)),
+                "emptyKnown": bool(node.get("emptyKnown", False)),
+                "fullKnown": bool(node.get("fullKnown", False)),
             }
         return snapshot
 
@@ -641,40 +840,112 @@ class AppControllerCollectorMixin(AppControllerContract):
                 self._schedule_collector_views_update(nodes=True, trend=was_new_node)
             return
 
-        if len(payload) < 4:
+        if len(payload) < 2:
             if nodes_changed:
                 self._schedule_collector_views_update(nodes=True, trend=was_new_node)
             return
 
         sid = int(payload[1]) & 0xFF
-        if sid != self._collector_read_service.success_sid:
+        if sid == 0x7F:
+            original_sid = int(payload[2]) & 0xFF if len(payload) > 2 else 0
+            nrc = int(payload[3]) & 0xFF if len(payload) > 3 else 0
+            nrc_text = self._uds_nrc_description(nrc)
+            pending_did = self._collector_resolve_pending_response_did(node_sa, None)
+            self._collector_append_error_log(
+                (
+                    f"Негативный ответ UDS: SID 0x{original_sid:02X}, NRC 0x{nrc:02X} ({nrc_text}). "
+                    f"Ожидался ответ по {self._collector_did_name(pending_did) if pending_did is not None else 'запросу коллектора'}."
+                ),
+                node_sa=node_sa,
+                did=pending_did,
+                dedup_key=f"collector_nrc_{int(node_sa) & 0xFF:02X}_{original_sid:02X}_{nrc:02X}_{pending_did if pending_did is not None else 0:04X}",
+                min_repeat_sec=1.2,
+            )
             if nodes_changed:
                 self._schedule_collector_views_update(nodes=True, trend=was_new_node)
             return
 
-        did = self._collector_read_service.parse_did_field(payload)
-        value = int(ServiceReadDataById.parse_data_field(payload))
+        if sid != self._collector_read_service.success_sid:
+            pending_did = self._collector_resolve_pending_response_did(node_sa, None)
+            self._collector_append_error_log(
+                f"Неожиданный SID ответа 0x{sid:02X} для запроса коллектора.",
+                node_sa=node_sa,
+                did=pending_did,
+                dedup_key=f"collector_sid_{int(node_sa) & 0xFF:02X}_{sid:02X}_{pending_did if pending_did is not None else 0:04X}",
+                min_repeat_sec=1.2,
+            )
+            if nodes_changed:
+                self._schedule_collector_views_update(nodes=True, trend=was_new_node)
+            return
+
+        if len(payload) < 4:
+            pending_did = self._collector_resolve_pending_response_did(node_sa, None)
+            self._collector_append_error_log(
+                "Короткий ответ UDS на запрос коллектора (меньше 4 байт payload).",
+                node_sa=node_sa,
+                did=pending_did,
+                dedup_key=f"collector_short_{int(node_sa) & 0xFF:02X}_{pending_did if pending_did is not None else 0:04X}",
+                min_repeat_sec=1.2,
+            )
+            if nodes_changed:
+                self._schedule_collector_views_update(nodes=True, trend=was_new_node)
+            return
+
+        try:
+            did = int(self._collector_read_service.parse_did_field(payload)) & 0xFFFF
+            value = int(ServiceReadDataById.parse_data_field(payload))
+        except Exception:
+            pending_did = self._collector_resolve_pending_response_did(node_sa, None)
+            self._collector_append_error_log(
+                "Не удалось разобрать ответ 0x62 (DID/данные).",
+                node_sa=node_sa,
+                did=pending_did,
+                dedup_key=f"collector_parse_{int(node_sa) & 0xFF:02X}_{pending_did if pending_did is not None else 0:04X}",
+                min_repeat_sec=1.2,
+            )
+            if nodes_changed:
+                self._schedule_collector_views_update(nodes=True, trend=was_new_node)
+            return
+
+        self._collector_resolve_pending_response_did(node_sa, int(did) & 0xFFFF)
+        if isinstance(node, dict):
+            node["timeoutStreak"] = 0
+            node["nextPollAfter"] = 0.0
         has_trend_update = False
 
         if did == int(UdsData.curr_fuel_tank.pid):
             node["period"] = value
-            nodes_changed = True
-        elif did == int(UdsData.raw_fuel_level.pid):
-            fuel_level = value / 10.0
-            if fuel_level < 0.0:
-                fuel_level = 0.0
-            if fuel_level > 100.0:
-                fuel_level = 100.0
-            node["fuelLevel"] = fuel_level
+            self._recompute_collector_node_fuel_from_period(node)
             node["fuelCount"] = int(node.get("fuelCount", 0)) + 1
             self._append_collector_csv(node_sa, node, timestamp)
             has_trend_update = True
+            nodes_changed = True
+        elif did == int(UdsData.empty_fuel_tank.pid):
+            if int(node.get("emptyPeriod", 0)) != int(value):
+                node["emptyPeriod"] = value
+                self._recompute_collector_node_fuel_from_period(node)
+                nodes_changed = True
+            if not bool(node.get("emptyKnown", False)):
+                node["emptyKnown"] = True
+                nodes_changed = True
+        elif did == int(UdsData.full_fuel_tank.pid):
+            if int(node.get("fullPeriod", 0)) != int(value):
+                node["fullPeriod"] = value
+                self._recompute_collector_node_fuel_from_period(node)
+                nodes_changed = True
+            if not bool(node.get("fullKnown", False)):
+                node["fullKnown"] = True
+                nodes_changed = True
+        elif did == int(UdsData.raw_fuel_level.pid):
+            # Keep value for diagnostics only. Main trend/PNG/CSV fuel now comes from period-based formula.
+            node["fuelLevelReported"] = value / 10.0
             nodes_changed = True
         elif did == int(UdsData.raw_temperature.pid):
             bits = max(8, int(UdsData.raw_temperature.size) * 8)
             signed_value = self._decode_signed(value, bits)
             temperature = signed_value / 10.0
             node["temperature"] = temperature
+            node["temperatureKnown"] = True
             node["temperatureCount"] = int(node.get("temperatureCount", 0)) + 1
             self._append_collector_csv(node_sa, node, timestamp)
             has_trend_update = True
@@ -705,22 +976,113 @@ class AppControllerCollectorMixin(AppControllerContract):
         if len(nodes) == 0:
             return
 
+        effective_poll_interval = self._collector_effective_poll_interval_ms(len(nodes))
+        timeout_sec = self._collector_request_timeout_sec(len(nodes))
+        self._collector_cleanup_pending_requests(timeout_sec=timeout_sec)
+        max_pending = max(1, int(self._collector_max_pending_requests))
+        if len(self._collector_pending_requests) >= max_pending:
+            self._collector_poll_timer.setInterval(max(30, min(90, effective_poll_interval)))
+            return
+
         self._collector_poll_node_index %= len(nodes)
         poll_vars_count = len(self._collector_poll_vars)
         self._collector_poll_phase %= poll_vars_count
 
+        pending_nodes = {int(key[0]) & 0xFF for key in self._collector_pending_requests.keys()}
+        selected_index = -1
+        now = time.monotonic()
+        for offset in range(len(nodes)):
+            idx = (self._collector_poll_node_index + offset) % len(nodes)
+            candidate_sa = int(nodes[idx]) & 0xFF
+            if candidate_sa in pending_nodes:
+                continue
+            candidate_node = self._collector_nodes.get(candidate_sa)
+            next_allowed = 0.0
+            if isinstance(candidate_node, dict):
+                try:
+                    next_allowed = float(candidate_node.get("nextPollAfter", 0.0))
+                except (TypeError, ValueError):
+                    next_allowed = 0.0
+            if next_allowed > now:
+                continue
+            selected_index = idx
+            break
+
+        if selected_index < 0:
+            self._collector_poll_timer.setInterval(max(30, min(90, effective_poll_interval)))
+            return
+
+        self._collector_poll_node_index = selected_index
         node_sa = int(nodes[self._collector_poll_node_index]) & 0xFF
-        poll_var = self._collector_poll_vars[self._collector_poll_phase]
+        node = self._collector_nodes.get(node_sa)
+        use_fast_schedule = True
+        poll_var = None
+
+        if isinstance(node, dict):
+            if not bool(node.get("emptyKnown", False)):
+                poll_var = UdsData.empty_fuel_tank
+                use_fast_schedule = False
+            elif not bool(node.get("fullKnown", False)):
+                poll_var = UdsData.full_fuel_tank
+                use_fast_schedule = False
+            else:
+                try:
+                    refresh_countdown = int(node.get("calibrationRefreshCountdown", self._collector_calibration_refresh_cycles))
+                except (TypeError, ValueError):
+                    refresh_countdown = int(self._collector_calibration_refresh_cycles)
+
+                if refresh_countdown <= 0:
+                    try:
+                        refresh_phase = int(node.get("calibrationRefreshPhase", 0)) & 0x01
+                    except (TypeError, ValueError):
+                        refresh_phase = 0
+                    poll_var = UdsData.empty_fuel_tank if refresh_phase == 0 else UdsData.full_fuel_tank
+                    node["calibrationRefreshPhase"] = (refresh_phase + 1) % 2
+                    node["calibrationRefreshCountdown"] = int(self._collector_calibration_refresh_cycles)
+                    use_fast_schedule = False
+                else:
+                    node["calibrationRefreshCountdown"] = refresh_countdown - 1
+
+        if poll_var is None:
+            poll_var = self._collector_poll_vars[self._collector_poll_phase]
+
+        min_gap_sec = max(0.0, float(self._collector_min_inter_request_ms) / 1000.0)
+        try:
+            last_tx = float(self._collector_last_request_monotonic)
+        except (TypeError, ValueError):
+            last_tx = 0.0
+        if last_tx > 0.0:
+            since_last = time.monotonic() - last_tx
+            if since_last < min_gap_sec:
+                self._collector_poll_timer.setInterval(max(30, int((min_gap_sec - since_last) * 1000.0)))
+                return
 
         tx_identifier = copy(UdsIdentifiers.tx)
         tx_identifier.dst = node_sa
         self._collector_read_service.read_data_by_identifier(tx_identifier.identifier, poll_var)
+        self._collector_last_request_monotonic = time.monotonic()
+        try:
+            did_value = int(poll_var.pid) & 0xFFFF
+            self._collector_register_pending_request(node_sa, did_value, timeout_sec=timeout_sec)
+        except Exception:
+            self._collector_append_error_log(
+                "Не удалось зарегистрировать ожидаемый ответ коллектора (невалидный DID).",
+                node_sa=node_sa,
+                dedup_key=f"collector_pending_register_{int(node_sa) & 0xFF:02X}",
+                min_repeat_sec=2.0,
+            )
+
+        if not use_fast_schedule:
+            self._collector_poll_node_index = (self._collector_poll_node_index + 1) % len(nodes)
+            self._collector_poll_timer.setInterval(effective_poll_interval)
+            return
 
         next_phase = (self._collector_poll_phase + 1) % poll_vars_count
         self._collector_poll_phase = next_phase
         if next_phase != 0:
-            self._collector_poll_timer.setInterval(self._collector_poll_interval_ms)
+            self._collector_poll_timer.setInterval(effective_poll_interval)
         else:
             self._collector_poll_node_index = (self._collector_poll_node_index + 1) % len(nodes)
-            self._collector_poll_timer.setInterval(self._collector_cycle_pause_ms)
+            pause_interval = max(30, min(int(self._collector_cycle_pause_ms), effective_poll_interval * 2))
+            self._collector_poll_timer.setInterval(pause_interval)
 

@@ -18,6 +18,10 @@ Rectangle {
     property int maxRenderPoints: 1200
     property int maxPointLabels: 60
     property bool swapAxes: false
+    property bool smoothSeriesEnabled: true
+    property real smoothSeriesAlpha: 0.22
+    property int adaptiveRenderFactor: 3
+    property int maxMarkerPoints: 1600
 
     // Compatibility properties.
     property real zoomX: 1.0
@@ -80,25 +84,52 @@ Rectangle {
     function decimatePoints(sourcePoints, maxCount) {
         if (!sourcePoints || sourcePoints.length <= 0)
             return []
+        var _ignoredMaxCount = maxCount
+        if (_ignoredMaxCount < 0)
+            _ignoredMaxCount = 0
+        // Keep all source points in data model; rendering optimization is done later
+        // with pixel-adaptive aggregation to avoid UI lag on huge datasets.
+        return sourcePoints
+    }
 
-        var total = sourcePoints.length
-        var target = Math.floor(Number(maxCount))
-        if (isNaN(target) || target <= 0)
-            return sourcePoints
-        target = Math.max(2, target)
-        if (total <= target)
+    function smoothPoints(sourcePoints) {
+        if (!sourcePoints || sourcePoints.length <= 2 || !root.smoothSeriesEnabled)
             return sourcePoints
 
-        var step = (total - 1) / (target - 1)
-        var result = []
-        var prevIdx = -1
-        for (var i = 0; i < target; i++) {
-            var idx = Math.round(i * step)
-            idx = Math.max(0, Math.min(total - 1, idx))
-            if (idx === prevIdx)
-                continue
-            result.push(sourcePoints[idx])
-            prevIdx = idx
+        var alpha = Number(root.smoothSeriesAlpha)
+        if (!isFinite(alpha))
+            alpha = 0.22
+        alpha = Math.max(0.02, Math.min(1.0, alpha))
+        if (alpha >= 0.999)
+            return sourcePoints
+
+        var first = sourcePoints[0]
+        var smoothFuel = Number(first.fuel)
+        var smoothTemperature = Number(first.temperature)
+        var result = [{
+            "_idx": first._idx,
+            "fuel": smoothFuel,
+            "temperature": smoothTemperature,
+            "time": first.time
+        }]
+
+        for (var i = 1; i < sourcePoints.length; i++) {
+            var point = sourcePoints[i]
+            var fuel = Number(point.fuel)
+            var temperature = Number(point.temperature)
+            if (!isFinite(fuel))
+                fuel = smoothFuel
+            if (!isFinite(temperature))
+                temperature = smoothTemperature
+
+            smoothFuel += (fuel - smoothFuel) * alpha
+            smoothTemperature += (temperature - smoothTemperature) * alpha
+            result.push({
+                "_idx": point._idx,
+                "fuel": smoothFuel,
+                "temperature": smoothTemperature,
+                "time": point.time
+            })
         }
         return result
     }
@@ -121,7 +152,7 @@ Rectangle {
                 "time": p.time
             })
         }
-        return decimatePoints(selected, root.maxRenderPoints)
+        return smoothPoints(decimatePoints(selected, root.maxRenderPoints))
     }
 
     function xValue(point) {
@@ -284,6 +315,8 @@ Rectangle {
     onRangeEndChanged: requestRepaint()
     onShowPointLabelsChanged: requestRepaint()
     onSwapAxesChanged: requestRepaint()
+    onSmoothSeriesEnabledChanged: requestRepaint()
+    onSmoothSeriesAlphaChanged: requestRepaint()
 
     Canvas {
         id: canvas
@@ -293,6 +326,8 @@ Rectangle {
         anchors.topMargin: 16
         anchors.bottomMargin: 40
         antialiasing: true
+        renderTarget: Canvas.FramebufferObject
+        renderStrategy: Canvas.Threaded
         z: 1
 
         Component.onCompleted: requestPaint()
@@ -494,6 +529,96 @@ Rectangle {
                 return t + (1.0 - ratio) * ph
             }
 
+            function pushUnique(target, entry) {
+                if (!entry)
+                    return
+                if (target.length > 0 && target[target.length - 1].idx === entry.idx)
+                    return
+                target.push(entry)
+            }
+
+            function buildRenderablePoints(sourcePoints) {
+                if (!sourcePoints || sourcePoints.length <= 0)
+                    return []
+
+                var total = sourcePoints.length
+                var denseLimit = Math.max(64, Math.floor(pw * 1.2))
+                var result = []
+
+                function addRawPoint(point, idx) {
+                    var xv = root.xValue(point)
+                    var yv = root.yValue(point)
+                    if (!isFinite(xv) || !isFinite(yv))
+                        return null
+                    var entry = {
+                        "idx": idx,
+                        "x": mapX(xv),
+                        "y": mapY(yv),
+                        "rawX": xv,
+                        "rawY": yv
+                    }
+                    if (!isFinite(entry.x) || !isFinite(entry.y))
+                        return null
+                    return entry
+                }
+
+                if (total <= denseLimit) {
+                    for (var i = 0; i < total; i++) {
+                        var rawEntry = addRawPoint(sourcePoints[i], i)
+                        if (rawEntry)
+                            result.push(rawEntry)
+                    }
+                    return result
+                }
+
+                var renderFactor = Math.max(1, Math.floor(Number(root.adaptiveRenderFactor)))
+                var targetBuckets = Math.max(64, Math.floor(pw * renderFactor))
+                var bucketSize = Math.max(1, Math.ceil(total / targetBuckets))
+
+                for (var start = 0; start < total; start += bucketSize) {
+                    var end = Math.min(total, start + bucketSize)
+                    var first = null
+                    var last = null
+                    var minEntry = null
+                    var maxEntry = null
+
+                    for (var j = start; j < end; j++) {
+                        var entry = addRawPoint(sourcePoints[j], j)
+                        if (!entry)
+                            continue
+
+                        if (!first) {
+                            first = entry
+                            minEntry = entry
+                            maxEntry = entry
+                        }
+                        last = entry
+                        if (entry.y < minEntry.y)
+                            minEntry = entry
+                        if (entry.y > maxEntry.y)
+                            maxEntry = entry
+                    }
+
+                    if (!first)
+                        continue
+
+                    pushUnique(result, first)
+
+                    var mids = []
+                    if (minEntry && minEntry.idx !== first.idx && minEntry.idx !== last.idx)
+                        mids.push(minEntry)
+                    if (maxEntry && maxEntry.idx !== first.idx && maxEntry.idx !== last.idx && maxEntry.idx !== minEntry.idx)
+                        mids.push(maxEntry)
+                    mids.sort(function(a, b) { return a.idx - b.idx })
+                    for (var m = 0; m < mids.length; m++)
+                        pushUnique(result, mids[m])
+
+                    pushUnique(result, last)
+                }
+
+                return result
+            }
+
             ctx.save()
             ctx.font = "10px Bahnschrift"
             ctx.fillStyle = "#51667d"
@@ -525,14 +650,17 @@ Rectangle {
                 var points = seriesItem.points
                 if (!points || points.length <= 0)
                     continue
+                var renderPoints = buildRenderablePoints(points)
+                if (!renderPoints || renderPoints.length <= 0)
+                    continue
 
                 ctx.strokeStyle = color
                 ctx.lineWidth = 2
                 ctx.globalAlpha = 0.9
                 ctx.beginPath()
-                for (var li = 0; li < points.length; li++) {
-                    var px = mapX(root.xValue(points[li]))
-                    var py = mapY(root.yValue(points[li]))
+                for (var li = 0; li < renderPoints.length; li++) {
+                    var px = renderPoints[li].x
+                    var py = renderPoints[li].y
                     if (li === 0)
                         ctx.moveTo(px, py)
                     else
@@ -541,24 +669,26 @@ Rectangle {
                 ctx.stroke()
 
                 ctx.globalAlpha = 1.0
-                ctx.fillStyle = color
-                for (var pi2 = 0; pi2 < points.length; pi2++) {
-                    var pxx = mapX(root.xValue(points[pi2]))
-                    var pyy = mapY(root.yValue(points[pi2]))
-                    ctx.beginPath()
-                    ctx.arc(pxx, pyy, 2.4, 0, Math.PI * 2)
-                    ctx.fill()
+                if (renderPoints.length <= Math.max(100, Number(root.maxMarkerPoints))) {
+                    ctx.fillStyle = color
+                    for (var pi2 = 0; pi2 < renderPoints.length; pi2++) {
+                        var pxx = renderPoints[pi2].x
+                        var pyy = renderPoints[pi2].y
+                        ctx.beginPath()
+                        ctx.arc(pxx, pyy, 2.2, 0, Math.PI * 2)
+                        ctx.fill()
+                    }
                 }
 
                 if (root.showPointLabels) {
                     var maxLabels = Math.max(1, Number(root.maxPointLabels))
-                    var labelStep = Math.max(1, Math.ceil(points.length / maxLabels))
-                    for (var lb = 0; lb < points.length; lb += labelStep) {
-                        var lx = mapX(root.xValue(points[lb]))
-                        var ly = mapY(root.yValue(points[lb]))
+                    var labelStep = Math.max(1, Math.ceil(renderPoints.length / maxLabels))
+                    for (var lb = 0; lb < renderPoints.length; lb += labelStep) {
+                        var lx = renderPoints[lb].x
+                        var ly = renderPoints[lb].y
                         if (lx < l || lx > (l + pw) || ly < t || ly > (t + ph))
                             continue
-                        var valueText = root.xValue(points[lb]).toFixed(1) + ", " + root.yValue(points[lb]).toFixed(1)
+                        var valueText = renderPoints[lb].rawX.toFixed(1) + ", " + renderPoints[lb].rawY.toFixed(1)
                         drawLabel(ctx, lx, ly - 6, valueText, color)
                     }
                 }

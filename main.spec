@@ -14,9 +14,83 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_submodules
 
 
-APP_NAME = "tosun-geehy-can-uds-tools"
+APP_BASE_NAME = "tosun-geehy-can-uds-tools"
 PROJECT_ROOT = Path(SPECPATH).resolve()
 ENTRY_SCRIPT = PROJECT_ROOT / "main.py"
+VERSION_STATE_FILE = PROJECT_ROOT / ".build_version"
+WINDOWS_VERSION_FILE = PROJECT_ROOT / "build" / "version_info_auto.txt"
+
+
+def _parse_version_parts(raw_text: str) -> tuple[int, int, int]:
+    cleaned = str(raw_text or "").strip().replace(",", ".")
+    parts = [part for part in cleaned.split(".") if part != ""]
+    if len(parts) < 3:
+        parts += ["0"] * (3 - len(parts))
+    try:
+        major = max(0, int(parts[0]))
+        minor = max(0, int(parts[1]))
+        patch = max(0, int(parts[2]))
+    except (TypeError, ValueError):
+        return (1, 0, 0)
+    return (major, minor, patch)
+
+
+def bump_build_version() -> tuple[str, tuple[int, int, int]]:
+    if VERSION_STATE_FILE.exists():
+        current = _parse_version_parts(VERSION_STATE_FILE.read_text(encoding="utf-8"))
+    else:
+        current = (1, 0, 0)
+
+    major, minor, patch = current
+    next_version = (major, minor, patch + 1)
+    version_text = f"{next_version[0]}.{next_version[1]}.{next_version[2]}"
+    VERSION_STATE_FILE.write_text(version_text + "\n", encoding="utf-8")
+    return version_text, next_version
+
+
+def write_windows_version_file(version_parts: tuple[int, int, int], version_text: str) -> str | None:
+    if not IS_WINDOWS:
+        return None
+    WINDOWS_VERSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+    major, minor, patch = version_parts
+    WINDOWS_VERSION_FILE.write_text(
+        f"""# UTF-8
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=({major}, {minor}, {patch}, 0),
+    prodvers=({major}, {minor}, {patch}, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+    ),
+  kids=[
+    StringFileInfo(
+      [
+      StringTable(
+        u'040904B0',
+        [StringStruct(u'CompanyName', u'TOSUN'),
+        StringStruct(u'FileDescription', u'{APP_BASE_NAME}'),
+        StringStruct(u'FileVersion', u'{version_text}'),
+        StringStruct(u'InternalName', u'{APP_BASE_NAME}'),
+        StringStruct(u'LegalCopyright', u'Copyright (C) 2026'),
+        StringStruct(u'OriginalFilename', u'{APP_BASE_NAME}.exe'),
+        StringStruct(u'ProductName', u'{APP_BASE_NAME}'),
+        StringStruct(u'ProductVersion', u'{version_text}')])
+      ]),
+    VarFileInfo([VarStruct(u'Translation', [1033, 1200])])
+  ]
+)
+""",
+        encoding="utf-8",
+    )
+    return str(WINDOWS_VERSION_FILE)
+
+
+APP_VERSION_TEXT, APP_VERSION_PARTS = bump_build_version()
+APP_NAME = f"{APP_BASE_NAME}_v{APP_VERSION_TEXT}"
 
 QML_ROOT = PROJECT_ROOT / "ui" / "qml"
 RESOURCES_ROOT = PROJECT_ROOT / "resources"
@@ -28,6 +102,7 @@ LINUX_LIB_ROOT = LIB_TSCAN_ROOT / "linux"
 
 IS_WINDOWS = platform.system().lower().startswith("win")
 IS_LINUX = platform.system().lower().startswith("linux")
+WINDOWS_VERSION_PATH = write_windows_version_file(APP_VERSION_PARTS, APP_VERSION_TEXT)
 
 
 def collect_tree(src_root: Path, dst_root: str, patterns: tuple[str, ...]) -> list[tuple[str, str]]:
@@ -162,6 +237,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    version=WINDOWS_VERSION_PATH,
 )
 
 coll = COLLECT(

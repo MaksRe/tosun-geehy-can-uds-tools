@@ -45,7 +45,9 @@ class AppControllerPropertiesMixin(AppControllerContract):
     collectorOutputDirectoryChanged = Signal()
     collectorPollIntervalChanged = Signal()
     collectorCyclePauseChanged = Signal()
+    collectorDiagnosticsChanged = Signal()
     collectorStateChanged = Signal()
+    collectorTrendEnabledChanged = Signal()
     collectorTrendChanged = Signal()
     optionSelectionChanged = Signal()
     optionValueChanged = Signal()
@@ -310,6 +312,18 @@ class AppControllerPropertiesMixin(AppControllerContract):
     @Property(bool, notify=collectorStateChanged)
     def collectorPaused(self):
         return self._collector_state == "paused"
+
+    @Property(bool, notify=collectorTrendEnabledChanged)
+    def collectorTrendEnabled(self):
+        return bool(self._collector_trend_enabled)
+
+    @Property("QVariantList", notify=collectorDiagnosticsChanged)
+    def collectorErrorLogs(self):
+        return self._collector_error_logs
+
+    @Property(int, notify=collectorDiagnosticsChanged)
+    def collectorErrorCount(self):
+        return len(self._collector_error_logs)
 
     @Property("QVariantList", notify=collectorTrendChanged)
     def collectorTrendPoints(self):

@@ -14,6 +14,7 @@ Card {
     property color inputFocus: "#0ea5e9"
     readonly property int contentPadding: 10
     readonly property bool collectorEnabled: root.appController ? root.appController.collectorEnabled : false
+    readonly property bool collectorTrendEnabled: root.appController ? root.appController.collectorTrendEnabled : false
 
     signal selectOutputDirectoryRequested()
     signal openTrendWindowRequested()
@@ -68,6 +69,23 @@ Card {
                 toneHover: "#1e40af"
                 tonePressed: "#1e3a8a"
                 onClicked: root.openTrendWindowRequested()
+            }
+
+            Text {
+                text: root.collectorTrendEnabled ? "Графики: ВКЛ" : "Графики: ВЫКЛ"
+                color: root.collectorTrendEnabled ? "#0ea5a4" : root.textSoft
+                font.pixelSize: 11
+                font.bold: true
+                font.family: "Bahnschrift"
+                Layout.alignment: Qt.AlignVCenter
+            }
+
+            FancySwitch {
+                Layout.alignment: Qt.AlignVCenter
+                trackWidth: 42
+                trackHeight: 22
+                checked: root.collectorTrendEnabled
+                onToggled: if (root.appController) root.appController.setCollectorTrendEnabled(checked)
             }
 
             Text {
@@ -438,6 +456,113 @@ Card {
 
                             Item { Layout.fillWidth: true }
                         }
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 176
+                Layout.minimumHeight: 132
+                radius: 9
+                color: "#f8fbff"
+                border.color: "#d6e2ef"
+                border.width: 1
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    spacing: 4
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+
+                        Text {
+                            text: "Ошибки UDS коллектора"
+                            color: root.textSoft
+                            font.pixelSize: 11
+                            font.bold: true
+                            font.family: "Bahnschrift"
+                        }
+
+                        Text {
+                            text: root.appController ? ("(" + String(root.appController.collectorErrorCount) + ")") : "(0)"
+                            color: root.textSoft
+                            font.pixelSize: 10
+                            font.family: "Bahnschrift"
+                        }
+
+                        Item { Layout.fillWidth: true }
+
+                        FancyButton {
+                            Layout.preferredWidth: 98
+                            Layout.preferredHeight: 28
+                            fontPixelSize: 11
+                            text: "Очистить"
+                            tone: "#64748b"
+                            toneHover: "#55657a"
+                            tonePressed: "#465669"
+                            enabled: root.appController ? root.appController.collectorErrorCount > 0 : false
+                            onClicked: if (root.appController) root.appController.clearCollectorErrorLogs()
+                        }
+                    }
+
+                    ListView {
+                        id: errorList
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        clip: true
+                        spacing: 2
+                        model: root.appController ? root.appController.collectorErrorLogs : []
+
+                        delegate: Rectangle {
+                            width: errorList.width
+                            radius: 6
+                            color: index % 2 === 0 ? "#f9fbff" : "#eef4fb"
+                            implicitHeight: logColumn.implicitHeight + 8
+
+                            ColumnLayout {
+                                id: logColumn
+                                anchors.fill: parent
+                                anchors.margins: 4
+                                spacing: 1
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: (modelData.time ? modelData.time : "--:--:--")
+                                          + " | " + (modelData.node ? modelData.node : "-")
+                                          + " | " + (modelData.did ? modelData.did : "-")
+                                    color: "#4f6278"
+                                    font.pixelSize: 10
+                                    font.family: "Bahnschrift"
+                                    elide: Text.ElideRight
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: modelData.message ? modelData.message : ""
+                                    color: root.textMain
+                                    font.pixelSize: 10
+                                    font.family: "Bahnschrift"
+                                    wrapMode: Text.Wrap
+                                    maximumLineCount: 3
+                                    elide: Text.ElideRight
+                                }
+                            }
+                        }
+
+                        ScrollBar.vertical: ScrollBar {}
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        visible: (root.appController ? root.appController.collectorErrorCount : 0) === 0
+                        text: "Ошибок UDS пока нет"
+                        color: root.textSoft
+                        font.pixelSize: 10
+                        font.family: "Bahnschrift"
+                        horizontalAlignment: Text.AlignHCenter
                     }
                 }
             }

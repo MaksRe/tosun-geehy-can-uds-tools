@@ -351,7 +351,7 @@ Card {
                     }
 
                     FancySwitch {
-                        checked: root.appController ? root.appController.canJournalEnabled : true
+                        checked: root.appController ? root.appController.canJournalEnabled : false
                         enabled: root.appController !== null
                         trackWidth: 38
                         trackHeight: 22

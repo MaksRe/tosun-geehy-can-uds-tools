@@ -23,7 +23,9 @@ class AppControllerContract:
     collectorNodesChanged: Any
     collectorOutputDirectoryChanged: Any
     collectorPollIntervalChanged: Any
+    collectorDiagnosticsChanged: Any
     collectorStateChanged: Any
+    collectorTrendEnabledChanged: Any
     collectorTrendChanged: Any
     canFilterOptionsChanged: Any
     canJournalEnabledChanged: Any
@@ -105,6 +107,14 @@ class AppControllerContract:
     _can_journal_enabled: Any
     _can_traffic_logs: Any
     _collector_combined_csv_manager: Any
+    _collector_diagnostics_rate_limit: Any
+    _collector_error_log_limit: Any
+    _collector_error_logs: Any
+    _collector_pending_requests: Any
+    _collector_pending_timeout_ms: Any
+    _collector_max_pending_requests: Any
+    _collector_min_inter_request_ms: Any
+    _collector_last_request_monotonic: Any
     _collector_csv_managers: Any
     _collector_cycle_pause_ms: Any
     _collector_enabled: Any
@@ -121,6 +131,7 @@ class AppControllerContract:
     _collector_read_service: Any
     _collector_session_dir: Any
     _collector_state: Any
+    _collector_trend_enabled: Any
     _collector_trend_caption: Any
     _collector_trend_csv_series: Any
     _collector_trend_history_limit: Any

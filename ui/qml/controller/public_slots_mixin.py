@@ -61,6 +61,12 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._reset_service_access_state(message)
         self._append_log(message, RowColor.red)
 
+    def _resolve_source_address_operation_target_sa(self) -> int:
+        # Keep SA read/write on the same node where 0x10/0x27 is active.
+        if self._service_security_unlocked and self._service_access_target_sa is not None:
+            return int(self._service_access_target_sa) & 0xFF
+        return int(self._resolve_options_target_sa()) & 0xFF
+
     @Slot(int)
     def setSelectedServiceSessionIndex(self, index):
         try:
@@ -172,6 +178,16 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             self._append_log("Коллектор: сценарий включен.", RowColor.green)
         else:
             self._append_log("Коллектор: сценарий отключен.", RowColor.yellow)
+
+    @Slot(bool)
+    def setCollectorTrendEnabled(self, enabled):
+        value = bool(enabled)
+        if bool(self._collector_trend_enabled) == value:
+            return
+        self._collector_trend_enabled = value
+        self.collectorTrendEnabledChanged.emit()
+        if not value:
+            self._reset_collector_trend()
 
     @Slot(bool)
     def setAutoResetBeforeProgramming(self, enabled):
@@ -470,6 +486,14 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             self.infoMessage.emit("Протокол", "Некорректный Source Address. Допустимо 0..255 или 0x00..0xFF.")
             return
 
+        target_sa = self._resolve_source_address_operation_target_sa()
+        if (int(UdsIdentifiers.rx.src) & 0xFF) != target_sa:
+            UdsIdentifiers.set_src(target_sa)
+            self._append_log(
+                f"Source Address write target synchronized to node SA 0x{target_sa:02X}.",
+                RowColor.blue,
+            )
+
         self._set_source_address_operation("write")
         self._set_source_address_busy(True)
         if not self._bootloader.write_can_source_address(source_address):
@@ -489,6 +513,14 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         if self._programming_active:
             self.infoMessage.emit("Протокол", "Нельзя читать Source Address во время программирования.")
             return
+
+        target_sa = self._resolve_source_address_operation_target_sa()
+        if (int(UdsIdentifiers.rx.src) & 0xFF) != target_sa:
+            UdsIdentifiers.set_src(target_sa)
+            self._append_log(
+                f"Source Address read target synchronized to node SA 0x{target_sa:02X}.",
+                RowColor.blue,
+            )
 
         self._set_source_address_operation("read")
         self._set_source_address_busy(True)
@@ -1148,9 +1180,19 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._collector_node_order = []
         self._collector_poll_node_index = 0
         self._collector_poll_phase = 0
+        self._collector_pending_requests = {}
+        self._collector_last_request_monotonic = 0.0
         self._collector_nodes_view = []
         self.collectorNodesChanged.emit()
         self._reset_collector_trend()
+
+    @Slot()
+    def clearCollectorErrorLogs(self):
+        if len(self._collector_error_logs) == 0:
+            return
+        self._collector_error_logs = []
+        self._collector_diagnostics_rate_limit = {}
+        self.collectorDiagnosticsChanged.emit()
 
     @Slot("QVariant")
     def loadCollectorTrendCsv(self, path_or_urls):
