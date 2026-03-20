@@ -22,6 +22,15 @@ Rectangle {
     property real smoothSeriesAlpha: 0.22
     property int adaptiveRenderFactor: 3
     property int maxMarkerPoints: 1600
+    property string customXAxisTitle: ""
+    property string customYAxisTitle: ""
+    property int xMajorTicks: 5
+    property int yMajorTicks: 5
+    property bool resetViewportOnDataChange: false
+    property bool secondaryYAxisEnabled: false
+    property string secondaryYAxisTitle: ""
+    property real secondaryYAxisEmptyPeriod: NaN
+    property real secondaryYAxisFullPeriod: NaN
 
     // Compatibility properties.
     property real zoomX: 1.0
@@ -196,15 +205,46 @@ Rectangle {
     }
 
     function xAxisTitle() {
+        if (root.customXAxisTitle && root.customXAxisTitle.length > 0)
+            return root.customXAxisTitle
         return root.swapAxes ? "Уровень топлива, %" : "Температура, C"
     }
 
     function yAxisTitle() {
+        if (root.customYAxisTitle && root.customYAxisTitle.length > 0)
+            return root.customYAxisTitle
         return root.swapAxes ? "Температура, C" : "Уровень топлива, %"
     }
 
     function requestRepaint() {
         canvas.requestPaint()
+    }
+
+    function handleDataSourceChanged() {
+        if (root.resetViewportOnDataChange) {
+            root.manualViewport = false
+            root.viewportXMin = NaN
+            root.viewportXMax = NaN
+            root.viewportYMin = NaN
+            root.viewportYMax = NaN
+        }
+        root.requestRepaint()
+    }
+
+    function safeTickCount(value) {
+        var parsed = Math.floor(Number(value))
+        if (!isFinite(parsed) || parsed < 2)
+            return 2
+        return parsed
+    }
+
+    function secondaryLevelFromPeriod(periodValue) {
+        var emptyPeriod = Number(root.secondaryYAxisEmptyPeriod)
+        var fullPeriod = Number(root.secondaryYAxisFullPeriod)
+        var denominator = fullPeriod - emptyPeriod
+        if (!isFinite(emptyPeriod) || !isFinite(fullPeriod) || Math.abs(denominator) < 1e-12)
+            return NaN
+        return ((Number(periodValue) - emptyPeriod) * 100.0) / denominator
     }
 
     function hasDrawableViewport() {
@@ -308,15 +348,21 @@ Rectangle {
         root.requestRepaint()
     }
 
-    onPointsChanged: requestRepaint()
-    onSeriesChanged: requestRepaint()
-    onOverlayModeChanged: requestRepaint()
+    onPointsChanged: handleDataSourceChanged()
+    onSeriesChanged: handleDataSourceChanged()
+    onOverlayModeChanged: handleDataSourceChanged()
     onRangeStartChanged: requestRepaint()
     onRangeEndChanged: requestRepaint()
     onShowPointLabelsChanged: requestRepaint()
     onSwapAxesChanged: requestRepaint()
     onSmoothSeriesEnabledChanged: requestRepaint()
     onSmoothSeriesAlphaChanged: requestRepaint()
+    onXMajorTicksChanged: requestRepaint()
+    onYMajorTicksChanged: requestRepaint()
+    onSecondaryYAxisEnabledChanged: requestRepaint()
+    onSecondaryYAxisTitleChanged: requestRepaint()
+    onSecondaryYAxisEmptyPeriodChanged: requestRepaint()
+    onSecondaryYAxisFullPeriodChanged: requestRepaint()
 
     Canvas {
         id: canvas
@@ -340,15 +386,17 @@ Rectangle {
 
             ctx.strokeStyle = "#e2ebf5"
             ctx.lineWidth = 1
-            for (var gx = 0; gx <= 5; gx++) {
-                var xx = l + (pw / 5) * gx
+            var xTicks = root.safeTickCount(root.xMajorTicks)
+            var yTicks = root.safeTickCount(root.yMajorTicks)
+            for (var gx = 0; gx <= xTicks; gx++) {
+                var xx = l + (pw / xTicks) * gx
                 ctx.beginPath()
                 ctx.moveTo(xx, t)
                 ctx.lineTo(xx, t + ph)
                 ctx.stroke()
             }
-            for (var gy = 0; gy <= 5; gy++) {
-                var yy = t + (ph / 5) * gy
+            for (var gy = 0; gy <= yTicks; gy++) {
+                var yy = t + (ph / yTicks) * gy
                 ctx.beginPath()
                 ctx.moveTo(l, yy)
                 ctx.lineTo(l + pw, yy)
@@ -398,7 +446,7 @@ Rectangle {
                 return
 
             var l = 52
-            var r = 14
+            var r = root.secondaryYAxisEnabled ? 64 : 14
             var t = 8
             var b = 26
             var pw = w - l - r
@@ -624,18 +672,39 @@ Rectangle {
             ctx.fillStyle = "#51667d"
             ctx.textBaseline = "middle"
 
-            for (var xt = 0; xt <= 5; xt++) {
-                var xvTick = viewXMin + ((viewXMax - viewXMin) * xt) / 5
-                var xx = l + (pw * xt) / 5
+            var xTicks = root.safeTickCount(root.xMajorTicks)
+            var yTicks = root.safeTickCount(root.yMajorTicks)
+
+            for (var xt = 0; xt <= xTicks; xt++) {
+                var xvTick = viewXMin + ((viewXMax - viewXMin) * xt) / xTicks
+                var xx = l + (pw * xt) / xTicks
                 ctx.textAlign = "center"
                 ctx.fillText(xvTick.toFixed(1), xx, t + ph + 14)
             }
 
-            for (var yt = 0; yt <= 5; yt++) {
-                var yvTick = viewYMax - ((viewYMax - viewYMin) * yt) / 5
-                var yy = t + (ph * yt) / 5
+            for (var yt = 0; yt <= yTicks; yt++) {
+                var yvTick = viewYMax - ((viewYMax - viewYMin) * yt) / yTicks
+                var yy = t + (ph * yt) / yTicks
                 ctx.textAlign = "right"
                 ctx.fillText(yvTick.toFixed(1), l - 6, yy)
+            }
+
+            if (root.secondaryYAxisEnabled) {
+                ctx.textAlign = "left"
+                for (var yrt = 0; yrt <= yTicks; yrt++) {
+                    var yvRight = viewYMax - ((viewYMax - viewYMin) * yrt) / yTicks
+                    var yyRight = t + (ph * yrt) / yTicks
+                    var levelTick = root.secondaryLevelFromPeriod(yvRight)
+                    if (isFinite(levelTick))
+                        ctx.fillText(levelTick.toFixed(1), l + pw + 6, yyRight)
+                    else
+                        ctx.fillText("-", l + pw + 6, yyRight)
+                }
+                if (root.secondaryYAxisTitle && root.secondaryYAxisTitle.length > 0) {
+                    ctx.textBaseline = "alphabetic"
+                    ctx.fillText(root.secondaryYAxisTitle, l + pw + 6, t - 2)
+                    ctx.textBaseline = "middle"
+                }
             }
             ctx.restore()
 

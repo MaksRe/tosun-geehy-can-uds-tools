@@ -580,12 +580,18 @@ Card {
             if (!root.appController)
                 return
 
-            var files = selectedFiles
-            if (!files || files.length === 0) {
-                if (selectedFile)
-                    files = [selectedFile]
-                else
-                    files = []
+            // Преобразует URL/variant из FileDialog в строковый путь для Python-слота.
+            function asPathText(value) {
+                if (value && value.toString)
+                    return value.toString()
+                return String(value)
+            }
+            var files = []
+            if (selectedFiles && selectedFiles.length > 0) {
+                for (var i = 0; i < selectedFiles.length; i += 1)
+                    files.push(asPathText(selectedFiles[i]))
+            } else if (selectedFile) {
+                files = [asPathText(selectedFile)]
             }
             root.appController.loadCollectorTrendCsv(files)
         }

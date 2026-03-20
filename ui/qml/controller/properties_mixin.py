@@ -40,6 +40,7 @@ class AppControllerPropertiesMixin(AppControllerContract):
     calibrationVerificationChanged = Signal()
     calibrationBackupChanged = Signal()
     calibrationNodeSelectionChanged = Signal()
+    calibrationTempCompChanged = Signal()
     collectorEnabledChanged = Signal()
     collectorNodesChanged = Signal()
     collectorOutputDirectoryChanged = Signal()
@@ -475,6 +476,22 @@ class AppControllerPropertiesMixin(AppControllerContract):
     def calibrationLevel100Text(self):
         return str(int(self._calibration_level_100))
 
+    @Property(int, notify=calibrationValuesChanged)
+    def calibrationLevel0Value(self):
+        return int(self._calibration_level_0)
+
+    @Property(int, notify=calibrationValuesChanged)
+    def calibrationLevel100Value(self):
+        return int(self._calibration_level_100)
+
+    @Property(bool, notify=calibrationValuesChanged)
+    def calibrationLevelBoundsKnown(self):
+        return (
+            bool(self._calibration_level_0_known)
+            and bool(self._calibration_level_100_known)
+            and int(self._calibration_level_100) > int(self._calibration_level_0)
+        )
+
     @Property(int, notify=calibrationPollingIntervalChanged)
     def calibrationPollingIntervalMs(self):
         return int(self._calibration_poll_interval_ms)
@@ -562,3 +579,210 @@ class AppControllerPropertiesMixin(AppControllerContract):
         if not self._calibration_backup_available:
             return "-"
         return str(int(self._calibration_backup_level_100))
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompStatusText(self):
+        return str(self._calibration_temp_comp_status)
+
+    def _calibration_temp_comp_has_enough_samples(self) -> bool:
+        """Цель функции в проверке достаточности выборки, затем она определяет готовность регрессии по температуре."""
+        return len(self._calibration_temp_comp_samples) >= 2
+
+    def _calibration_temp_comp_has_level_calibration(self) -> bool:
+        """Цель функции в проверке доступности калибровок 0% и 100%, затем она определяет возможность расчета метрик в процентах."""
+        return (
+            bool(self._calibration_level_0_known)
+            and bool(self._calibration_level_100_known)
+            and int(self._calibration_level_100) > int(self._calibration_level_0)
+        )
+
+    def _calibration_temp_comp_period_range(self) -> tuple[float, float] | None:
+        """Цель функции в сборе диапазона периода из офлайн-CSV, затем она возвращает min/max для карточки метрик."""
+        samples = list(self._calibration_temp_comp_samples)
+        if len(samples) <= 0:
+            return None
+        periods = [float(item.get("period", 0.0)) for item in samples]
+        return min(periods), max(periods)
+
+    def _calibration_temp_comp_temperature_range(self) -> tuple[float, float] | None:
+        """Цель функции в сборе диапазона температуры из офлайн-CSV, затем она возвращает min/max для UI."""
+        samples = list(self._calibration_temp_comp_samples)
+        if len(samples) <= 0:
+            return None
+        temperatures = [float(item.get("temperature_c", 0.0)) for item in samples]
+        return min(temperatures), max(temperatures)
+
+    def _calibration_temp_comp_level_range(self) -> tuple[float, float] | None:
+        """Цель функции в расчете диапазона уровня по периоду, затем она возвращает min/max в процентах."""
+        if not self._calibration_temp_comp_has_level_calibration():
+            return None
+        samples = list(self._calibration_temp_comp_samples)
+        if len(samples) <= 0:
+            return None
+
+        level_values: list[float] = []
+        for sample in samples:
+            converted = self._period_to_level_percent(float(sample.get("period", 0.0)))
+            if converted is None:
+                return None
+            level_values.append(float(converted))
+        if len(level_values) <= 0:
+            return None
+        return min(level_values), max(level_values)
+
+    @Property(int, notify=calibrationTempCompChanged)
+    def calibrationTempCompSampleCount(self):
+        return len(self._calibration_temp_comp_samples)
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompPeriodRangeText(self):
+        value = self._calibration_temp_comp_period_range()
+        if value is None:
+            return "нет данных"
+        low_value, high_value = value
+        return f"{float(low_value):.1f}..{float(high_value):.1f} count"
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompTemperatureRangeText(self):
+        value = self._calibration_temp_comp_temperature_range()
+        if value is None:
+            return "нет данных"
+        low_value, high_value = value
+        return f"{float(low_value):.1f}..{float(high_value):.1f} °C"
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompLevelRangeText(self):
+        if len(self._calibration_temp_comp_samples) <= 0:
+            return "нет данных"
+        value = self._calibration_temp_comp_level_range()
+        if value is None:
+            return "нужны 0% и 100%"
+        low_value, high_value = value
+        return f"{float(low_value):.1f}..{float(high_value):.1f} %"
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompCurrentPeriodText(self):
+        value = self._calibration_temp_comp_last_period
+        if value is None:
+            return "нет данных"
+        return str(int(value))
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompCurrentTemperatureText(self):
+        value = self._calibration_temp_comp_last_temperature_c
+        if value is None:
+            return "нет данных"
+        return f"{float(value):.1f} °C"
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompCurrentK1Text(self):
+        value = self._calibration_temp_comp_k1_x100_current
+        if value is None:
+            return "не считан (DID 0x001B)"
+        return str(int(value))
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompBaseK1Text(self):
+        value = self._calibration_temp_comp_k1_x100_base
+        if value is None:
+            if len(self._calibration_temp_comp_samples) <= 0:
+                return "нет данных"
+            return "0 (оффлайн)"
+        if self._calibration_temp_comp_k1_x100_current is None:
+            return f"{int(value)} (оффлайн)"
+        return str(int(value))
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompRecommendedK1Text(self):
+        value = self._calibration_temp_comp_k1_x100_recommended
+        if value is None:
+            if not self._calibration_temp_comp_has_enough_samples():
+                return "нужно >=2 точки"
+            return "не рассчитан"
+        return str(int(value))
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompDeltaK1Text(self):
+        value = self._calibration_temp_comp_k1_x100_delta
+        if value is None:
+            if not self._calibration_temp_comp_has_enough_samples():
+                return "нужно >=2 точки"
+            return "не рассчитан"
+        return f"{int(value):+d}"
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompNextK1Text(self):
+        value = self._calibration_temp_comp_k1_x100_next
+        if value is None:
+            if not self._calibration_temp_comp_has_enough_samples():
+                return "нужно >=2 точки"
+            return "не рассчитан"
+        return str(int(value))
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompSlopeBeforePeriodText(self):
+        value = self._calibration_temp_comp_period_slope_before
+        if value is None:
+            if not self._calibration_temp_comp_has_enough_samples():
+                return "нужно >=2 точки"
+            return "не рассчитан"
+        return f"{float(value):.4f} count/°C"
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompSlopeAfterPeriodText(self):
+        value = self._calibration_temp_comp_period_slope_after
+        if value is None:
+            if not self._calibration_temp_comp_has_enough_samples():
+                return "нужно >=2 точки"
+            return "не рассчитан"
+        return f"{float(value):.4f} count/°C"
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompSlopeBeforeLevelText(self):
+        value = self._calibration_temp_comp_level_slope_before
+        if value is None:
+            if not self._calibration_temp_comp_has_level_calibration():
+                return "нужны 0% и 100%"
+            if not self._calibration_temp_comp_has_enough_samples():
+                return "нужно >=2 точки"
+            return "не рассчитан"
+        return f"{float(value):.4f} %/°C"
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompSlopeAfterLevelText(self):
+        value = self._calibration_temp_comp_level_slope_after
+        if value is None:
+            if not self._calibration_temp_comp_has_level_calibration():
+                return "нужны 0% и 100%"
+            if not self._calibration_temp_comp_has_enough_samples():
+                return "нужно >=2 точки"
+            return "не рассчитан"
+        return f"{float(value):.4f} %/°C"
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompReductionPeriodText(self):
+        value = self._calibration_temp_comp_period_reduction_percent
+        if value is None:
+            if not self._calibration_temp_comp_has_enough_samples():
+                return "нужно >=2 точки"
+            return "не рассчитан"
+        return f"{float(value):.2f} %"
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompReductionLevelText(self):
+        value = self._calibration_temp_comp_level_reduction_percent
+        if value is None:
+            if not self._calibration_temp_comp_has_level_calibration():
+                return "нужны 0% и 100%"
+            if not self._calibration_temp_comp_has_enough_samples():
+                return "нужно >=2 точки"
+            return "не рассчитан"
+        return f"{float(value):.2f} %"
+
+    @Property(bool, notify=calibrationTempCompChanged)
+    def calibrationTempCompCanApplyNext(self):
+        return self._calibration_temp_comp_k1_x100_next is not None
+
+    @Property("QVariantList", notify=calibrationTempCompChanged)
+    def calibrationTempCompTrendSeries(self):
+        return self._calibration_temp_comp_chart_series

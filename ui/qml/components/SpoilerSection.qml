@@ -91,6 +91,10 @@ ColumnLayout {
     ColumnLayout {
         id: contentLayout
         Layout.fillWidth: true
+        Layout.fillHeight: root.expanded
+        Layout.minimumHeight: 0
+        Layout.preferredHeight: root.expanded ? -1 : 0
+        Layout.maximumHeight: root.expanded ? 16777215 : 0
         spacing: 0
         visible: root.expanded
         opacity: root.expanded ? 1 : 0

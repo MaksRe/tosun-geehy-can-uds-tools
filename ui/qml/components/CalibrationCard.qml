@@ -1,12 +1,15 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
+import QtQuick.Dialogs
 import "."
 
-Card {
+Item {
     id: root
 
     property var appController
+    property color cardColor: "#ffffff"
+    property color cardBorder: "#d6e2ef"
     property color textMain: "#1f2d3d"
     property color textSoft: "#607084"
     property color inputBg: "#f7fbff"
@@ -28,27 +31,25 @@ Card {
 
     Layout.fillWidth: true
     implicitHeight: contentColumn.implicitHeight + (root.contentPadding * 2)
+    clip: true
 
     ColumnLayout {
         id: contentColumn
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
+        anchors.bottom: parent.bottom
         anchors.leftMargin: root.contentPadding
         anchors.rightMargin: root.contentPadding
         anchors.topMargin: root.contentPadding
+        anchors.bottomMargin: root.contentPadding
         spacing: 8
-
-        Text {
-            text: "Калибровка датчика"
-            color: root.textMain
-            font.pixelSize: 18
-            font.bold: true
-            font.family: "Bahnschrift"
-        }
 
         Rectangle {
             Layout.fillWidth: true
+            Layout.fillHeight: false
+            Layout.preferredHeight: implicitHeight
+            Layout.maximumHeight: implicitHeight
             radius: 10
             color: "#f8fbff"
             border.color: "#d6e2ef"
@@ -157,6 +158,9 @@ Card {
 
         Rectangle {
             Layout.fillWidth: true
+            Layout.fillHeight: false
+            Layout.preferredHeight: implicitHeight
+            Layout.maximumHeight: implicitHeight
             radius: 10
             color: "#f4f8fd"
             border.color: "#d6e2ef"
@@ -237,7 +241,7 @@ Card {
                 FancyButton {
                     Layout.preferredWidth: 90
                     Layout.preferredHeight: 30
-                    text: "→ 0%"
+                    text: "-> 0%"
                     tone: "#0284c7"
                     toneHover: "#0369a1"
                     tonePressed: "#075985"
@@ -248,7 +252,7 @@ Card {
                 FancyButton {
                     Layout.preferredWidth: 96
                     Layout.preferredHeight: 30
-                    text: "→ 100%"
+                    text: "-> 100%"
                     tone: "#0284c7"
                     toneHover: "#0369a1"
                     tonePressed: "#075985"
@@ -260,10 +264,15 @@ Card {
 
         RowLayout {
             Layout.fillWidth: true
+            Layout.fillHeight: false
+            Layout.preferredHeight: Math.max(level0Layout.implicitHeight, level100Layout.implicitHeight) + 14
+            Layout.maximumHeight: Layout.preferredHeight
             spacing: 8
 
             Rectangle {
                 Layout.fillWidth: true
+                Layout.preferredHeight: implicitHeight
+                Layout.maximumHeight: implicitHeight
                 radius: 10
                 color: "#f8fbff"
                 border.color: "#d6e2ef"
@@ -366,6 +375,8 @@ Card {
 
             Rectangle {
                 Layout.fillWidth: true
+                Layout.preferredHeight: implicitHeight
+                Layout.maximumHeight: implicitHeight
                 radius: 10
                 color: "#f8fbff"
                 border.color: "#d6e2ef"
@@ -469,6 +480,9 @@ Card {
 
         Rectangle {
             Layout.fillWidth: true
+            Layout.fillHeight: false
+            Layout.preferredHeight: implicitHeight
+            Layout.maximumHeight: implicitHeight
             radius: 10
             color: "#f8fbff"
             border.color: "#d6e2ef"
@@ -514,6 +528,375 @@ Card {
                 }
             }
         }
+
+        SpoilerSection {
+            id: tempCompSpoiler
+            Layout.fillWidth: true
+            Layout.fillHeight: expanded
+            Layout.minimumHeight: 44
+            title: "Температурная компенсация K1"
+            hintText: "Офлайн-анализ CSV из Коллектора (без онлайн-дублирования)"
+            cardColor: root.cardColor
+            cardBorder: root.cardBorder
+            textMain: root.textMain
+            textSoft: root.textSoft
+            accentColor: "#0284c7"
+            expanded: false
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                radius: 10
+                color: "#f8fbff"
+                border.color: "#d6e2ef"
+
+                ColumnLayout {
+                    id: tempCompLayout
+                    anchors.fill: parent
+                    anchors.margins: 7
+                    spacing: 6
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+
+                        Rectangle {
+                            radius: 7
+                            color: "#ecfdf5"
+                            border.color: "#bfe8d2"
+                            implicitHeight: 22
+                            implicitWidth: sampleCounterText.implicitWidth + 12
+
+                            Text {
+                                id: sampleCounterText
+                                anchors.centerIn: parent
+                                text: root.appController ? ("Точек: " + root.appController.calibrationTempCompSampleCount) : "Точек: 0"
+                                color: "#166534"
+                                font.pixelSize: 10
+                                font.bold: true
+                                font.family: "Bahnschrift"
+                            }
+                        }
+
+                        Text {
+                            Layout.preferredWidth: 170
+                            text: "Узел: " + (root.appController ? root.appController.calibrationSelectedNodeText : "Авто")
+                            color: root.textSoft
+                            font.pixelSize: 11
+                            font.family: "Bahnschrift"
+                            elide: Text.ElideRight
+                        }
+
+                        Item { Layout.preferredWidth: 8 }
+
+                        Text {
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 260
+                            text: root.appController ? root.appController.calibrationTempCompStatusText : "Ожидание CSV"
+                            color: root.textSoft
+                            font.pixelSize: 11
+                            font.family: "Bahnschrift"
+                            wrapMode: Text.WordWrap
+                            maximumLineCount: 2
+                            elide: Text.ElideRight
+                            horizontalAlignment: Text.AlignRight
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+
+                        FancyButton {
+                            Layout.preferredWidth: 128
+                            Layout.preferredHeight: 30
+                            text: "Загрузить CSV"
+                            tone: "#0284c7"
+                            toneHover: "#0369a1"
+                            tonePressed: "#075985"
+                            enabled: root.appController !== null
+                            onClicked: tempCompCsvFileDialog.open()
+                        }
+
+                        FancyButton {
+                            Layout.preferredWidth: 112
+                            Layout.preferredHeight: 30
+                            text: "Очистить"
+                            tone: "#475569"
+                            toneHover: "#334155"
+                            tonePressed: "#1e293b"
+                            enabled: root.appController !== null
+                            onClicked: if (root.appController) root.appController.clearCalibrationTempCompSamples()
+                        }
+
+                        FancyButton {
+                            Layout.preferredWidth: 110
+                            Layout.preferredHeight: 30
+                            text: "Прочитать K1"
+                            tone: "#0f766e"
+                            toneHover: "#115e59"
+                            tonePressed: "#134e4a"
+                            enabled: root.appController !== null
+                            onClicked: if (root.appController) root.appController.readCalibrationTempCompK1()
+                        }
+
+                        FancyButton {
+                            Layout.preferredWidth: 146
+                            Layout.preferredHeight: 30
+                            text: "Применить next K1"
+                            tone: "#16a34a"
+                            toneHover: "#15803d"
+                            tonePressed: "#166534"
+                            enabled: root.appController && root.appController.calibrationTempCompCanApplyNext
+                            onClicked: if (root.appController) root.appController.applyCalibrationTempCompNextK1()
+                        }
+
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+
+                        FancyTextField {
+                            id: tempCompK1Field
+                            Layout.preferredWidth: 200
+                            Layout.preferredHeight: 30
+                            placeholderText: "K1 (signed dec / 0xHEX)"
+                            textColor: root.textMain
+                            bgColor: root.inputBg
+                            borderColor: root.inputBorder
+                            focusBorderColor: root.inputFocus
+                            onAccepted: if (root.appController) root.appController.writeCalibrationTempCompK1(text)
+                        }
+
+                        FancyButton {
+                            Layout.preferredWidth: 132
+                            Layout.preferredHeight: 30
+                            text: "Записать K1"
+                            tone: "#0284c7"
+                            toneHover: "#0369a1"
+                            tonePressed: "#075985"
+                            enabled: root.appController !== null
+                            onClicked: if (root.appController) root.appController.writeCalibrationTempCompK1(tempCompK1Field.text)
+                        }
+
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    GridLayout {
+                        Layout.fillWidth: true
+                        columns: 3
+                        rowSpacing: 6
+                        columnSpacing: 8
+
+                        LabelValue {
+                            Layout.fillWidth: true
+                            labelText: "Диапазон периода (CSV)"
+                            valueText: root.appController ? root.appController.calibrationTempCompPeriodRangeText : "-"
+                            labelColor: root.textSoft
+                            valueColor: root.textMain
+                            fontFamily: "Bahnschrift"
+                        }
+
+                        LabelValue {
+                            Layout.fillWidth: true
+                            labelText: "Диапазон температуры (CSV)"
+                            valueText: root.appController ? root.appController.calibrationTempCompTemperatureRangeText : "-"
+                            labelColor: root.textSoft
+                            valueColor: root.textMain
+                            fontFamily: "Bahnschrift"
+                        }
+
+                        LabelValue {
+                            Layout.fillWidth: true
+                            labelText: "Диапазон уровня (CSV)"
+                            valueText: root.appController ? root.appController.calibrationTempCompLevelRangeText : "-"
+                            labelColor: root.textSoft
+                            valueColor: root.textMain
+                            fontFamily: "Bahnschrift"
+                        }
+
+                        LabelValue {
+                            Layout.fillWidth: true
+                            labelText: "Рекомендованный K1 (CSV)"
+                            valueText: root.appController ? root.appController.calibrationTempCompRecommendedK1Text : "-"
+                            labelColor: root.textSoft
+                            valueColor: "#0f766e"
+                            fontFamily: "Bahnschrift"
+                        }
+
+                        LabelValue {
+                            Layout.fillWidth: true
+                            labelText: "Поправка dK1 (к базовому)"
+                            valueText: root.appController ? root.appController.calibrationTempCompDeltaK1Text : "-"
+                            labelColor: root.textSoft
+                            valueColor: root.textMain
+                            fontFamily: "Bahnschrift"
+                        }
+
+                        LabelValue {
+                            Layout.fillWidth: true
+                            labelText: "Итоговый K1"
+                            valueText: root.appController ? root.appController.calibrationTempCompNextK1Text : "-"
+                            labelColor: root.textSoft
+                            valueColor: "#166534"
+                            fontFamily: "Bahnschrift"
+                        }
+
+                        LabelValue {
+                            Layout.fillWidth: true
+                            labelText: "Дрейф периода до"
+                            valueText: root.appController ? root.appController.calibrationTempCompSlopeBeforePeriodText : "-"
+                            labelColor: root.textSoft
+                            valueColor: root.textMain
+                            fontFamily: "Bahnschrift"
+                        }
+
+                        LabelValue {
+                            Layout.fillWidth: true
+                            labelText: "Дрейф периода после рекоменд."
+                            valueText: root.appController ? root.appController.calibrationTempCompSlopeAfterPeriodText : "-"
+                            labelColor: root.textSoft
+                            valueColor: root.textMain
+                            fontFamily: "Bahnschrift"
+                        }
+
+                        LabelValue {
+                            Layout.fillWidth: true
+                            labelText: "Дрейф уровня до"
+                            valueText: root.appController ? root.appController.calibrationTempCompSlopeBeforeLevelText : "-"
+                            labelColor: root.textSoft
+                            valueColor: root.textMain
+                            fontFamily: "Bahnschrift"
+                        }
+
+                        LabelValue {
+                            Layout.fillWidth: true
+                            labelText: "Дрейф уровня после рекоменд."
+                            valueText: root.appController ? root.appController.calibrationTempCompSlopeAfterLevelText : "-"
+                            labelColor: root.textSoft
+                            valueColor: root.textMain
+                            fontFamily: "Bahnschrift"
+                        }
+
+                        LabelValue {
+                            Layout.fillWidth: true
+                            labelText: "Снижение дрейфа периода"
+                            valueText: root.appController ? root.appController.calibrationTempCompReductionPeriodText : "-"
+                            labelColor: root.textSoft
+                            valueColor: "#166534"
+                            fontFamily: "Bahnschrift"
+                        }
+
+                        LabelValue {
+                            Layout.fillWidth: true
+                            labelText: "Снижение дрейфа уровня"
+                            valueText: root.appController ? root.appController.calibrationTempCompReductionLevelText : "-"
+                            labelColor: root.textSoft
+                            valueColor: "#166534"
+                            fontFamily: "Bahnschrift"
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+
+                        Repeater {
+                            model: root.appController ? root.appController.calibrationTempCompTrendSeries : []
+
+                            RowLayout {
+                                spacing: 5
+
+                                Rectangle {
+                                    width: 10
+                                    height: 10
+                                    radius: 5
+                                    color: modelData && modelData.color ? modelData.color : "#64748b"
+                                    border.color: "#cbd5e1"
+                                }
+
+                                Text {
+                                    text: modelData && modelData.node ? modelData.node : "-"
+                                    color: root.textSoft
+                                    font.pixelSize: 11
+                                    font.family: "Bahnschrift"
+                                }
+                            }
+                        }
+
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    TrendCanvas {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.minimumHeight: 80
+                        overlayMode: true
+                        resetViewportOnDataChange: true
+                        xMajorTicks: 12
+                        yMajorTicks: 12
+                        adaptiveRenderFactor: 2
+                        secondaryYAxisEnabled: root.appController ? root.appController.calibrationLevelBoundsKnown : false
+                        secondaryYAxisTitle: "Уровень, %"
+                        secondaryYAxisEmptyPeriod: root.appController ? root.appController.calibrationLevel0Value : NaN
+                        secondaryYAxisFullPeriod: root.appController ? root.appController.calibrationLevel100Value : NaN
+                        series: root.appController ? root.appController.calibrationTempCompTrendSeries : []
+                        emptyText: "Загрузите CSV из Коллектора для построения графика."
+                        customXAxisTitle: "Температура, °C"
+                        customYAxisTitle: "Период, count"
+                        showPointLabels: false
+                        smoothSeriesEnabled: false
+                        smoothSeriesAlpha: 0.2
+                        panelBg: "#ffffff"
+                        panelBorder: "#d6e2ef"
+                    }
+                }
+            }
+
+            FileDialog {
+                id: tempCompCsvFileDialog
+                title: "Выберите CSV файл(ы) Коллектора"
+                fileMode: FileDialog.OpenFiles
+                nameFilters: ["CSV файлы (*.csv)", "Все файлы (*)"]
+
+                onAccepted: {
+                    if (!root.appController) {
+                        return
+                    }
+                    // Преобразует URL/variant из FileDialog в строковый путь для Python-слота.
+                    function asPathText(value) {
+                        if (value && value.toString) {
+                            return value.toString()
+                        }
+                        return String(value)
+                    }
+                    var files = []
+                    if (selectedFiles && selectedFiles.length > 0) {
+                        for (var i = 0; i < selectedFiles.length; i += 1) {
+                            files.push(asPathText(selectedFiles[i]))
+                        }
+                    } else if (selectedFile) {
+                        files = [asPathText(selectedFile)]
+                    } else if (currentFile) {
+                        files = [asPathText(currentFile)]
+                    }
+                    root.appController.loadCalibrationTempCompCsv(files)
+                }
+            }
+        }
+
+        Item {
+            Layout.fillWidth: true
+            Layout.fillHeight: !tempCompSpoiler.expanded
+            Layout.minimumHeight: 0
+            Layout.preferredHeight: 0
+            Layout.maximumHeight: tempCompSpoiler.expanded ? 0 : 16777215
+            opacity: 0
+            enabled: false
+        }
     }
 
     Connections {
@@ -533,11 +916,23 @@ Card {
                 nodeSelector.currentIndex = root.appController.selectedCalibrationNodeIndex
             }
         }
+
+        function onCalibrationTempCompChanged() {
+            if (!root.appController) {
+                return
+            }
+            if (!tempCompK1Field.activeFocus) {
+                var currentK1 = root.appController.calibrationTempCompCurrentK1Text
+                tempCompK1Field.text = (currentK1 && currentK1 !== "-") ? currentK1 : ""
+            }
+        }
     }
 
     Component.onCompleted: {
         if (root.appController) {
             nodeSelector.currentIndex = root.appController.selectedCalibrationNodeIndex
+            var currentK1 = root.appController.calibrationTempCompCurrentK1Text
+            tempCompK1Field.text = (currentK1 && currentK1 !== "-") ? currentK1 : ""
         }
     }
 }

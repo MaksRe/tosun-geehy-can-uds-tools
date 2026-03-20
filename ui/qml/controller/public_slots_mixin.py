@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime
 import logging
@@ -227,6 +227,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot(int)
     def setSelectedCalibrationNodeIndex(self, index):
+        """Цель функции в выборе целевого узла калибровки, затем она переключает SA и сбрасывает анализ K1 для нового узла."""
         try:
             parsed_index = int(index)
         except (TypeError, ValueError):
@@ -241,6 +242,34 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._selected_calibration_node_index = parsed_index
         target_value = self._calibration_node_values[parsed_index]
         self._calibration_target_node_sa = None if target_value is None else int(target_value) & 0xFF
+        applied_sa = self._select_calibration_temp_comp_cached_node(
+            selected_sa=self._calibration_target_node_sa,
+            clear_coefficients=True,
+        )
+        if applied_sa is None:
+            self._reset_calibration_temp_comp_state(
+                clear_samples=True,
+                clear_coefficients=True,
+                clear_cached_nodes=False,
+            )
+            if (
+                self._calibration_target_node_sa is not None
+                and len(self._calibration_temp_comp_samples_by_node) > 0
+            ):
+                available_nodes = ", ".join(
+                    f"0x{int(value) & 0xFF:02X}"
+                    for value in sorted(self._calibration_temp_comp_samples_by_node.keys())
+                )
+                self._calibration_temp_comp_status = (
+                    f"Для узла 0x{int(self._calibration_target_node_sa) & 0xFF:02X} нет офлайн-данных. "
+                    f"Доступные узлы: {available_nodes}."
+                )
+                self.calibrationTempCompChanged.emit()
+        else:
+            self._calibration_temp_comp_status = (
+                f"{self._calibration_temp_comp_status} Активный узел анализа: 0x{int(applied_sa) & 0xFF:02X}."
+            )
+            self.calibrationTempCompChanged.emit()
         self.calibrationNodeSelectionChanged.emit()
 
         if self._calibration_target_node_sa is None:
@@ -250,6 +279,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot()
     def toggleCalibration(self):
+        """Цель функции в удобном запуске/остановке калибровки, затем она переключает сценарий одной кнопкой."""
         if self._calibration_active:
             self.stopCalibration()
             return
@@ -257,6 +287,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot()
     def startCalibration(self):
+        """Цель функции в запуске сессии калибровки, затем она поднимает Extended Session и автоцепочку Security Access."""
         if self._calibration_active or self._calibration_waiting_session:
             return
 
@@ -286,6 +317,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
                 )
 
         self._calibration_active = True
+        self._reset_calibration_temp_comp_state(clear_samples=False, clear_coefficients=False)
         self.calibrationStateChanged.emit()
         self._reset_calibration_wizard_state()
         self._reset_calibration_sequence_state()
@@ -298,6 +330,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot()
     def stopCalibration(self):
+        """Цель функции в корректном завершении калибровки, затем она возвращает МК в default-сессию."""
         if not self._calibration_active and not self._calibration_waiting_session:
             return
 
@@ -319,6 +352,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot()
     def readCalibrationCurrentLevel(self):
+        """Цель функции в ручном чтении периода, затем она отправляет DID 0x0014 в выбранный узел."""
         if not self._can.is_connect or not self._can.is_trace:
             return
         self._configure_calibration_uds_services()
@@ -326,6 +360,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot()
     def readCalibrationLevel0(self):
+        """Цель функции в чтении калибровки 0%, затем она отправляет DID 0x0012 через текущий UDS маршрут."""
         if not self._can.is_connect:
             self.infoMessage.emit("Калибровка", "Сначала подключите CAN-адаптер.")
             return
@@ -338,6 +373,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot()
     def readCalibrationLevel100(self):
+        """Цель функции в чтении калибровки 100%, затем она отправляет DID 0x0013 через текущий UDS маршрут."""
         if not self._can.is_connect:
             self.infoMessage.emit("Калибровка", "Сначала подключите CAN-адаптер.")
             return
@@ -348,8 +384,117 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._calibration_read_service.read_data_by_identifier(self._build_calibration_tx_identifier(), UdsData.full_fuel_tank)
         self._append_log("Калибровка: чтение уровня 100%.", RowColor.blue)
 
+    @Slot()
+    def clearCalibrationTempCompSamples(self):
+        """Цель функции в очистке анализируемой выборки, затем она удаляет собранные точки без сброса текущего K1."""
+        self._reset_calibration_temp_comp_state(
+            clear_samples=True,
+            clear_coefficients=False,
+            clear_cached_nodes=True,
+        )
+        self._append_log("Калибровка: точки температурной компенсации очищены.", RowColor.blue)
+
+    @Slot()
+    def readCalibrationTempCompK1(self):
+        """Цель функции в чтении коэффициента компенсации, затем она отправляет запрос DID 0x001B."""
+        if not self._can.is_connect:
+            self.infoMessage.emit("Калибровка", "Сначала подключите CAN-адаптер.")
+            return
+        if not self._can.is_trace:
+            self.infoMessage.emit("Калибровка", "Сначала включите трассировку CAN.")
+            return
+
+        if not self._request_calibration_temp_comp_k1_read():
+            self.infoMessage.emit("Калибровка", "Не удалось отправить чтение DID 0x001B.")
+            return
+
+        self._append_log("Калибровка: чтение коэффициента K1 (DID 0x001B).", RowColor.blue)
+
+    @Slot("QVariant")
+    def loadCalibrationTempCompCsv(self, path_or_urls):
+        """Цель функции в офлайн-анализе температурной компенсации, затем она загружает CSV логи коллектора и считает коэффициенты."""
+        raw_items = self._expand_qvariant_items(path_or_urls)
+
+        paths: list[Path] = []
+        for item in raw_items:
+            resolved = self._to_local_path(item)
+            if not resolved:
+                continue
+            try:
+                paths.append(Path(resolved).expanduser().resolve())
+            except Exception:
+                paths.append(Path(resolved))
+
+        self._append_log(
+            f"Калибровка: получены пути CSV для анализа K1: {len(paths)}.",
+            RowColor.blue,
+        )
+        if len(paths) == 0:
+            self.infoMessage.emit("Калибровка", "CSV файл не выбран.")
+            return
+
+        loaded_files, loaded_points = self._load_calibration_temp_comp_csv_files(paths)
+        if loaded_files <= 0:
+            status_text = str(self._calibration_temp_comp_status or "").strip()
+            if not status_text:
+                status_text = "Не удалось загрузить данные температурной компенсации из выбранных CSV."
+            self.infoMessage.emit("Калибровка", status_text)
+            return
+
+        self._append_log(
+            f"Калибровка: загружено CSV файлов для анализа K1: {loaded_files}, точек: {loaded_points}.",
+            RowColor.green,
+        )
+        self.infoMessage.emit(
+            "Калибровка",
+            f"Загружено CSV файлов: {loaded_files}, точек: {loaded_points}. Анализ пересчитан.",
+        )
+
+    @Slot(str)
+    def writeCalibrationTempCompK1(self, value_text):
+        """Цель функции в записи нового K1, затем она валидирует ввод и отправляет UDS 0x2E по DID 0x001B."""
+        if not self._ensure_calibration_write_ready("запись коэффициента K1"):
+            return
+
+        if len(self._calibration_write_verify_pending) > 0:
+            self.infoMessage.emit(
+                "Калибровка",
+                "Дождитесь завершения текущей автопроверки DID перед записью нового K1.",
+            )
+            return
+
+        try:
+            value = self._resolve_calibration_k1_write_value(value_text, self._calibration_temp_comp_k1_x100_current)
+        except ValueError as exc:
+            self.infoMessage.emit("Калибровка", str(exc))
+            return
+
+        write_payload = int(value) & 0xFFFF
+        if self._calibration_write_service.write_data(
+            UdsData.fuel_temp_comp_k1_x100,
+            write_payload,
+            tx_identifier=self._build_calibration_tx_identifier(),
+        ):
+            self._calibration_write_verify_pending[int(UdsData.fuel_temp_comp_k1_x100.pid)] = int(value)
+            self.calibrationVerificationChanged.emit()
+            self._append_log(f"Калибровка: запись коэффициента K1 = {int(value)}.", RowColor.blue)
+            return
+
+        self.infoMessage.emit("Калибровка", "Не удалось отправить запись DID 0x001B.")
+
+    @Slot()
+    def applyCalibrationTempCompNextK1(self):
+        """Цель функции в быстром применении рекомендации, затем она записывает рассчитанный next K1 в DID 0x001B."""
+        next_k1 = self._calibration_temp_comp_k1_x100_next
+        if next_k1 is None:
+            self.infoMessage.emit("Калибровка", "Сначала соберите данные и дождитесь расчета next K1.")
+            return
+
+        self.writeCalibrationTempCompK1(str(int(next_k1)))
+
     @Slot(str)
     def saveCalibrationLevel0(self, value_text):
+        """Цель функции в записи эталона 0%, затем она отправляет DID 0x0012 и включает автопроверку результата."""
         if not self._ensure_calibration_write_ready("запись уровня 0%"):
             return
         if not self._can.is_connect:
@@ -375,6 +520,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot(str)
     def saveCalibrationLevel100(self, value_text):
+        """Цель функции в записи эталона 100%, затем она отправляет DID 0x0013 и включает автопроверку результата."""
         if not self._ensure_calibration_write_ready("запись уровня 100%"):
             return
         if not self._can.is_connect:
@@ -400,6 +546,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot()
     def captureStableCalibrationValue(self):
+        """Цель функции в фиксации усредненного периода, затем она логирует стабильное значение из скользящего окна."""
         captured, sample_count = self._recompute_calibration_stable_capture()
         if captured is None:
             self.infoMessage.emit("Калибровка", "Недостаточно данных для стабильного захвата. Подождите обновление уровня.")
@@ -409,6 +556,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot()
     def createCalibrationBackup(self):
+        """Цель функции в создании резервной копии калибровки, затем она считывает текущие значения 0% и 100%."""
         if not self._can.is_connect:
             self.infoMessage.emit("Калибровка", "Сначала подключите CAN-адаптер.")
             return
@@ -421,6 +569,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot()
     def restoreCalibrationBackup(self):
+        """Цель функции в откате к сохраненной калибровке, затем она поочередно записывает резервные DID 0x0012/0x0013."""
         if not self._calibration_backup_available:
             self.infoMessage.emit("Калибровка", "Резервная копия еще не создана.")
             return
@@ -443,6 +592,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot(str)
     def setCalibrationPollingIntervalMs(self, interval_value):
+        """Цель функции в настройке частоты опроса, затем она применяет новый интервал таймера калибровки."""
         raw_text = str(interval_value).strip()
         try:
             parsed = int(raw_text, 10)
@@ -464,6 +614,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot(str)
     def setSourceAddressText(self, text):
+        """Цель функции в реактивном обновлении поля SA, затем она сохраняет введенный текст для последующей валидации."""
         value = str(text).strip()
         if self._source_address_text == value:
             return
@@ -472,6 +623,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot(str)
     def applySourceAddress(self, text):
+        """Цель функции в записи Source Address, затем она отправляет команду в МК и синхронизирует локальный UI."""
         if self._source_address_busy:
             self.infoMessage.emit("Протокол", "Изменение Source Address уже выполняется.")
             return
@@ -506,6 +658,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot()
     def readSourceAddress(self):
+        """Цель функции в чтении Source Address, затем она инициирует запрос текущего SA в выбранном узле."""
         if self._source_address_busy:
             self.infoMessage.emit("Протокол", "Операция с Source Address уже выполняется.")
             return
@@ -857,6 +1010,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot()
     def toggleConnection(self):
+        """Цель функции в управлении подключением адаптера, затем она подключает CAN или выполняет полный локальный сброс состояния."""
         if self._can.is_connect:
             self._can.disconnect_device()
             self._can.stop_trace()
@@ -887,6 +1041,13 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             self._calibration_backup_values_pending = {}
             self._calibration_restore_active = False
             self._calibration_restore_queue = []
+            self._reset_calibration_temp_comp_state(
+                clear_samples=True,
+                clear_coefficients=True,
+                clear_cached_nodes=True,
+            )
+            self._calibration_csv_node_candidates = set()
+            self._refresh_calibration_node_options()
             if self._calibration_active:
                 self._calibration_active = False
                 self.calibrationStateChanged.emit()
@@ -1063,7 +1224,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
         bounded = max(30, min(10000, parsed))
         if bounded != parsed:
-            self.infoMessage.emit("Коллектор", "Интервал ограничен диапазоном 30..10000 мс.")
+            self.infoMessage.emit("Коллектор", "Интервал опроса ограничен диапазоном 30..10000 мс.")
 
         if self._collector_poll_interval_ms == bounded:
             return
@@ -1196,11 +1357,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot("QVariant")
     def loadCollectorTrendCsv(self, path_or_urls):
-        raw_items: list[object] = []
-        if isinstance(path_or_urls, (list, tuple, set)):
-            raw_items.extend(list(path_or_urls))
-        else:
-            raw_items.append(path_or_urls)
+        raw_items = self._expand_qvariant_items(path_or_urls)
 
         paths: list[Path] = []
         for item in raw_items:

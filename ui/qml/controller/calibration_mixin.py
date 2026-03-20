@@ -1,5 +1,8 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
+import csv
+from pathlib import Path
+import re
 import time
 
 from j1939.j1939_can_identifier import J1939CanIdentifier
@@ -10,6 +13,11 @@ from uds.uds_identifiers import UdsIdentifiers
 from .contract import AppControllerContract
 
 class AppControllerCalibrationMixin(AppControllerContract):
+    _FUEL_TEMP_COMP_REF_X10 = 200
+    _INT16_MIN = -32768
+    _INT16_MAX = 32767
+    _TEMP_COMP_CHART_POINT_LIMIT = 12000
+
     def _is_calibration_response_identifier(self, identifier: int) -> bool:
         try:
             parsed = J1939CanIdentifier(int(identifier))
@@ -55,13 +63,19 @@ class AppControllerCalibrationMixin(AppControllerContract):
             return "уровня 0%"
         if int(did) == int(UdsData.full_fuel_tank.pid):
             return "уровня 100%"
+        if int(did) == int(UdsData.fuel_temp_comp_k1_x100.pid):
+            return "коэффициента K1"
         return f"DID 0x{int(did) & 0xFFFF:04X}"
 
     def _pending_calibration_write_did(self) -> int | None:
         if self._calibration_restore_current_did is not None:
             return int(self._calibration_restore_current_did)
 
-        for did in (int(UdsData.empty_fuel_tank.pid), int(UdsData.full_fuel_tank.pid)):
+        for did in (
+            int(UdsData.empty_fuel_tank.pid),
+            int(UdsData.full_fuel_tank.pid),
+            int(UdsData.fuel_temp_comp_k1_x100.pid),
+        ):
             if did in self._calibration_write_verify_pending:
                 return did
 
@@ -313,6 +327,1115 @@ class AppControllerCalibrationMixin(AppControllerContract):
             self.calibrationValuesChanged.emit()
         return captured, len(valid_samples)
 
+    @staticmethod
+    def _decode_signed_value(raw_value: int, bits: int) -> int:
+        """Цель функции в корректной интерпретации знаковых DID, затем она выполняет sign-extension по числу бит."""
+        width = max(1, int(bits))
+        mask = (1 << width) - 1
+        sign_bit = 1 << (width - 1)
+        value = int(raw_value) & mask
+        if value & sign_bit:
+            return value - (1 << width)
+        return value
+
+    @staticmethod
+    def _c_trunc_div(numerator: int, denominator: int) -> int:
+        """Цель функции в повторении поведения C-деления, затем она делит с усечением к нулю."""
+        if int(denominator) == 0:
+            raise ZeroDivisionError("Деление на ноль недопустимо.")
+
+        quotient = abs(int(numerator)) // abs(int(denominator))
+        if (int(numerator) < 0) ^ (int(denominator) < 0):
+            return -quotient
+        return quotient
+
+    @classmethod
+    def _saturate_int16(cls, value: int) -> int:
+        """Цель функции в защите от переполнения DID int16, затем она ограничивает значение диапазоном -32768..32767."""
+        return max(cls._INT16_MIN, min(cls._INT16_MAX, int(value)))
+
+    @classmethod
+    def _apply_temperature_compensation_model(cls, raw_period: int, temperature_x10: int, k1_x100: int) -> int:
+        """Цель функции в точном повторении алгоритма МК, затем она считает Pcomp по формуле из fuel.c."""
+        compensated_period = int(raw_period)
+        coefficient = int(k1_x100)
+        if coefficient != 0:
+            d_temperature_x10 = int(temperature_x10) - int(cls._FUEL_TEMP_COMP_REF_X10)
+            delta_period = cls._c_trunc_div(coefficient * d_temperature_x10, 1000)
+            compensated_period -= delta_period
+
+            if compensated_period < 0:
+                compensated_period = 0
+            if compensated_period > 0xFFFF:
+                compensated_period = 0xFFFF
+
+        return int(compensated_period)
+
+    @classmethod
+    def _apply_temperature_compensation_model_precise(cls, raw_period: int | float, temperature_x10: int, k1_x100: int) -> float:
+        """Цель функции в плавном расчете компенсации для аналитики, затем она считает Pcomp без целочисленного усечения для наглядного графика."""
+        compensated_period = float(raw_period)
+        coefficient = float(k1_x100)
+        if coefficient != 0.0:
+            d_temperature_x10 = float(int(temperature_x10) - int(cls._FUEL_TEMP_COMP_REF_X10))
+            delta_period = (coefficient * d_temperature_x10) / 1000.0
+            compensated_period -= delta_period
+
+            if compensated_period < 0.0:
+                compensated_period = 0.0
+            if compensated_period > 65535.0:
+                compensated_period = 65535.0
+
+        return float(compensated_period)
+
+    def _period_to_level_percent(self, period: int | float) -> float | None:
+        """Цель функции в пересчете периода в проценты, затем она применяет текущие границы empty/full из калибровки."""
+        empty_period = int(self._calibration_level_0)
+        full_period = int(self._calibration_level_100)
+        span = full_period - empty_period
+        if span <= 0:
+            return None
+        return ((float(period) - float(empty_period)) * 100.0) / float(span)
+
+    @staticmethod
+    def _linear_regression_slope(x_values: list[float], y_values: list[float]) -> float | None:
+        """Цель функции в оценке температурного дрейфа, затем она возвращает наклон линейной регрессии dy/dx."""
+        if len(x_values) != len(y_values):
+            return None
+        if len(x_values) < 2:
+            return None
+
+        x_mean = sum(float(x) for x in x_values) / float(len(x_values))
+        y_mean = sum(float(y) for y in y_values) / float(len(y_values))
+
+        ss_x = sum((float(x) - x_mean) ** 2 for x in x_values)
+        if ss_x <= 0.0:
+            return None
+
+        cov_xy = sum((float(x) - x_mean) * (float(y) - y_mean) for (x, y) in zip(x_values, y_values))
+        return float(cov_xy / ss_x)
+
+    @staticmethod
+    def _calc_reduction_percent(before: float | None, after: float | None) -> float | None:
+        """Цель функции в расчете эффекта компенсации, затем она возвращает процент снижения модуля дрейфа."""
+        if before is None or after is None:
+            return None
+        if float(before) == 0.0:
+            return 0.0
+        return (1.0 - abs(float(after)) / abs(float(before))) * 100.0
+    @staticmethod
+    def _parse_csv_float(value: object) -> float | None:
+        """Цель функции в чтении чисел из CSV, затем она преобразует строку с запятой или точкой в float."""
+        raw = str(value or "").strip().replace(" ", "")
+        if not raw:
+            return None
+        normalized = raw.replace(",", ".")
+        try:
+            return float(normalized)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _parse_csv_int(value: object) -> int | None:
+        """Цель функции в разборе целого значения периода, затем она обрабатывает как integer, так и float-представление."""
+        parsed_float = AppControllerCalibrationMixin._parse_csv_float(value)
+        if parsed_float is None:
+            return None
+        try:
+            return int(round(float(parsed_float)))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _extract_node_sa_from_text(text: object) -> int | None:
+        """Цель функции в извлечении адреса узла, затем она ищет SA формата 0xNN в произвольной строке."""
+        raw = str(text or "")
+        match = re.search(r"0x([0-9a-fA-F]{1,2})", raw)
+        if match is None:
+            return None
+        try:
+            return int(match.group(1), 16) & 0xFF
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _extract_empty_full_from_text(text: object) -> tuple[int | None, int | None]:
+        """Цель функции в разборе калибровки из метаданных CSV, затем она извлекает empty/full через регулярные выражения."""
+        raw = str(text or "")
+        empty_match = re.search(r"empty\s*=\s*(-?\d+)", raw, flags=re.IGNORECASE)
+        full_match = re.search(r"full\s*=\s*(-?\d+)", raw, flags=re.IGNORECASE)
+        empty_value = int(empty_match.group(1)) if empty_match is not None else None
+        full_value = int(full_match.group(1)) if full_match is not None else None
+        return empty_value, full_value
+
+    def _extract_temp_comp_csv_node_candidates(self, rows: list[list[str]]) -> set[int]:
+        """Цель функции в получении списка узлов из CSV, затем она ищет SA в структурных и обычных заголовках."""
+        node_candidates: set[int] = set()
+        if len(rows) == 0:
+            return node_candidates
+
+        for row in rows[:3]:
+            for cell in row:
+                text = str(cell or "")
+                lowered = text.casefold()
+                if ("узел" not in lowered) and ("node" not in lowered):
+                    continue
+                parsed_sa = self._extract_node_sa_from_text(text)
+                if parsed_sa is None:
+                    continue
+                node_candidates.add(int(parsed_sa) & 0xFF)
+
+        if len(node_candidates) > 0:
+            return node_candidates
+
+        for row in rows[:8]:
+            joined = ";".join(str(cell or "").strip() for cell in row).casefold()
+            if not (("период" in joined or "period" in joined) and ("температ" in joined or "temp" in joined)):
+                continue
+
+            for cell in row:
+                text = str(cell or "")
+                lowered = text.casefold()
+                if not (
+                    ("период" in lowered)
+                    or ("period" in lowered)
+                    or ("температ" in lowered)
+                    or ("temp" in lowered)
+                ):
+                    continue
+                parsed_sa = self._extract_node_sa_from_text(text)
+                if parsed_sa is None:
+                    continue
+                node_candidates.add(int(parsed_sa) & 0xFF)
+            break
+
+        return node_candidates
+
+    @staticmethod
+    def _is_csv_header_like(row: list[str]) -> bool:
+        """Цель функции в пропуске служебных строк, затем она определяет заголовки/метаданные по ключевым словам."""
+        if len(row) == 0:
+            return True
+        joined = ";".join(str(cell or "").strip() for cell in row).casefold()
+        if not joined:
+            return True
+        markers = ("время", "узел", "калибровк", "формул", "period", "период", "температ", "temp", "топлив", "fuel")
+        return any(marker in joined for marker in markers)
+
+    def _build_temp_comp_samples_from_columns(
+        self,
+        rows: list[list[str]],
+        *,
+        data_start: int,
+        period_index: int,
+        temperature_index: int,
+    ) -> list[dict[str, object]]:
+        """Цель функции в сборке точек анализа, затем она конвертирует строки CSV в формат внутренних семплов."""
+        samples: list[dict[str, object]] = []
+        for row in rows[data_start:]:
+            if len(row) <= max(period_index, temperature_index):
+                continue
+
+            period = self._parse_csv_int(row[period_index])
+            temperature_c = self._parse_csv_float(row[temperature_index])
+            if period is None or temperature_c is None:
+                continue
+
+            temperature_x10 = int(round(float(temperature_c) * 10.0))
+            samples.append(
+                {
+                    "period": int(period),
+                    "temperature_x10": int(temperature_x10),
+                    "temperature_c": float(temperature_x10) / 10.0,
+                    "timestamp": float(len(samples)),
+                }
+            )
+
+        return samples
+
+    def _parse_temp_comp_structured_csv_all_nodes(
+        self,
+        rows: list[list[str]],
+    ) -> dict[int, dict[str, object]]:
+        """Цель функции в разборе all_nodes CSV по всем узлам, затем она возвращает выборки и калибровку для каждого SA."""
+        if len(rows) < 3:
+            return {}
+
+        node_row = rows[0]
+        second_row = rows[1] if len(rows) > 1 else []
+        third_row = rows[2] if len(rows) > 2 else []
+
+        second_joined = ";".join(str(cell or "").strip() for cell in second_row).casefold()
+        has_calibration_meta = (
+            ("empty=" in second_joined)
+            or ("full=" in second_joined)
+            or ("калибровк" in second_joined)
+        )
+
+        calibration_row = second_row if has_calibration_meta else []
+        labels_row = third_row if has_calibration_meta else second_row
+        data_start = 3 if has_calibration_meta else 2
+        node_data_by_sa: dict[int, dict[str, object]] = {}
+
+        for index, cell in enumerate(node_row):
+            text = str(cell or "")
+            lowered = text.casefold()
+            if ("узел" not in lowered) and ("node" not in lowered):
+                continue
+
+            node_sa = self._extract_node_sa_from_text(text)
+            if node_sa is None:
+                continue
+            node_sa_key = int(node_sa) & 0xFF
+
+            period_index = None
+            temperature_index = None
+            search_end = min(len(labels_row), index + 6)
+            for column in range(index, search_end):
+                label_text = str(labels_row[column] if column < len(labels_row) else "").casefold()
+                if period_index is None and (("период" in label_text) or ("period" in label_text)):
+                    period_index = column
+                if temperature_index is None and (("температ" in label_text) or ("temp" in label_text)):
+                    temperature_index = column
+
+            if period_index is None:
+                period_index = index
+            if temperature_index is None:
+                temperature_index = index + 2
+
+            samples = self._build_temp_comp_samples_from_columns(
+                rows,
+                data_start=data_start,
+                period_index=int(period_index),
+                temperature_index=int(temperature_index),
+            )
+            if len(samples) <= 0:
+                continue
+
+            calibration_cells: list[str] = []
+            if index < len(calibration_row):
+                calibration_cells.append(str(calibration_row[index]))
+            if (index + 1) < len(calibration_row):
+                calibration_cells.append(str(calibration_row[index + 1]))
+            empty_period, full_period = self._extract_empty_full_from_text(";".join(calibration_cells))
+
+            existing_entry = node_data_by_sa.get(node_sa_key)
+            if existing_entry is None:
+                node_data_by_sa[node_sa_key] = {
+                    "samples": list(samples),
+                    "empty": None if empty_period is None else int(empty_period),
+                    "full": None if full_period is None else int(full_period),
+                }
+                continue
+
+            merged_samples = list(existing_entry.get("samples", []))
+            merged_samples.extend(samples)
+            existing_entry["samples"] = merged_samples
+            if empty_period is not None:
+                existing_entry["empty"] = int(empty_period)
+            if full_period is not None:
+                existing_entry["full"] = int(full_period)
+
+        return node_data_by_sa
+
+    def _parse_temp_comp_structured_csv(
+        self,
+        rows: list[list[str]],
+        *,
+        selected_sa: int | None,
+    ) -> tuple[list[dict[str, object]], int | None, int | None, int | None]:
+        """Цель функции в выборе одного узла из all_nodes CSV, затем она возвращает выборку для текущего SA."""
+        node_data_by_sa = self._parse_temp_comp_structured_csv_all_nodes(rows)
+        if len(node_data_by_sa) <= 0:
+            return [], None, None, None
+
+        chosen_sa: int | None = None
+        if selected_sa is not None:
+            wanted_sa = int(selected_sa) & 0xFF
+            if wanted_sa not in node_data_by_sa:
+                return [], None, None, None
+            chosen_sa = wanted_sa
+
+        if chosen_sa is None:
+            chosen_sa = next(iter(node_data_by_sa.keys()))
+
+        chosen_payload = node_data_by_sa.get(int(chosen_sa) & 0xFF, {})
+        samples = list(chosen_payload.get("samples", []))
+        empty_value = chosen_payload.get("empty")
+        full_value = chosen_payload.get("full")
+        return (
+            samples,
+            int(chosen_sa) & 0xFF,
+            None if empty_value is None else int(empty_value),
+            None if full_value is None else int(full_value),
+        )
+
+    def _parse_temp_comp_generic_csv(
+        self,
+        rows: list[list[str]],
+        *,
+        selected_sa: int | None,
+    ) -> tuple[list[dict[str, object]], int | None, int | None, int | None]:
+        """Цель функции в поддержке старых CSV форматов, затем она ищет колонки периода/температуры и строит выборку."""
+        header_index = -1
+        header_row: list[str] = []
+        for index, row in enumerate(rows):
+            joined = ";".join(str(cell or "").strip() for cell in row).casefold()
+            if ("период" in joined or "period" in joined) and ("температ" in joined or "temp" in joined):
+                header_index = index
+                header_row = row
+                break
+
+        if header_index < 0:
+            return [], None, None, None
+
+        period_by_sa: dict[int, int] = {}
+        temp_by_sa: dict[int, int] = {}
+        period_no_sa: list[int] = []
+        temp_no_sa: list[int] = []
+
+        for index, cell in enumerate(header_row):
+            text = str(cell or "")
+            lowered = text.casefold()
+            node_sa = self._extract_node_sa_from_text(text)
+            if "период" in lowered or "period" in lowered:
+                if node_sa is None:
+                    period_no_sa.append(index)
+                else:
+                    period_by_sa[int(node_sa)] = index
+            if "температ" in lowered or "temp" in lowered:
+                if node_sa is None:
+                    temp_no_sa.append(index)
+                else:
+                    temp_by_sa[int(node_sa)] = index
+
+        node_sa_used = None
+        period_index = None
+        temperature_index = None
+
+        if selected_sa is not None:
+            selected_key = int(selected_sa) & 0xFF
+            if selected_key in period_by_sa and selected_key in temp_by_sa:
+                node_sa_used = selected_key
+                period_index = int(period_by_sa[selected_key])
+                temperature_index = int(temp_by_sa[selected_key])
+            elif len(period_no_sa) > 0 and len(temp_no_sa) > 0:
+                # CSV без SA-меток в заголовке: используем первую пару колонок.
+                node_sa_used = selected_key
+                period_index = int(period_no_sa[0])
+                temperature_index = int(temp_no_sa[0])
+            else:
+                return [], None, None, None
+        elif len(period_no_sa) > 0 and len(temp_no_sa) > 0:
+            period_index = int(period_no_sa[0])
+            temperature_index = int(temp_no_sa[0])
+        else:
+            common_nodes = sorted(set(period_by_sa.keys()) & set(temp_by_sa.keys()))
+            if len(common_nodes) == 0:
+                return [], None, None, None
+            node_sa_used = int(common_nodes[0]) & 0xFF
+            period_index = int(period_by_sa[node_sa_used])
+            temperature_index = int(temp_by_sa[node_sa_used])
+
+        empty_period = None
+        full_period = None
+        for row in rows[:header_index + 1]:
+            empty_candidate, full_candidate = self._extract_empty_full_from_text(";".join(str(cell) for cell in row))
+            if empty_candidate is not None:
+                empty_period = int(empty_candidate)
+            if full_candidate is not None:
+                full_period = int(full_candidate)
+
+        samples = self._build_temp_comp_samples_from_columns(
+            rows,
+            data_start=header_index + 1,
+            period_index=int(period_index),
+            temperature_index=int(temperature_index),
+        )
+        return samples, node_sa_used, empty_period, full_period
+
+    def _parse_temp_comp_generic_csv_all_nodes(
+        self,
+        rows: list[list[str]],
+    ) -> dict[int, dict[str, object]]:
+        """Цель функции в разборе SA-колонок generic CSV, затем она формирует выборки по каждому найденному узлу."""
+        header_index = -1
+        header_row: list[str] = []
+        for index, row in enumerate(rows):
+            joined = ";".join(str(cell or "").strip() for cell in row).casefold()
+            if ("период" in joined or "period" in joined) and ("температ" in joined or "temp" in joined):
+                header_index = index
+                header_row = row
+                break
+
+        if header_index < 0:
+            return {}
+
+        period_by_sa: dict[int, int] = {}
+        temp_by_sa: dict[int, int] = {}
+        for index, cell in enumerate(header_row):
+            text = str(cell or "")
+            lowered = text.casefold()
+            node_sa = self._extract_node_sa_from_text(text)
+            if node_sa is None:
+                continue
+            node_key = int(node_sa) & 0xFF
+            if "период" in lowered or "period" in lowered:
+                period_by_sa[node_key] = int(index)
+            if "температ" in lowered or "temp" in lowered:
+                temp_by_sa[node_key] = int(index)
+
+        common_nodes = sorted(set(period_by_sa.keys()) & set(temp_by_sa.keys()))
+        if len(common_nodes) <= 0:
+            return {}
+
+        empty_period = None
+        full_period = None
+        for row in rows[:header_index + 1]:
+            empty_candidate, full_candidate = self._extract_empty_full_from_text(";".join(str(cell) for cell in row))
+            if empty_candidate is not None:
+                empty_period = int(empty_candidate)
+            if full_candidate is not None:
+                full_period = int(full_candidate)
+
+        node_data_by_sa: dict[int, dict[str, object]] = {}
+        for node_sa in common_nodes:
+            samples = self._build_temp_comp_samples_from_columns(
+                rows,
+                data_start=header_index + 1,
+                period_index=int(period_by_sa[node_sa]),
+                temperature_index=int(temp_by_sa[node_sa]),
+            )
+            if len(samples) <= 0:
+                continue
+            node_data_by_sa[int(node_sa) & 0xFF] = {
+                "samples": list(samples),
+                "empty": None if empty_period is None else int(empty_period),
+                "full": None if full_period is None else int(full_period),
+            }
+
+        return node_data_by_sa
+
+    def _parse_calibration_temp_comp_csv_file(
+        self,
+        csv_path: Path,
+        *,
+        selected_sa: int | None,
+    ) -> tuple[list[dict[str, object]], int | None, int | None, int | None, set[int]]:
+        """Цель функции в разборе одного CSV лога, затем она извлекает точки period+temperature для анализа K1."""
+        try:
+            resolved_path = Path(csv_path).expanduser().resolve()
+        except Exception:
+            resolved_path = Path(csv_path)
+
+        if not resolved_path.exists() or not resolved_path.is_file():
+            return [], None, None, None, set()
+
+        try:
+            with resolved_path.open("r", encoding="utf-8-sig", newline="") as file:
+                rows = list(csv.reader(file, delimiter=";"))
+        except Exception:
+            return [], None, None, None, set()
+
+        if len(rows) == 0:
+            return [], None, None, None, set()
+
+        node_candidates = self._extract_temp_comp_csv_node_candidates(rows)
+
+        structured_samples, structured_sa, structured_empty, structured_full = self._parse_temp_comp_structured_csv(
+            rows,
+            selected_sa=selected_sa,
+        )
+        if len(structured_samples) > 0:
+            return structured_samples, structured_sa, structured_empty, structured_full, node_candidates
+
+        # Если это структурированный all_nodes (есть групповые колонки "узел"/"node"),
+        # но выбранный SA в файле отсутствует, не подменяем выбор generic-парсером.
+        if selected_sa is not None and len(rows) > 0:
+            first_row_joined = ";".join(str(cell or "").strip() for cell in rows[0]).casefold()
+            if ("узел" in first_row_joined) or ("node" in first_row_joined):
+                return [], None, None, None, node_candidates
+
+        parsed_samples, parsed_sa, parsed_empty, parsed_full = self._parse_temp_comp_generic_csv(
+            rows,
+            selected_sa=selected_sa,
+        )
+        return parsed_samples, parsed_sa, parsed_empty, parsed_full, node_candidates
+
+    def _parse_calibration_temp_comp_csv_file_all_nodes(
+        self,
+        csv_path: Path,
+    ) -> tuple[dict[int, dict[str, object]], set[int]]:
+        """Цель функции в извлечении выборок всех узлов из одного CSV, затем она подготавливает карту SA->данные."""
+        try:
+            resolved_path = Path(csv_path).expanduser().resolve()
+        except Exception:
+            resolved_path = Path(csv_path)
+
+        if not resolved_path.exists() or not resolved_path.is_file():
+            return {}, set()
+
+        try:
+            with resolved_path.open("r", encoding="utf-8-sig", newline="") as file:
+                rows = list(csv.reader(file, delimiter=";"))
+        except Exception:
+            return {}, set()
+
+        if len(rows) == 0:
+            return {}, set()
+
+        node_candidates = self._extract_temp_comp_csv_node_candidates(rows)
+        structured_data = self._parse_temp_comp_structured_csv_all_nodes(rows)
+        if len(structured_data) > 0:
+            node_candidates.update(int(value) & 0xFF for value in structured_data.keys())
+            return structured_data, node_candidates
+
+        generic_data = self._parse_temp_comp_generic_csv_all_nodes(rows)
+        if len(generic_data) > 0:
+            node_candidates.update(int(value) & 0xFF for value in generic_data.keys())
+            return generic_data, node_candidates
+
+        return {}, node_candidates
+
+    def _load_calibration_temp_comp_csv_files(self, paths: list[Path]) -> tuple[int, int]:
+        """Цель функции в пакетной загрузке CSV, затем она агрегирует выборки по узлам и обновляет анализ K1."""
+        selected_sa = self._calibration_target_node_sa
+        selected_key = None if selected_sa is None else (int(selected_sa) & 0xFF)
+        requested_files = len(paths)
+        loaded_files = 0
+        loaded_points = 0
+        skipped_files = 0
+        csv_node_candidates: set[int] = set()
+        aggregated_by_sa: dict[int, dict[str, object]] = {}
+
+        # Перед новой загрузкой очищаем прошлый набор офлайн-выборок по узлам.
+        self._calibration_temp_comp_samples_by_node = {}
+
+        for source_path in paths:
+            file_node_data, file_node_candidates = self._parse_calibration_temp_comp_csv_file_all_nodes(source_path)
+            csv_node_candidates.update(int(value) & 0xFF for value in file_node_candidates)
+
+            if len(file_node_data) <= 0:
+                samples, node_sa_used, empty_period, full_period, fallback_candidates = self._parse_calibration_temp_comp_csv_file(
+                    source_path,
+                    selected_sa=selected_key,
+                )
+                csv_node_candidates.update(int(value) & 0xFF for value in fallback_candidates)
+                if len(samples) <= 0:
+                    skipped_files += 1
+                    continue
+
+                fallback_sa = node_sa_used
+                if fallback_sa is None:
+                    if selected_key is not None:
+                        fallback_sa = selected_key
+                    else:
+                        fallback_sa = int(self._resolve_calibration_target_sa()) & 0xFF
+
+                file_node_data = {
+                    int(fallback_sa) & 0xFF: {
+                        "samples": list(samples),
+                        "empty": None if empty_period is None else int(empty_period),
+                        "full": None if full_period is None else int(full_period),
+                    }
+                }
+
+            loaded_files += 1
+            for node_sa, payload in file_node_data.items():
+                node_key = int(node_sa) & 0xFF
+                node_samples = list(payload.get("samples", []))
+                if len(node_samples) <= 0:
+                    continue
+
+                loaded_points += len(node_samples)
+                csv_node_candidates.add(node_key)
+                existing = aggregated_by_sa.get(node_key)
+                if existing is None:
+                    aggregated_by_sa[node_key] = {
+                        "samples": list(node_samples),
+                        "empty": payload.get("empty"),
+                        "full": payload.get("full"),
+                    }
+                    continue
+
+                merged_samples = list(existing.get("samples", []))
+                merged_samples.extend(node_samples)
+                existing["samples"] = merged_samples
+                if payload.get("empty") is not None:
+                    existing["empty"] = payload.get("empty")
+                if payload.get("full") is not None:
+                    existing["full"] = payload.get("full")
+
+        prepared_by_sa: dict[int, dict[str, object]] = {}
+        for node_sa, payload in aggregated_by_sa.items():
+            node_key = int(node_sa) & 0xFF
+            node_samples = list(payload.get("samples", []))
+            if len(node_samples) <= 0:
+                continue
+
+            prepared_by_sa[node_key] = {
+                "samples": list(node_samples),
+                "empty": payload.get("empty"),
+                "full": payload.get("full"),
+            }
+
+        if len(prepared_by_sa) <= 0:
+            self._calibration_temp_comp_samples_by_node = {}
+            self._calibration_temp_comp_status = (
+                f"CSV-файлы обработаны ({int(requested_files)}), но данные period/temperature не распознаны."
+            )
+            if len(csv_node_candidates) > 0:
+                self._calibration_csv_node_candidates = set(int(value) & 0xFF for value in csv_node_candidates)
+                self._refresh_calibration_node_options()
+                if selected_key is not None:
+                    available_nodes = ", ".join(f"0x{value:02X}" for value in sorted(csv_node_candidates))
+                    self._calibration_temp_comp_status = (
+                        f"В выбранных CSV нет данных для узла 0x{selected_key:02X}. "
+                        f"Доступные узлы в файлах: {available_nodes}."
+                    )
+            self.calibrationTempCompChanged.emit()
+            return 0, 0
+
+        self._calibration_temp_comp_samples_by_node = prepared_by_sa
+        effective_candidates = set(int(value) & 0xFF for value in csv_node_candidates)
+        effective_candidates.update(int(value) & 0xFF for value in prepared_by_sa.keys())
+        self._calibration_csv_node_candidates = effective_candidates
+        self._refresh_calibration_node_options()
+
+        applied_sa = self._select_calibration_temp_comp_cached_node(
+            selected_sa=selected_key,
+            clear_coefficients=False,
+        )
+
+        if applied_sa is None and selected_key is not None:
+            available_nodes = ", ".join(f"0x{value:02X}" for value in sorted(prepared_by_sa.keys()))
+            self._reset_calibration_temp_comp_state(
+                clear_samples=True,
+                clear_coefficients=False,
+                clear_cached_nodes=False,
+            )
+            self._calibration_temp_comp_status = (
+                f"В выбранных CSV нет данных для узла 0x{selected_key:02X}. "
+                f"Доступные узлы в файлах: {available_nodes}. "
+                "Выберите другой узел в списке сверху."
+            )
+            self.calibrationTempCompChanged.emit()
+            return loaded_files, loaded_points
+
+        status_hints: list[str] = []
+        if applied_sa is not None:
+            status_hints.append(f"Активный узел анализа: 0x{int(applied_sa) & 0xFF:02X}.")
+            if len(prepared_by_sa) > 1:
+                status_hints.append("Для просмотра другого узла переключите селектор узла сверху.")
+        if skipped_files > 0:
+            status_hints.append(f"Пропущено файлов без подходящих данных: {int(skipped_files)}.")
+        if len(prepared_by_sa) > 1:
+            sorted_sas = ", ".join(f"0x{value:02X}" for value in sorted(prepared_by_sa.keys()))
+            status_hints.append(f"В CSV обнаружены узлы: {sorted_sas}.")
+
+        if len(status_hints) > 0:
+            self._calibration_temp_comp_status = f"{self._calibration_temp_comp_status} {' '.join(status_hints)}"
+            self.calibrationTempCompChanged.emit()
+
+        return loaded_files, loaded_points
+
+    @staticmethod
+    def _build_temp_comp_period_accessor(
+        samples: list[dict[str, object]],
+        compensated_periods: list[float] | None,
+    ):
+        """Цель функции в выборе источника period для графика, затем она возвращает быстрый accessor по индексу."""
+        if compensated_periods is None:
+            return lambda idx: float(samples[idx].get("period", 0.0))
+        return lambda idx: float(compensated_periods[idx]) if idx < len(compensated_periods) else float(samples[idx].get("period", 0.0))
+
+    @classmethod
+    def _select_temp_comp_chart_indices(
+        cls,
+        samples: list[dict[str, object]],
+        *,
+        compensated_periods: list[float] | None = None,
+    ) -> list[int]:
+        """Цель функции в подготовке индексов графика без перегруза UI, затем она сохраняет пики и края каждого температурного сегмента."""
+        total_points = len(samples)
+        if total_points <= 0:
+            return []
+
+        max_points = max(512, int(cls._TEMP_COMP_CHART_POINT_LIMIT))
+        if total_points <= max_points:
+            return list(range(total_points))
+
+        period_at = cls._build_temp_comp_period_accessor(samples, compensated_periods)
+        bucket_count = max(1, max_points // 4)
+        bucket_size = max(1, int((total_points + bucket_count - 1) // bucket_count))
+
+        selected_indices: list[int] = []
+        used_indices: set[int] = set()
+
+        def add_index(index: int):
+            if index < 0 or index >= total_points:
+                return
+            if index in used_indices:
+                return
+            used_indices.add(index)
+            selected_indices.append(index)
+
+        for start in range(0, total_points, bucket_size):
+            end = min(total_points, start + bucket_size)
+            if end <= start:
+                continue
+
+            first_index = start
+            last_index = end - 1
+            min_index = first_index
+            max_index = first_index
+            min_period = period_at(first_index)
+            max_period = min_period
+
+            for index in range(start + 1, end):
+                period_value = period_at(index)
+                if period_value < min_period:
+                    min_period = period_value
+                    min_index = index
+                if period_value > max_period:
+                    max_period = period_value
+                    max_index = index
+
+            for index in sorted({first_index, min_index, max_index, last_index}):
+                add_index(index)
+
+        add_index(total_points - 1)
+        selected_indices.sort()
+        return selected_indices
+
+    @classmethod
+    def _build_calibration_temp_comp_chart_points(
+        cls,
+        samples: list[dict[str, object]],
+        *,
+        compensated_periods: list[float] | None = None,
+    ) -> list[dict[str, object]]:
+        """Цель функции в подготовке данных для TrendCanvas, затем она ограничивает payload без потери ключевой формы сигнала."""
+        selected_indices = cls._select_temp_comp_chart_indices(
+            samples,
+            compensated_periods=compensated_periods,
+        )
+        period_at = cls._build_temp_comp_period_accessor(samples, compensated_periods)
+
+        points: list[dict[str, object]] = []
+        for index in selected_indices:
+            sample = samples[index]
+            points.append(
+                {
+                    "fuel": float(period_at(index)),
+                    "temperature": float(sample.get("temperature_c", 0.0)),
+                    "time": str(int(index) + 1),
+                }
+            )
+        return points
+    def _recompute_calibration_temp_comp_metrics(self):
+        """Цель функции в пересчете рекомендаций по K1, затем она обновляет метрики дрейфа и серии графика для UI."""
+        samples = list(self._calibration_temp_comp_samples)
+        sample_count = len(samples)
+        current_k1 = self._calibration_temp_comp_k1_x100_current
+        base_k1: int | None = None
+
+        ordered_samples = sorted(
+            samples,
+            key=lambda item: (
+                float(item.get("temperature_c", 0.0)),
+                float(item.get("timestamp", 0.0)),
+            ),
+        )
+        temperatures = [float(item.get("temperature_c", 0.0)) for item in ordered_samples]
+        raw_periods = [float(sample.get("period", 0.0)) for sample in ordered_samples]
+
+        recommended_k1: int | None = None
+        delta_k1: int | None = None
+        next_k1: int | None = None
+
+        period_slope_before: float | None = None
+        period_slope_after: float | None = None
+        level_slope_before: float | None = None
+        level_slope_after: float | None = None
+        period_reduction_percent: float | None = None
+        level_reduction_percent: float | None = None
+
+        current_comp_periods: list[float] = []
+        recommended_comp_periods: list[float] = []
+
+        level_calibration_ready = (
+            bool(self._calibration_level_0_known)
+            and bool(self._calibration_level_100_known)
+            and (int(self._calibration_level_100) > int(self._calibration_level_0))
+        )
+
+        if sample_count > 0:
+            base_k1 = int(current_k1) if current_k1 is not None else 0
+
+        if sample_count >= 2 and base_k1 is not None:
+            period_slope_before = self._linear_regression_slope(temperatures, raw_periods)
+            if period_slope_before is not None:
+                recommended_k1 = self._saturate_int16(int(round(float(period_slope_before) * 100.0)))
+                delta_k1 = int(recommended_k1) - int(base_k1)
+                next_k1 = int(recommended_k1)
+
+                recommended_comp_periods = [
+                    self._apply_temperature_compensation_model_precise(
+                        float(sample.get("period", 0.0)),
+                        int(sample.get("temperature_x10", 0)),
+                        int(recommended_k1),
+                    )
+                    for sample in ordered_samples
+                ]
+                period_slope_after = self._linear_regression_slope(temperatures, recommended_comp_periods)
+
+            if current_k1 is not None:
+                current_comp_periods = [
+                    self._apply_temperature_compensation_model_precise(
+                        float(sample.get("period", 0.0)),
+                        int(sample.get("temperature_x10", 0)),
+                        int(current_k1),
+                    )
+                    for sample in ordered_samples
+                ]
+
+            if level_calibration_ready:
+                raw_levels: list[float] = []
+                raw_levels_valid = True
+                for period_value in raw_periods:
+                    converted = self._period_to_level_percent(period_value)
+                    if converted is None:
+                        raw_levels_valid = False
+                        break
+                    raw_levels.append(float(converted))
+
+                if raw_levels_valid and len(raw_levels) == sample_count:
+                    level_slope_before = self._linear_regression_slope(temperatures, raw_levels)
+                    if len(recommended_comp_periods) == sample_count:
+                        recommended_levels = [self._period_to_level_percent(value) for value in recommended_comp_periods]
+                        if all(level is not None for level in recommended_levels):
+                            level_slope_after = self._linear_regression_slope(
+                                temperatures,
+                                [float(level) for level in recommended_levels if level is not None],
+                            )
+
+            period_reduction_percent = self._calc_reduction_percent(period_slope_before, period_slope_after)
+            level_reduction_percent = self._calc_reduction_percent(level_slope_before, level_slope_after)
+
+        chart_series: list[dict[str, object]] = []
+        if sample_count > 0:
+            chart_series.append(
+                {
+                    "node": "Сырой период",
+                    "color": "#dc2626",
+                    "points": self._build_calibration_temp_comp_chart_points(ordered_samples),
+                }
+            )
+
+            if (
+                len(current_comp_periods) == sample_count
+                and current_k1 is not None
+                and (recommended_k1 is None or int(current_k1) != int(recommended_k1))
+            ):
+                chart_series.append(
+                    {
+                        "node": f"После текущего K1 ({int(current_k1)})",
+                        "color": "#2563eb",
+                        "points": self._build_calibration_temp_comp_chart_points(
+                            ordered_samples,
+                            compensated_periods=current_comp_periods,
+                        ),
+                    }
+                )
+
+            if len(recommended_comp_periods) == sample_count and recommended_k1 is not None:
+                max_shift = max(
+                    abs(float(recommended_comp_periods[index]) - float(raw_periods[index]))
+                    for index in range(sample_count)
+                ) if sample_count > 0 else 0.0
+                shift_hint = "" if max_shift >= 0.05 else " (эффект очень мал)"
+                chart_series.append(
+                    {
+                        "node": f"После рекоменд. K1 ({int(recommended_k1)}){shift_hint}",
+                        "color": "#16a34a",
+                        "points": self._build_calibration_temp_comp_chart_points(
+                            ordered_samples,
+                            compensated_periods=recommended_comp_periods,
+                        ),
+                    }
+                )
+
+        if sample_count <= 0:
+            detail_text = "Загрузите CSV из коллектора (all_nodes.csv или 0xNN.csv), чтобы рассчитать K1."
+        elif sample_count < 2:
+            detail_text = f"Собрано точек: {sample_count}. Для регрессии нужно минимум 2."
+        else:
+            temp_min = min(temperatures)
+            temp_max = max(temperatures)
+            period_min = min(raw_periods)
+            period_max = max(raw_periods)
+            detail_text = (
+                f"Точек: {sample_count}, температура: {temp_min:.1f}..{temp_max:.1f} °C, "
+                f"период: {period_min:.1f}..{period_max:.1f} count."
+            )
+            if base_k1 is not None:
+                detail_text += f" Базовый K1={int(base_k1)}."
+            if recommended_k1 is not None:
+                detail_text += f" Рекоменд. K1={int(recommended_k1)}."
+            if delta_k1 is not None:
+                detail_text += f" dK1={int(delta_k1):+d}."
+            if not level_calibration_ready:
+                detail_text += " Метрики в % будут доступны после чтения калибровок 0% и 100%."
+
+        if sample_count <= 0:
+            self._calibration_temp_comp_status = detail_text
+        else:
+            self._calibration_temp_comp_status = f"Офлайн-анализ CSV. {detail_text}"
+
+        self._calibration_temp_comp_k1_x100_base = base_k1
+        self._calibration_temp_comp_k1_x100_recommended = recommended_k1
+        self._calibration_temp_comp_k1_x100_delta = delta_k1
+        self._calibration_temp_comp_k1_x100_next = next_k1
+        self._calibration_temp_comp_period_slope_before = period_slope_before
+        self._calibration_temp_comp_period_slope_after = period_slope_after
+        self._calibration_temp_comp_level_slope_before = level_slope_before
+        self._calibration_temp_comp_level_slope_after = level_slope_after
+        self._calibration_temp_comp_period_reduction_percent = period_reduction_percent
+        self._calibration_temp_comp_level_reduction_percent = level_reduction_percent
+        self._calibration_temp_comp_chart_series = chart_series
+        self.calibrationTempCompChanged.emit()
+
+    def _apply_calibration_temp_comp_node_samples(self, node_sa: int, *, clear_coefficients: bool) -> bool:
+        """Цель функции в активации выборки конкретного узла, затем она обновляет метрики и связанные поля UI."""
+        node_key = int(node_sa) & 0xFF
+        payload = self._calibration_temp_comp_samples_by_node.get(node_key)
+        if not isinstance(payload, dict):
+            return False
+
+        node_samples = list(payload.get("samples", []))
+        if len(node_samples) <= 0:
+            return False
+
+        self._calibration_temp_comp_samples = list(node_samples)
+        last_sample = self._calibration_temp_comp_samples[-1]
+        self._calibration_temp_comp_last_period = int(last_sample.get("period", 0))
+        self._calibration_temp_comp_last_temperature_x10 = int(last_sample.get("temperature_x10", 0))
+        self._calibration_temp_comp_last_temperature_c = float(last_sample.get("temperature_c", 0.0))
+
+        if clear_coefficients:
+            self._calibration_temp_comp_k1_x100_current = None
+
+        empty_value = payload.get("empty")
+        full_value = payload.get("full")
+        levels_changed = False
+        if empty_value is not None and full_value is not None:
+            empty_period = int(empty_value)
+            full_period = int(full_value)
+            if full_period > empty_period:
+                if (
+                    int(self._calibration_level_0) != empty_period
+                    or int(self._calibration_level_100) != full_period
+                    or not bool(self._calibration_level_0_known)
+                    or not bool(self._calibration_level_100_known)
+                ):
+                    self._calibration_level_0 = empty_period
+                    self._calibration_level_100 = full_period
+                    self._calibration_level_0_known = True
+                    self._calibration_level_100_known = True
+                    levels_changed = True
+        if levels_changed:
+            self.calibrationValuesChanged.emit()
+
+        self._recompute_calibration_temp_comp_metrics()
+        return True
+
+    def _select_calibration_temp_comp_cached_node(
+        self,
+        *,
+        selected_sa: int | None,
+        clear_coefficients: bool,
+    ) -> int | None:
+        """Цель функции в выборе активного узла из загруженного кэша, затем она применяет выборку этого узла."""
+        if len(self._calibration_temp_comp_samples_by_node) <= 0:
+            return None
+
+        chosen_sa = None
+        if selected_sa is not None:
+            selected_key = int(selected_sa) & 0xFF
+            if selected_key in self._calibration_temp_comp_samples_by_node:
+                chosen_sa = selected_key
+        else:
+            auto_sa = int(self._resolve_calibration_target_sa()) & 0xFF
+            if auto_sa in self._calibration_temp_comp_samples_by_node:
+                chosen_sa = auto_sa
+            else:
+                chosen_sa = sorted(self._calibration_temp_comp_samples_by_node.keys())[0]
+
+        if chosen_sa is None:
+            return None
+
+        if not self._apply_calibration_temp_comp_node_samples(
+            int(chosen_sa) & 0xFF,
+            clear_coefficients=clear_coefficients,
+        ):
+            return None
+        return int(chosen_sa) & 0xFF
+
+    def _reset_calibration_temp_comp_state(
+        self,
+        *,
+        clear_samples: bool,
+        clear_coefficients: bool,
+        clear_cached_nodes: bool = False,
+    ):
+        """Цель функции в безопасном сбросе сценария компенсации, затем она очищает runtime и при необходимости кэш узлов."""
+        self._calibration_temp_comp_last_period = None
+        self._calibration_temp_comp_last_temperature_x10 = None
+        self._calibration_temp_comp_last_temperature_c = None
+
+        if clear_samples:
+            self._calibration_temp_comp_samples = []
+            if clear_cached_nodes:
+                self._calibration_temp_comp_samples_by_node = {}
+
+        if clear_coefficients:
+            self._calibration_temp_comp_k1_x100_current = None
+
+        self._calibration_temp_comp_k1_x100_base = None
+        self._calibration_temp_comp_k1_x100_recommended = None
+        self._calibration_temp_comp_k1_x100_delta = None
+        self._calibration_temp_comp_k1_x100_next = None
+        self._calibration_temp_comp_period_slope_before = None
+        self._calibration_temp_comp_period_slope_after = None
+        self._calibration_temp_comp_level_slope_before = None
+        self._calibration_temp_comp_level_slope_after = None
+        self._calibration_temp_comp_period_reduction_percent = None
+        self._calibration_temp_comp_level_reduction_percent = None
+        self._calibration_temp_comp_chart_series = []
+
+        self._recompute_calibration_temp_comp_metrics()
+
+    def _request_calibration_runtime_snapshot(self):
+        """Цель функции в опросе рабочего периода калибровки, затем она читает DID 0x0014 для отображения текущего значения."""
+        if not self._can.is_connect or not self._can.is_trace:
+            return
+        self._configure_calibration_uds_services()
+        tx_identifier = self._build_calibration_tx_identifier()
+        self._calibration_read_service.read_data_by_identifier(tx_identifier, UdsData.curr_fuel_tank)
+
+    def _request_calibration_temp_comp_k1_read(self) -> bool:
+        """Цель функции в чтении текущего K1 через UDS, затем она отправляет запрос DID 0x001B в выбранный узел."""
+        if not self._can.is_connect or not self._can.is_trace:
+            return False
+        self._configure_calibration_uds_services()
+        return bool(
+            self._calibration_read_service.read_data_by_identifier(
+                self._build_calibration_tx_identifier(),
+                UdsData.fuel_temp_comp_k1_x100,
+            )
+        )
+
     def _handle_calibration_frame(self, identifier: int, payload: list[int]):
         if len(payload) < 2:
             return
@@ -340,29 +1463,6 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 self._fail_calibration_activation(
                     f"Калибровка: ошибка смены сессии, NRC 0x{nrc:02X} ({nrc_text})."
                 )
-                return
-                self._calibration_waiting_session = False
-                self._stop_calibration_poll_timer()
-                self._calibration_session_ready = False
-                if current_action == "deactivate_session":
-                    self._append_log("Калибровка: возврат в default-сессию выполнен.", RowColor.green)
-                    self._finish_calibration_deactivation("Калибровка завершена. Security Access закрыт, активна default-сессия.")
-                    return
-
-                self._append_log("Калибровка: расширенная сессия активирована.", RowColor.green)
-                self._schedule_calibration_sequence_action("request_security_seed")
-                self._recompute_calibration_wizard_state()
-                return
-                self._calibration_write_verify_pending = {}
-                self.calibrationVerificationChanged.emit()
-                if self._calibration_active:
-                    self._calibration_active = False
-                    self.calibrationStateChanged.emit()
-                self._append_log(
-                    f"Калибровка: ошибка смены сессии, NRC 0x{nrc:02X} ({nrc_text}).",
-                    RowColor.red,
-                )
-                self._recompute_calibration_wizard_state()
                 return
 
             if original_sid == 0x27:
@@ -496,16 +1596,6 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 self._schedule_calibration_sequence_action("request_security_seed")
                 self._recompute_calibration_wizard_state()
                 return
-                if self._calibration_active:
-                    self._append_log("Калибровка: расширенная сессия активирована.", RowColor.green)
-                    self._start_calibration_poll_timer()
-                    self.readCalibrationCurrentLevel()
-                    self.readCalibrationLevel0()
-                    self.readCalibrationLevel100()
-                else:
-                    self._append_log("Калибровка: переход в default-сессию выполнен.", RowColor.green)
-                self._recompute_calibration_wizard_state()
-                return
 
             if payload[1] == 0x7F and len(payload) >= 4 and payload[2] == 0x10:
                 self._calibration_waiting_session = False
@@ -520,26 +1610,49 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 self._recompute_calibration_wizard_state()
                 return
 
-        if self._calibration_read_service.verify_answer_read_data(payload):
-            did = int(self._calibration_read_service.parse_pid_field(payload))
-            value = int(self._calibration_read_service.parse_data_field(payload))
+        if (int(payload[1]) & 0xFF) == int(self._calibration_read_service.success_sid) and len(payload) >= 4:
+            did = (int(payload[2]) << 8) | int(payload[3])
+            raw_value = int(self._calibration_read_service.parse_data_field(payload))
+            value = int(raw_value)
             changed = False
+            emit_temp_comp_signal = False
+            recompute_temp_comp = False
 
             if did == int(UdsData.curr_fuel_tank.pid):
                 if self._calibration_current_level != value:
                     self._calibration_current_level = value
                     changed = True
                 self._add_calibration_recent_sample(value)
+                if self._calibration_temp_comp_last_period != value:
+                    self._calibration_temp_comp_last_period = int(value)
+                    emit_temp_comp_signal = True
             elif did == int(UdsData.empty_fuel_tank.pid):
                 self._calibration_level_0 = value
                 self._calibration_level_0_known = True
                 changed = True
+                recompute_temp_comp = True
                 self._append_log(f"Калибровка: считан уровень 0% = {value}.", RowColor.green)
             elif did == int(UdsData.full_fuel_tank.pid):
                 self._calibration_level_100 = value
                 self._calibration_level_100_known = True
                 changed = True
+                recompute_temp_comp = True
                 self._append_log(f"Калибровка: считан уровень 100% = {value}.", RowColor.green)
+            elif did == int(UdsData.raw_temperature.pid):
+                bits = max(8, int(UdsData.raw_temperature.size) * 8)
+                signed_temperature = self._decode_signed_value(raw_value, bits)
+                value = int(signed_temperature)
+                self._calibration_temp_comp_last_temperature_x10 = int(signed_temperature)
+                self._calibration_temp_comp_last_temperature_c = float(signed_temperature) / 10.0
+                recompute_temp_comp = True
+            elif did == int(UdsData.fuel_temp_comp_k1_x100.pid):
+                bits = max(8, int(UdsData.fuel_temp_comp_k1_x100.size) * 8)
+                signed_k1 = self._decode_signed_value(raw_value, bits)
+                value = int(signed_k1)
+                if self._calibration_temp_comp_k1_x100_current != signed_k1:
+                    self._calibration_temp_comp_k1_x100_current = int(signed_k1)
+                    self._append_log(f"Калибровка: считан коэффициент K1 = {int(signed_k1)}.", RowColor.green)
+                recompute_temp_comp = True
 
             if self._calibration_sequence_waiting_action == "read_level_0" and did == int(UdsData.empty_fuel_tank.pid):
                 self._finish_calibration_sequence_wait("read_level_0")
@@ -548,7 +1661,8 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 self._finish_calibration_sequence_wait("read_level_100")
                 self._calibration_session_ready = True
                 self._start_calibration_poll_timer()
-                self.readCalibrationCurrentLevel()
+                self._request_calibration_runtime_snapshot()
+                self._request_calibration_temp_comp_k1_read()
                 self._append_log(
                     "Калибровка: extended-сессия и Security Access активны, исходные уровни считаны.",
                     RowColor.green,
@@ -596,6 +1710,10 @@ class AppControllerCalibrationMixin(AppControllerContract):
 
             if changed:
                 self.calibrationValuesChanged.emit()
+            if recompute_temp_comp:
+                self._recompute_calibration_temp_comp_metrics()
+            elif emit_temp_comp_signal:
+                self.calibrationTempCompChanged.emit()
             return
 
         if self._calibration_write_service.verify_answer_write_data(payload):
@@ -606,6 +1724,9 @@ class AppControllerCalibrationMixin(AppControllerContract):
             elif did == int(UdsData.full_fuel_tank.pid):
                 self._append_log("Калибровка: уровень 100% успешно сохранен.", RowColor.green)
                 self.readCalibrationLevel100()
+            elif did == int(UdsData.fuel_temp_comp_k1_x100.pid):
+                self._append_log("Калибровка: коэффициент K1 успешно сохранен.", RowColor.green)
+                self._request_calibration_temp_comp_k1_read()
 
             if self._calibration_restore_active and self._calibration_restore_current_did == did:
                 self._send_next_calibration_restore_write()
@@ -620,7 +1741,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
             return
         if self._programming_active:
             return
-        self.readCalibrationCurrentLevel()
+        self._request_calibration_runtime_snapshot()
 
     def _start_calibration_poll_timer(self):
         if self._calibration_poll_timer.interval() != self._calibration_poll_interval_ms:
@@ -715,8 +1836,10 @@ class AppControllerCalibrationMixin(AppControllerContract):
         new_values: list[int | None] = [None]
         new_options: list[str] = ["Авто (по текущим UDS ID)"]
 
-        for device_sa in self._observed_candidate_values:
-            sa = int(device_sa) & 0xFF
+        merged_candidates = set(int(value) & 0xFF for value in self._observed_candidate_values)
+        merged_candidates.update(int(value) & 0xFF for value in self._calibration_csv_node_candidates)
+
+        for sa in sorted(merged_candidates):
             new_values.append(sa)
             # Статичные подписи: без live-счетчиков, чтобы выбор не "прыгал" при обновлении трафика.
             new_options.append(f"Узел 0x{sa:02X}")
@@ -758,3 +1881,30 @@ class AppControllerCalibrationMixin(AppControllerContract):
         if value < 0 or value > 0xFFFF:
             raise ValueError("Значение калибровки вне диапазона 0..65535.")
         return int(value)
+
+    @classmethod
+    def _resolve_calibration_k1_write_value(cls, text, fallback_value: int | None) -> int:
+        """Цель функции в удобном вводе K1 из UI, затем она парсит dec/hex и приводит значение к int16."""
+        raw = str(text).strip()
+        if not raw:
+            if fallback_value is None:
+                raise ValueError("Текущее значение K1 неизвестно. Сначала прочитайте DID 0x001B или введите число вручную.")
+            return cls._saturate_int16(int(fallback_value))
+
+        base = 16 if raw.lower().startswith(("0x", "-0x", "+0x")) else 10
+        try:
+            value = int(raw, base)
+        except ValueError as exc:
+            raise ValueError("Некорректное значение K1. Используйте signed dec или 0xHEX.") from exc
+
+        if base == 16 and value >= 0:
+            if value > 0xFFFF:
+                raise ValueError("HEX-значение K1 должно быть в диапазоне 0x0000..0xFFFF.")
+            if value > cls._INT16_MAX:
+                value -= 0x10000
+
+        if value < cls._INT16_MIN or value > cls._INT16_MAX:
+            raise ValueError("Значение K1 вне диапазона int16 (-32768..32767).")
+
+        return int(value)
+

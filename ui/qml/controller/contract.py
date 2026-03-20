@@ -15,6 +15,7 @@ class AppControllerContract:
     calibrationNodeSelectionChanged: Any
     calibrationPollingIntervalChanged: Any
     calibrationStateChanged: Any
+    calibrationTempCompChanged: Any
     calibrationValuesChanged: Any
     calibrationVerificationChanged: Any
     calibrationWizardChanged: Any
@@ -79,6 +80,7 @@ class AppControllerContract:
     _calibration_level_100_known: Any
     _calibration_node_options: Any
     _calibration_node_values: Any
+    _calibration_csv_node_candidates: Any
     _calibration_poll_interval_ms: Any
     _calibration_poll_timer: Any
     _calibration_read_service: Any
@@ -90,6 +92,25 @@ class AppControllerContract:
     _calibration_session_ready: Any
     _calibration_session_service: Any
     _calibration_target_node_sa: Any
+    _calibration_temp_comp_status: Any
+    _calibration_temp_comp_samples: Any
+    _calibration_temp_comp_samples_by_node: Any
+    _calibration_temp_comp_sample_limit: Any
+    _calibration_temp_comp_last_period: Any
+    _calibration_temp_comp_last_temperature_x10: Any
+    _calibration_temp_comp_last_temperature_c: Any
+    _calibration_temp_comp_k1_x100_current: Any
+    _calibration_temp_comp_k1_x100_base: Any
+    _calibration_temp_comp_k1_x100_recommended: Any
+    _calibration_temp_comp_k1_x100_delta: Any
+    _calibration_temp_comp_k1_x100_next: Any
+    _calibration_temp_comp_period_slope_before: Any
+    _calibration_temp_comp_period_slope_after: Any
+    _calibration_temp_comp_level_slope_before: Any
+    _calibration_temp_comp_level_slope_after: Any
+    _calibration_temp_comp_period_reduction_percent: Any
+    _calibration_temp_comp_level_reduction_percent: Any
+    _calibration_temp_comp_chart_series: Any
     _calibration_verify0_ok: Any
     _calibration_verify100_ok: Any
     _calibration_verify_tolerance: Any

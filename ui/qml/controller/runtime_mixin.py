@@ -211,14 +211,89 @@ class AppControllerRuntimeMixin(AppControllerContract):
         return value
 
     @staticmethod
+    def _expand_qvariant_items(value):
+        """Цель функции в нормализации QVariant/QJSValue, затем она разворачивает вход в плоский список элементов."""
+        pending: list[object] = [value]
+        normalized: list[object] = []
+
+        while len(pending) > 0:
+            current = pending.pop(0)
+            if current is None:
+                continue
+
+            if hasattr(current, "isArray") and hasattr(current, "property"):
+                try:
+                    if bool(current.isArray()):
+                        length_value = current.property("length")
+                        if hasattr(length_value, "toVariant"):
+                            length_value = length_value.toVariant()
+                        length = int(length_value)
+                        array_items = [current.property(index) for index in range(max(length, 0))]
+                        pending = array_items + pending
+                        continue
+                except Exception:
+                    pass
+
+            converted = current
+            if hasattr(current, "toVariant"):
+                try:
+                    converted = current.toVariant()
+                except Exception:
+                    converted = current
+
+            if converted is None:
+                continue
+
+            if isinstance(converted, dict):
+                indexed_items: list[tuple[int, object]] = []
+                for key, item in converted.items():
+                    try:
+                        indexed_items.append((int(key), item))
+                    except Exception:
+                        continue
+                if len(indexed_items) > 0:
+                    pending = [item for _, item in sorted(indexed_items, key=lambda pair: pair[0])] + pending
+                    continue
+
+            if isinstance(converted, (list, tuple, set)):
+                pending = list(converted) + pending
+                continue
+
+            normalized.append(converted)
+
+        return normalized
+
+    @staticmethod
     def _to_local_path(path_or_url):
         if not path_or_url:
             return ""
 
+        if hasattr(path_or_url, "toVariant"):
+            try:
+                path_or_url = path_or_url.toVariant()
+            except Exception:
+                pass
+
+        if isinstance(path_or_url, (list, tuple, set)):
+            if len(path_or_url) <= 0:
+                return ""
+            first_item = next((item for item in path_or_url if item), None)
+            if first_item is None:
+                return ""
+            path_or_url = first_item
+
+        if hasattr(path_or_url, "__fspath__"):
+            return str(path_or_url)
+
         if isinstance(path_or_url, QUrl):
             parsed = path_or_url
         else:
-            parsed = QUrl(path_or_url)
+            raw_path = str(path_or_url).strip()
+            if not raw_path:
+                return ""
+            if "://" not in raw_path and not raw_path.casefold().startswith("file:"):
+                return raw_path
+            parsed = QUrl(raw_path)
 
         if parsed.isLocalFile():
             return parsed.toLocalFile()

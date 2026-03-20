@@ -30,6 +30,7 @@ class UdsData:
         "k_fuel_level"      : UdsVar(0x0017, 2, "Коэффициент фильтра"),
         "raw_fuel_level"    : UdsVar(0x0018, 2, "Сырые данные уровня топлива"),
         "raw_temperature"   : UdsVar(0x0019, 2, "Сырые данные текущей температуры"),
+        "fuel_temp_comp_k1_x100": UdsVar(0x001B, 2, "Температурная компенсация K1 x100"),
 
         "vmecusndid"        : UdsVar(0xF188, 18, "Номер ПО ЭБУ изготовителя ТС"),
         "vmecusvndid"       : UdsVar(0xF189, 32, "Номер версии ПО ЭБУ изготовителя ТС"),
@@ -63,6 +64,7 @@ class UdsData:
     k_fuel_level        = vars.get("k_fuel_level")
     raw_fuel_level      = vars.get("raw_fuel_level")
     raw_temperature     = vars.get("raw_temperature")
+    fuel_temp_comp_k1_x100 = vars.get("fuel_temp_comp_k1_x100")
 
     vmecusndid          = vars.get("vmecusndid")
     vmecusvndid         = vars.get("vmecusvndid")
