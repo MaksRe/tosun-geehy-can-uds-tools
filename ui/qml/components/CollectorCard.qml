@@ -369,7 +369,7 @@ Card {
                         z: 1
                         clip: true
                         spacing: 4
-                        readonly property real columnWidth: Math.max(52, Math.floor((width - 22) / 7))
+                        readonly property real columnWidth: Math.max(52, Math.floor((width - 22) / 8))
 
                         Text {
                             Layout.fillWidth: true
@@ -389,6 +389,7 @@ Card {
                                     "Узел",
                                     "Период",
                                     "Топливо",
+                                    "Топл.(расч.)",
                                     "Температура",
                                     "Cnt(топл.)",
                                     "Cnt(темп.)",
@@ -432,6 +433,7 @@ Card {
                                     Text { Layout.preferredWidth: tableArea.columnWidth; text: modelData.node; color: root.textMain; font.pixelSize: 11; font.family: "Bahnschrift"; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
                                     Text { Layout.preferredWidth: tableArea.columnWidth; text: modelData.period; color: root.textMain; font.pixelSize: 11; font.family: "Bahnschrift"; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
                                     Text { Layout.preferredWidth: tableArea.columnWidth; text: modelData.fuelLevel; color: root.textMain; font.pixelSize: 11; font.family: "Bahnschrift"; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
+                                    Text { Layout.preferredWidth: tableArea.columnWidth; text: modelData.fuelFromPeriod; color: root.textMain; font.pixelSize: 11; font.family: "Bahnschrift"; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
                                     Text { Layout.preferredWidth: tableArea.columnWidth; text: modelData.temperature; color: root.textMain; font.pixelSize: 11; font.family: "Bahnschrift"; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
                                     Text { Layout.preferredWidth: tableArea.columnWidth; text: modelData.fuelCount; color: root.textMain; font.pixelSize: 11; font.family: "Bahnschrift"; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
                                     Text { Layout.preferredWidth: tableArea.columnWidth; text: modelData.temperatureCount; color: root.textMain; font.pixelSize: 11; font.family: "Bahnschrift"; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }

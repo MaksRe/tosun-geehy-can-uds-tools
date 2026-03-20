@@ -174,6 +174,7 @@ class AppController(
         self._collector_combined_csv_manager: CollectorCombinedCsvManager | None = None
         self._collector_poll_vars = [
             UdsData.curr_fuel_tank,
+            UdsData.raw_fuel_level,
             UdsData.raw_temperature,
         ]
         self._collector_poll_node_index = 0

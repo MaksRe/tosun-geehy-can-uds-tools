@@ -749,11 +749,16 @@ class AppControllerCollectorMixin(AppControllerContract):
             node = self._collector_nodes.get(node_sa)
             if not node:
                 continue
+            fuel_from_period_x10 = int(
+                node.get("fuelLevelX10", int(round(float(node.get("fuelLevel", 0.0)) * 10.0)))
+            )
+            fuel_from_period = float(fuel_from_period_x10) / 10.0
             rows.append(
                 {
                     "node": f"0x{int(node_sa) & 0xFF:02X}",
                     "period": str(int(node.get("period", 0))),
                     "fuelLevel": f"{float(node.get('fuelLevel', 0.0)):.1f}",
+                    "fuelFromPeriod": f"{fuel_from_period:+.1f}",
                     "temperature": f"{float(node.get('temperature', 0.0)):.1f}",
                     "fuelCount": str(int(node.get("fuelCount", 0))),
                     "temperatureCount": str(int(node.get("temperatureCount", 0))),
@@ -937,8 +942,9 @@ class AppControllerCollectorMixin(AppControllerContract):
                 node["fullKnown"] = True
                 nodes_changed = True
         elif did == int(UdsData.raw_fuel_level.pid):
-            # Keep value for diagnostics only. Main trend/PNG/CSV fuel now comes from period-based formula.
-            node["fuelLevelReported"] = value / 10.0
+            fuel_level_did = float(value) / 10.0
+            node["fuelLevel"] = fuel_level_did
+            node["fuelLevelReported"] = fuel_level_did
             nodes_changed = True
         elif did == int(UdsData.raw_temperature.pid):
             bits = max(8, int(UdsData.raw_temperature.size) * 8)
