@@ -119,7 +119,9 @@ Rectangle {
             "_idx": first._idx,
             "fuel": smoothFuel,
             "temperature": smoothTemperature,
-            "time": first.time
+            "time": first.time,
+            "isHighlight": !!first.isHighlight,
+            "highlightLabel": first.highlightLabel ? String(first.highlightLabel) : ""
         }]
 
         for (var i = 1; i < sourcePoints.length; i++) {
@@ -137,7 +139,9 @@ Rectangle {
                 "_idx": point._idx,
                 "fuel": smoothFuel,
                 "temperature": smoothTemperature,
-                "time": point.time
+                "time": point.time,
+                "isHighlight": !!point.isHighlight,
+                "highlightLabel": point.highlightLabel ? String(point.highlightLabel) : ""
             })
         }
         return result
@@ -158,7 +162,9 @@ Rectangle {
                 "_idx": i,
                 "fuel": Number(p.fuel),
                 "temperature": Number(p.temperature),
-                "time": p.time
+                "time": p.time,
+                "isHighlight": !!p.isHighlight,
+                "highlightLabel": p.highlightLabel ? String(p.highlightLabel) : ""
             })
         }
         return smoothPoints(decimatePoints(selected, root.maxRenderPoints))
@@ -598,12 +604,18 @@ Rectangle {
                     var yv = root.yValue(point)
                     if (!isFinite(xv) || !isFinite(yv))
                         return null
+                    var highlightEnabled = !!(point && point.isHighlight)
+                    var highlightLabel = ""
+                    if (highlightEnabled && point.highlightLabel !== undefined && point.highlightLabel !== null)
+                        highlightLabel = String(point.highlightLabel)
                     var entry = {
                         "idx": idx,
                         "x": mapX(xv),
                         "y": mapY(yv),
                         "rawX": xv,
-                        "rawY": yv
+                        "rawY": yv,
+                        "isHighlight": highlightEnabled,
+                        "highlightLabel": highlightLabel
                     }
                     if (!isFinite(entry.x) || !isFinite(entry.y))
                         return null
@@ -629,6 +641,7 @@ Rectangle {
                     var last = null
                     var minEntry = null
                     var maxEntry = null
+                    var highlightEntries = []
 
                     for (var j = start; j < end; j++) {
                         var entry = addRawPoint(sourcePoints[j], j)
@@ -645,6 +658,8 @@ Rectangle {
                             minEntry = entry
                         if (entry.y > maxEntry.y)
                             maxEntry = entry
+                        if (entry.isHighlight)
+                            highlightEntries.push(entry)
                     }
 
                     if (!first)
@@ -660,6 +675,10 @@ Rectangle {
                     mids.sort(function(a, b) { return a.idx - b.idx })
                     for (var m = 0; m < mids.length; m++)
                         pushUnique(result, mids[m])
+
+                    highlightEntries.sort(function(a, b) { return a.idx - b.idx })
+                    for (var hidx = 0; hidx < highlightEntries.length; hidx++)
+                        pushUnique(result, highlightEntries[hidx])
 
                     pushUnique(result, last)
                 }
@@ -760,6 +779,34 @@ Rectangle {
                         var valueText = renderPoints[lb].rawX.toFixed(1) + ", " + renderPoints[lb].rawY.toFixed(1)
                         drawLabel(ctx, lx, ly - 6, valueText, color)
                     }
+                }
+
+                for (var hi = 0; hi < renderPoints.length; hi++) {
+                    var highlighted = renderPoints[hi]
+                    if (!highlighted.isHighlight)
+                        continue
+                    if (highlighted.x < l || highlighted.x > (l + pw) || highlighted.y < t || highlighted.y > (t + ph))
+                        continue
+
+                    ctx.save()
+                    ctx.globalAlpha = 1.0
+                    ctx.fillStyle = "#ffffff"
+                    ctx.strokeStyle = color
+                    ctx.lineWidth = 2
+                    ctx.beginPath()
+                    ctx.arc(highlighted.x, highlighted.y, 5.0, 0, Math.PI * 2)
+                    ctx.fill()
+                    ctx.stroke()
+                    ctx.beginPath()
+                    ctx.moveTo(highlighted.x - 6, highlighted.y)
+                    ctx.lineTo(highlighted.x + 6, highlighted.y)
+                    ctx.moveTo(highlighted.x, highlighted.y - 6)
+                    ctx.lineTo(highlighted.x, highlighted.y + 6)
+                    ctx.stroke()
+                    ctx.restore()
+
+                    if (highlighted.highlightLabel && highlighted.highlightLabel.length > 0)
+                        drawLabel(ctx, highlighted.x, highlighted.y - 8, highlighted.highlightLabel, color)
                 }
             }
             ctx.restore()

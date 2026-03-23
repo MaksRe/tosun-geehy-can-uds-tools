@@ -386,7 +386,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot()
     def clearCalibrationTempCompSamples(self):
-        """Цель функции в очистке анализируемой выборки, затем она удаляет собранные точки без сброса текущего K1."""
+        """Цель функции в очистке анализируемой выборки, затем она удаляет собранные точки без сброса текущих K1/K0."""
         self._reset_calibration_temp_comp_state(
             clear_samples=True,
             clear_coefficients=False,
@@ -410,6 +410,22 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
         self._append_log("Калибровка: чтение коэффициента K1 (DID 0x001B).", RowColor.blue)
 
+    @Slot()
+    def readCalibrationTempCompK0(self):
+        """Цель функции в чтении коэффициента смещения, затем она отправляет запрос DID 0x001C."""
+        if not self._can.is_connect:
+            self.infoMessage.emit("Калибровка", "Сначала подключите CAN-адаптер.")
+            return
+        if not self._can.is_trace:
+            self.infoMessage.emit("Калибровка", "Сначала включите трассировку CAN.")
+            return
+
+        if not self._request_calibration_temp_comp_k0_read():
+            self.infoMessage.emit("Калибровка", "Не удалось отправить чтение DID 0x001C.")
+            return
+
+        self._append_log("Калибровка: чтение коэффициента K0 (DID 0x001C).", RowColor.blue)
+
     @Slot("QVariant")
     def loadCalibrationTempCompCsv(self, path_or_urls):
         """Цель функции в офлайн-анализе температурной компенсации, затем она загружает CSV логи коллектора и считает коэффициенты."""
@@ -426,7 +442,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
                 paths.append(Path(resolved))
 
         self._append_log(
-            f"Калибровка: получены пути CSV для анализа K1: {len(paths)}.",
+            f"Калибровка: получены пути CSV для анализа K1/K0: {len(paths)}.",
             RowColor.blue,
         )
         if len(paths) == 0:
@@ -442,7 +458,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             return
 
         self._append_log(
-            f"Калибровка: загружено CSV файлов для анализа K1: {loaded_files}, точек: {loaded_points}.",
+            f"Калибровка: загружено CSV файлов для анализа K1/K0: {loaded_files}, точек: {loaded_points}.",
             RowColor.green,
         )
         self.infoMessage.emit(
@@ -482,6 +498,38 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
         self.infoMessage.emit("Калибровка", "Не удалось отправить запись DID 0x001B.")
 
+    @Slot(str)
+    def writeCalibrationTempCompK0(self, value_text):
+        """Цель функции в записи нового K0, затем она валидирует ввод и отправляет UDS 0x2E по DID 0x001C."""
+        if not self._ensure_calibration_write_ready("запись коэффициента K0"):
+            return
+
+        if len(self._calibration_write_verify_pending) > 0:
+            self.infoMessage.emit(
+                "Калибровка",
+                "Дождитесь завершения текущей автопроверки DID перед записью нового K0.",
+            )
+            return
+
+        try:
+            value = self._resolve_calibration_k0_write_value(value_text, self._calibration_temp_comp_k0_count_current)
+        except ValueError as exc:
+            self.infoMessage.emit("Калибровка", str(exc))
+            return
+
+        write_payload = int(value) & 0xFFFF
+        if self._calibration_write_service.write_data(
+            UdsData.fuel_temp_comp_k0_count,
+            write_payload,
+            tx_identifier=self._build_calibration_tx_identifier(),
+        ):
+            self._calibration_write_verify_pending[int(UdsData.fuel_temp_comp_k0_count.pid)] = int(value)
+            self.calibrationVerificationChanged.emit()
+            self._append_log(f"Калибровка: запись коэффициента K0 = {int(value)}.", RowColor.blue)
+            return
+
+        self.infoMessage.emit("Калибровка", "Не удалось отправить запись DID 0x001C.")
+
     @Slot()
     def applyCalibrationTempCompNextK1(self):
         """Цель функции в быстром применении рекомендации, затем она записывает рассчитанный next K1 в DID 0x001B."""
@@ -491,6 +539,16 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             return
 
         self.writeCalibrationTempCompK1(str(int(next_k1)))
+
+    @Slot()
+    def applyCalibrationTempCompNextK0(self):
+        """Цель функции в быстром применении рекомендации, затем она записывает рассчитанный next K0 в DID 0x001C."""
+        next_k0 = self._calibration_temp_comp_k0_count_next
+        if next_k0 is None:
+            self.infoMessage.emit("Калибровка", "Сначала соберите данные и дождитесь расчета next K0.")
+            return
+
+        self.writeCalibrationTempCompK0(str(int(next_k0)))
 
     @Slot(str)
     def saveCalibrationLevel0(self, value_text):

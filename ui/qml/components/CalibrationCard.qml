@@ -29,6 +29,16 @@ Item {
         targetField.text = captured
     }
 
+    function seriesField(seriesItem, fieldName, fallbackValue) {
+        if (!seriesItem || fieldName === undefined || fieldName === null) {
+            return fallbackValue
+        }
+        if (seriesItem[fieldName] !== undefined && seriesItem[fieldName] !== null) {
+            return seriesItem[fieldName]
+        }
+        return fallbackValue
+    }
+
     Layout.fillWidth: true
     implicitHeight: contentColumn.implicitHeight + (root.contentPadding * 2)
     clip: true
@@ -534,7 +544,7 @@ Item {
             Layout.fillWidth: true
             Layout.fillHeight: expanded
             Layout.minimumHeight: 44
-            title: "Температурная компенсация K1"
+            title: "Температурная компенсация K1/K0"
             hintText: "Офлайн-анализ CSV из Коллектора (без онлайн-дублирования)"
             cardColor: root.cardColor
             cardBorder: root.cardBorder
@@ -642,7 +652,18 @@ Item {
                         }
 
                         FancyButton {
-                            Layout.preferredWidth: 146
+                            Layout.preferredWidth: 110
+                            Layout.preferredHeight: 30
+                            text: "Прочитать K0"
+                            tone: "#0f766e"
+                            toneHover: "#115e59"
+                            tonePressed: "#134e4a"
+                            enabled: root.appController !== null
+                            onClicked: if (root.appController) root.appController.readCalibrationTempCompK0()
+                        }
+
+                        FancyButton {
+                            Layout.preferredWidth: 128
                             Layout.preferredHeight: 30
                             text: "Применить next K1"
                             tone: "#16a34a"
@@ -650,6 +671,17 @@ Item {
                             tonePressed: "#166534"
                             enabled: root.appController && root.appController.calibrationTempCompCanApplyNext
                             onClicked: if (root.appController) root.appController.applyCalibrationTempCompNextK1()
+                        }
+
+                        FancyButton {
+                            Layout.preferredWidth: 128
+                            Layout.preferredHeight: 30
+                            text: "Применить next K0"
+                            tone: "#16a34a"
+                            toneHover: "#15803d"
+                            tonePressed: "#166534"
+                            enabled: root.appController && root.appController.calibrationTempCompCanApplyNextK0
+                            onClicked: if (root.appController) root.appController.applyCalibrationTempCompNextK0()
                         }
 
                         Item { Layout.fillWidth: true }
@@ -682,121 +714,230 @@ Item {
                             onClicked: if (root.appController) root.appController.writeCalibrationTempCompK1(tempCompK1Field.text)
                         }
 
-                        Item { Layout.fillWidth: true }
+                        FancyTextField {
+                            id: tempCompK0Field
+                            Layout.preferredWidth: 200
+                            Layout.preferredHeight: 30
+                            placeholderText: "K0 (signed dec / 0xHEX)"
+                            textColor: root.textMain
+                            bgColor: root.inputBg
+                            borderColor: root.inputBorder
+                            focusBorderColor: root.inputFocus
+                            onAccepted: if (root.appController) root.appController.writeCalibrationTempCompK0(text)
+                        }
+
+                        FancyButton {
+                            Layout.preferredWidth: 132
+                            Layout.preferredHeight: 30
+                            text: "Записать K0"
+                            tone: "#0284c7"
+                            toneHover: "#0369a1"
+                            tonePressed: "#075985"
+                            enabled: root.appController !== null
+                            onClicked: if (root.appController) root.appController.writeCalibrationTempCompK0(tempCompK0Field.text)
+                        }
                     }
 
-                    GridLayout {
+                    ColumnLayout {
                         Layout.fillWidth: true
-                        columns: 3
-                        rowSpacing: 6
-                        columnSpacing: 8
+                        spacing: 6
 
-                        LabelValue {
+                        Rectangle {
                             Layout.fillWidth: true
-                            labelText: "Диапазон периода (CSV)"
-                            valueText: root.appController ? root.appController.calibrationTempCompPeriodRangeText : "-"
-                            labelColor: root.textSoft
-                            valueColor: root.textMain
-                            fontFamily: "Bahnschrift"
+                            radius: 7
+                            color: "#eff6ff"
+                            border.color: "#bfdbfe"
+                            implicitHeight: 28
+
+                            Text {
+                                anchors.fill: parent
+                                anchors.leftMargin: 10
+                                anchors.rightMargin: 10
+                                verticalAlignment: Text.AlignVCenter
+                                text: "Этап 1. CSV"
+                                color: "#1e3a8a"
+                                font.pixelSize: 11
+                                font.bold: true
+                                font.family: "Bahnschrift"
+                            }
                         }
 
-                        LabelValue {
+                        GridLayout {
                             Layout.fillWidth: true
-                            labelText: "Диапазон температуры (CSV)"
-                            valueText: root.appController ? root.appController.calibrationTempCompTemperatureRangeText : "-"
-                            labelColor: root.textSoft
-                            valueColor: root.textMain
-                            fontFamily: "Bahnschrift"
+                            columns: 3
+                            rowSpacing: 4
+                            columnSpacing: 6
+
+                            LabelValue {
+                                Layout.fillWidth: true
+                                labelText: "Период, count"
+                                valueText: root.appController ? root.appController.calibrationTempCompPeriodRangeText : "-"
+                                labelColor: root.textSoft
+                                valueColor: root.textMain
+                                fontFamily: "Bahnschrift"
+                            }
+
+                            LabelValue {
+                                Layout.fillWidth: true
+                                labelText: "Темп., °C"
+                                valueText: root.appController ? root.appController.calibrationTempCompTemperatureRangeText : "-"
+                                labelColor: root.textSoft
+                                valueColor: root.textMain
+                                fontFamily: "Bahnschrift"
+                            }
+
+                            LabelValue {
+                                Layout.fillWidth: true
+                                labelText: "Уровень, %"
+                                valueText: root.appController ? root.appController.calibrationTempCompLevelRangeText : "-"
+                                labelColor: root.textSoft
+                                valueColor: root.textMain
+                                fontFamily: "Bahnschrift"
+                            }
                         }
 
-                        LabelValue {
+                        Rectangle {
                             Layout.fillWidth: true
-                            labelText: "Диапазон уровня (CSV)"
-                            valueText: root.appController ? root.appController.calibrationTempCompLevelRangeText : "-"
-                            labelColor: root.textSoft
-                            valueColor: root.textMain
-                            fontFamily: "Bahnschrift"
+                            radius: 7
+                            color: "#f0fdf4"
+                            border.color: "#bbf7d0"
+                            implicitHeight: 28
+
+                            Text {
+                                anchors.fill: parent
+                                anchors.leftMargin: 10
+                                anchors.rightMargin: 10
+                                verticalAlignment: Text.AlignVCenter
+                                text: "Этап 2. K1/K0"
+                                color: "#14532d"
+                                font.pixelSize: 11
+                                font.bold: true
+                                font.family: "Bahnschrift"
+                            }
                         }
 
-                        LabelValue {
+                        GridLayout {
                             Layout.fillWidth: true
-                            labelText: "Рекомендованный K1 (CSV)"
-                            valueText: root.appController ? root.appController.calibrationTempCompRecommendedK1Text : "-"
-                            labelColor: root.textSoft
-                            valueColor: "#0f766e"
-                            fontFamily: "Bahnschrift"
+                            columns: 3
+                            rowSpacing: 4
+                            columnSpacing: 6
+
+                            LabelValue {
+                                Layout.fillWidth: true
+                                labelText: "Текущие K1/K0"
+                                valueText: root.appController ? (root.appController.calibrationTempCompCurrentK1Text + " / " + root.appController.calibrationTempCompCurrentK0Text) : "-"
+                                labelColor: root.textSoft
+                                valueColor: root.textMain
+                                fontFamily: "Bahnschrift"
+                            }
+
+                            LabelValue {
+                                Layout.fillWidth: true
+                                labelText: "Рекоменд. K1/K0"
+                                valueText: root.appController ? (root.appController.calibrationTempCompRecommendedK1Text + " / " + root.appController.calibrationTempCompRecommendedK0Text) : "-"
+                                labelColor: root.textSoft
+                                valueColor: "#0f766e"
+                                fontFamily: "Bahnschrift"
+                            }
+
+                            LabelValue {
+                                Layout.fillWidth: true
+                                labelText: "dK1 / dK0"
+                                valueText: root.appController ? (root.appController.calibrationTempCompDeltaK1Text + " / " + root.appController.calibrationTempCompDeltaK0Text) : "-"
+                                labelColor: root.textSoft
+                                valueColor: root.textMain
+                                fontFamily: "Bahnschrift"
+                            }
                         }
 
-                        LabelValue {
+                        Rectangle {
                             Layout.fillWidth: true
-                            labelText: "Поправка dK1 (к базовому)"
-                            valueText: root.appController ? root.appController.calibrationTempCompDeltaK1Text : "-"
-                            labelColor: root.textSoft
-                            valueColor: root.textMain
-                            fontFamily: "Bahnschrift"
+                            radius: 7
+                            color: "#fff7ed"
+                            border.color: "#fed7aa"
+                            implicitHeight: 28
+
+                            Text {
+                                anchors.fill: parent
+                                anchors.leftMargin: 10
+                                anchors.rightMargin: 10
+                                verticalAlignment: Text.AlignVCenter
+                                text: "Этап 3. Ошибка и дрейф"
+                                color: "#9a3412"
+                                font.pixelSize: 11
+                                font.bold: true
+                                font.family: "Bahnschrift"
+                            }
                         }
 
-                        LabelValue {
+                        GridLayout {
                             Layout.fillWidth: true
-                            labelText: "Итоговый K1"
-                            valueText: root.appController ? root.appController.calibrationTempCompNextK1Text : "-"
-                            labelColor: root.textSoft
-                            valueColor: "#166534"
-                            fontFamily: "Bahnschrift"
+                            columns: 3
+                            rowSpacing: 4
+                            columnSpacing: 6
+
+                            LabelValue {
+                                Layout.fillWidth: true
+                                labelText: "Ошибка min..max, %"
+                                valueText: root.appController ? (root.appController.calibrationTempCompErrorRangeBeforeText + " -> " + root.appController.calibrationTempCompErrorRangeAfterText) : "-"
+                                labelColor: root.textSoft
+                                valueColor: root.textMain
+                                fontFamily: "Bahnschrift"
+                            }
+
+                            LabelValue {
+                                Layout.fillWidth: true
+                                labelText: "Max |ошибка|, %"
+                                valueText: root.appController ? (root.appController.calibrationTempCompErrorMaxBeforeText + " -> " + root.appController.calibrationTempCompErrorMaxAfterText) : "-"
+                                labelColor: root.textSoft
+                                valueColor: root.textMain
+                                fontFamily: "Bahnschrift"
+                            }
+
+                            LabelValue {
+                                Layout.fillWidth: true
+                                labelText: "P95, %"
+                                valueText: root.appController ? (root.appController.calibrationTempCompErrorP95BeforeText + " -> " + root.appController.calibrationTempCompErrorP95AfterText) : "-"
+                                labelColor: root.textSoft
+                                valueColor: root.textMain
+                                fontFamily: "Bahnschrift"
+                            }
+
+                            LabelValue {
+                                Layout.fillWidth: true
+                                labelText: "Дрейф ур., %/°C"
+                                valueText: root.appController ? (root.appController.calibrationTempCompSlopeBeforeLevelText + " -> " + root.appController.calibrationTempCompSlopeAfterLevelText) : "-"
+                                labelColor: root.textSoft
+                                valueColor: root.textMain
+                                fontFamily: "Bahnschrift"
+                            }
+
+                            LabelValue {
+                                Layout.fillWidth: true
+                                labelText: "Дрейф пер., count/°C"
+                                valueText: root.appController ? (root.appController.calibrationTempCompSlopeBeforePeriodText + " -> " + root.appController.calibrationTempCompSlopeAfterPeriodText) : "-"
+                                labelColor: root.textSoft
+                                valueColor: root.textMain
+                                fontFamily: "Bahnschrift"
+                            }
+
+                            LabelValue {
+                                Layout.fillWidth: true
+                                labelText: "Снижение ур./пер."
+                                valueText: root.appController ? (root.appController.calibrationTempCompReductionLevelText + " / " + root.appController.calibrationTempCompReductionPeriodText) : "-"
+                                labelColor: root.textSoft
+                                valueColor: "#166534"
+                                fontFamily: "Bahnschrift"
+                            }
                         }
 
-                        LabelValue {
+                        Text {
                             Layout.fillWidth: true
-                            labelText: "Дрейф периода до"
-                            valueText: root.appController ? root.appController.calibrationTempCompSlopeBeforePeriodText : "-"
-                            labelColor: root.textSoft
-                            valueColor: root.textMain
-                            fontFamily: "Bahnschrift"
-                        }
-
-                        LabelValue {
-                            Layout.fillWidth: true
-                            labelText: "Дрейф периода после рекоменд."
-                            valueText: root.appController ? root.appController.calibrationTempCompSlopeAfterPeriodText : "-"
-                            labelColor: root.textSoft
-                            valueColor: root.textMain
-                            fontFamily: "Bahnschrift"
-                        }
-
-                        LabelValue {
-                            Layout.fillWidth: true
-                            labelText: "Дрейф уровня до"
-                            valueText: root.appController ? root.appController.calibrationTempCompSlopeBeforeLevelText : "-"
-                            labelColor: root.textSoft
-                            valueColor: root.textMain
-                            fontFamily: "Bahnschrift"
-                        }
-
-                        LabelValue {
-                            Layout.fillWidth: true
-                            labelText: "Дрейф уровня после рекоменд."
-                            valueText: root.appController ? root.appController.calibrationTempCompSlopeAfterLevelText : "-"
-                            labelColor: root.textSoft
-                            valueColor: root.textMain
-                            fontFamily: "Bahnschrift"
-                        }
-
-                        LabelValue {
-                            Layout.fillWidth: true
-                            labelText: "Снижение дрейфа периода"
-                            valueText: root.appController ? root.appController.calibrationTempCompReductionPeriodText : "-"
-                            labelColor: root.textSoft
-                            valueColor: "#166534"
-                            fontFamily: "Bahnschrift"
-                        }
-
-                        LabelValue {
-                            Layout.fillWidth: true
-                            labelText: "Снижение дрейфа уровня"
-                            valueText: root.appController ? root.appController.calibrationTempCompReductionLevelText : "-"
-                            labelColor: root.textSoft
-                            valueColor: "#166534"
-                            fontFamily: "Bahnschrift"
+                            color: root.textSoft
+                            font.pixelSize: 10
+                            font.family: "Bahnschrift"
+                            text: "Формат метрик: текущее -> после рекомендаций. Цвета: красная/синяя/зеленая."
+                            elide: Text.ElideRight
                         }
                     }
 
@@ -819,7 +960,20 @@ Item {
                                 }
 
                                 Text {
-                                    text: modelData && modelData.node ? modelData.node : "-"
+                                    text: {
+                                        var baseText = String(root.seriesField(modelData, "node", "-"))
+                                        var maxErrorText = String(root.seriesField(modelData, "maxAbsLevelText", ""))
+                                        if (maxErrorText === "") {
+                                            var maxErrorValue = root.seriesField(modelData, "maxAbsLevel", null)
+                                            if (maxErrorValue !== null && maxErrorValue !== undefined) {
+                                                maxErrorText = Number(maxErrorValue).toFixed(3) + " %"
+                                            }
+                                        }
+                                        if (maxErrorText !== "") {
+                                            return baseText + " | max|ошибка| = " + maxErrorText
+                                        }
+                                        return baseText
+                                    }
                                     color: root.textSoft
                                     font.pixelSize: 11
                                     font.family: "Bahnschrift"
@@ -925,6 +1079,10 @@ Item {
                 var currentK1 = root.appController.calibrationTempCompCurrentK1Text
                 tempCompK1Field.text = (currentK1 && currentK1 !== "-") ? currentK1 : ""
             }
+            if (!tempCompK0Field.activeFocus) {
+                var currentK0 = root.appController.calibrationTempCompCurrentK0Text
+                tempCompK0Field.text = (currentK0 && currentK0 !== "-") ? currentK0 : ""
+            }
         }
     }
 
@@ -933,6 +1091,8 @@ Item {
             nodeSelector.currentIndex = root.appController.selectedCalibrationNodeIndex
             var currentK1 = root.appController.calibrationTempCompCurrentK1Text
             tempCompK1Field.text = (currentK1 && currentK1 !== "-") ? currentK1 : ""
+            var currentK0 = root.appController.calibrationTempCompCurrentK0Text
+            tempCompK0Field.text = (currentK0 && currentK0 !== "-") ? currentK0 : ""
         }
     }
 }

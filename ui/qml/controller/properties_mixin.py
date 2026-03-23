@@ -682,6 +682,13 @@ class AppControllerPropertiesMixin(AppControllerContract):
         return str(int(value))
 
     @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompCurrentK0Text(self):
+        value = self._calibration_temp_comp_k0_count_current
+        if value is None:
+            return "не считан (DID 0x001C)"
+        return str(int(value))
+
+    @Property(str, notify=calibrationTempCompChanged)
     def calibrationTempCompBaseK1Text(self):
         value = self._calibration_temp_comp_k1_x100_base
         if value is None:
@@ -714,6 +721,50 @@ class AppControllerPropertiesMixin(AppControllerContract):
     def calibrationTempCompNextK1Text(self):
         value = self._calibration_temp_comp_k1_x100_next
         if value is None:
+            if not self._calibration_temp_comp_has_enough_samples():
+                return "нужно >=2 точки"
+            return "не рассчитан"
+        return str(int(value))
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompBaseK0Text(self):
+        value = self._calibration_temp_comp_k0_count_base
+        if value is None:
+            if len(self._calibration_temp_comp_samples) <= 0:
+                return "нет данных"
+            return "0 (оффлайн)"
+        if self._calibration_temp_comp_k0_count_current is None:
+            return f"{int(value)} (оффлайн)"
+        return str(int(value))
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompRecommendedK0Text(self):
+        value = self._calibration_temp_comp_k0_count_recommended
+        if value is None:
+            if not self._calibration_temp_comp_has_level_calibration():
+                return "нужны 0% и 100%"
+            if not self._calibration_temp_comp_has_enough_samples():
+                return "нужно >=2 точки"
+            return "не рассчитан"
+        return str(int(value))
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompDeltaK0Text(self):
+        value = self._calibration_temp_comp_k0_count_delta
+        if value is None:
+            if not self._calibration_temp_comp_has_level_calibration():
+                return "нужны 0% и 100%"
+            if not self._calibration_temp_comp_has_enough_samples():
+                return "нужно >=2 точки"
+            return "не рассчитан"
+        return f"{int(value):+d}"
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompNextK0Text(self):
+        value = self._calibration_temp_comp_k0_count_next
+        if value is None:
+            if not self._calibration_temp_comp_has_level_calibration():
+                return "нужны 0% и 100%"
             if not self._calibration_temp_comp_has_enough_samples():
                 return "нужно >=2 точки"
             return "не рассчитан"
@@ -779,9 +830,81 @@ class AppControllerPropertiesMixin(AppControllerContract):
             return "не рассчитан"
         return f"{float(value):.2f} %"
 
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompErrorRangeBeforeText(self):
+        value = self._calibration_temp_comp_level_error_range_before
+        if value is None:
+            if not self._calibration_temp_comp_has_level_calibration():
+                return "нужны 0% и 100%"
+            if not self._calibration_temp_comp_has_enough_samples():
+                return "нужно >=2 точки"
+            return "не рассчитан"
+        low_value, high_value = value
+        return f"{float(low_value):.3f}..{float(high_value):.3f} %"
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompErrorRangeAfterText(self):
+        value = self._calibration_temp_comp_level_error_range_after
+        if value is None:
+            if not self._calibration_temp_comp_has_level_calibration():
+                return "нужны 0% и 100%"
+            if not self._calibration_temp_comp_has_enough_samples():
+                return "нужно >=2 точки"
+            return "не рассчитан"
+        low_value, high_value = value
+        return f"{float(low_value):.3f}..{float(high_value):.3f} %"
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompErrorMaxBeforeText(self):
+        value = self._calibration_temp_comp_level_error_max_before
+        if value is None:
+            if not self._calibration_temp_comp_has_level_calibration():
+                return "нужны 0% и 100%"
+            if not self._calibration_temp_comp_has_enough_samples():
+                return "нужно >=2 точки"
+            return "не рассчитан"
+        return f"{float(value):.3f} %"
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompErrorMaxAfterText(self):
+        value = self._calibration_temp_comp_level_error_max_after
+        if value is None:
+            if not self._calibration_temp_comp_has_level_calibration():
+                return "нужны 0% и 100%"
+            if not self._calibration_temp_comp_has_enough_samples():
+                return "нужно >=2 точки"
+            return "не рассчитан"
+        return f"{float(value):.3f} %"
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompErrorP95BeforeText(self):
+        value = self._calibration_temp_comp_level_error_p95_before
+        if value is None:
+            if not self._calibration_temp_comp_has_level_calibration():
+                return "нужны 0% и 100%"
+            if not self._calibration_temp_comp_has_enough_samples():
+                return "нужно >=2 точки"
+            return "не рассчитан"
+        return f"{float(value):.3f} %"
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompErrorP95AfterText(self):
+        value = self._calibration_temp_comp_level_error_p95_after
+        if value is None:
+            if not self._calibration_temp_comp_has_level_calibration():
+                return "нужны 0% и 100%"
+            if not self._calibration_temp_comp_has_enough_samples():
+                return "нужно >=2 точки"
+            return "не рассчитан"
+        return f"{float(value):.3f} %"
+
     @Property(bool, notify=calibrationTempCompChanged)
     def calibrationTempCompCanApplyNext(self):
         return self._calibration_temp_comp_k1_x100_next is not None
+
+    @Property(bool, notify=calibrationTempCompChanged)
+    def calibrationTempCompCanApplyNextK0(self):
+        return self._calibration_temp_comp_k0_count_next is not None
 
     @Property("QVariantList", notify=calibrationTempCompChanged)
     def calibrationTempCompTrendSeries(self):

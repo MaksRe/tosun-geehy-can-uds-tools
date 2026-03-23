@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import csv
+import math
 from pathlib import Path
 import re
 import time
@@ -65,6 +66,8 @@ class AppControllerCalibrationMixin(AppControllerContract):
             return "уровня 100%"
         if int(did) == int(UdsData.fuel_temp_comp_k1_x100.pid):
             return "коэффициента K1"
+        if int(did) == int(UdsData.fuel_temp_comp_k0_count.pid):
+            return "коэффициента K0"
         return f"DID 0x{int(did) & 0xFFFF:04X}"
 
     def _pending_calibration_write_did(self) -> int | None:
@@ -75,6 +78,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
             int(UdsData.empty_fuel_tank.pid),
             int(UdsData.full_fuel_tank.pid),
             int(UdsData.fuel_temp_comp_k1_x100.pid),
+            int(UdsData.fuel_temp_comp_k0_count.pid),
         ):
             if did in self._calibration_write_verify_pending:
                 return did
@@ -355,36 +359,52 @@ class AppControllerCalibrationMixin(AppControllerContract):
         return max(cls._INT16_MIN, min(cls._INT16_MAX, int(value)))
 
     @classmethod
-    def _apply_temperature_compensation_model(cls, raw_period: int, temperature_x10: int, k1_x100: int) -> int:
-        """Цель функции в точном повторении алгоритма МК, затем она считает Pcomp по формуле из fuel.c."""
+    def _apply_temperature_compensation_model(
+        cls,
+        raw_period: int,
+        temperature_x10: int,
+        k1_x100: int,
+        k0_count: int = 0,
+    ) -> int:
+        """Цель функции в точном повторении алгоритма МК, затем она считает Pcomp по формуле K1+K0 из fuel.c."""
         compensated_period = int(raw_period)
-        coefficient = int(k1_x100)
-        if coefficient != 0:
+        k1_coefficient = int(k1_x100)
+        if k1_coefficient != 0:
             d_temperature_x10 = int(temperature_x10) - int(cls._FUEL_TEMP_COMP_REF_X10)
-            delta_period = cls._c_trunc_div(coefficient * d_temperature_x10, 1000)
+            delta_period = cls._c_trunc_div(k1_coefficient * d_temperature_x10, 1000)
             compensated_period -= delta_period
 
-            if compensated_period < 0:
-                compensated_period = 0
-            if compensated_period > 0xFFFF:
-                compensated_period = 0xFFFF
+        compensated_period += int(k0_count)
+
+        if compensated_period < 0:
+            compensated_period = 0
+        if compensated_period > 0xFFFF:
+            compensated_period = 0xFFFF
 
         return int(compensated_period)
 
     @classmethod
-    def _apply_temperature_compensation_model_precise(cls, raw_period: int | float, temperature_x10: int, k1_x100: int) -> float:
+    def _apply_temperature_compensation_model_precise(
+        cls,
+        raw_period: int | float,
+        temperature_x10: int,
+        k1_x100: int,
+        k0_count: int = 0,
+    ) -> float:
         """Цель функции в плавном расчете компенсации для аналитики, затем она считает Pcomp без целочисленного усечения для наглядного графика."""
         compensated_period = float(raw_period)
-        coefficient = float(k1_x100)
-        if coefficient != 0.0:
+        k1_coefficient = float(k1_x100)
+        if k1_coefficient != 0.0:
             d_temperature_x10 = float(int(temperature_x10) - int(cls._FUEL_TEMP_COMP_REF_X10))
-            delta_period = (coefficient * d_temperature_x10) / 1000.0
+            delta_period = (k1_coefficient * d_temperature_x10) / 1000.0
             compensated_period -= delta_period
 
-            if compensated_period < 0.0:
-                compensated_period = 0.0
-            if compensated_period > 65535.0:
-                compensated_period = 65535.0
+        compensated_period += float(k0_count)
+
+        if compensated_period < 0.0:
+            compensated_period = 0.0
+        if compensated_period > 65535.0:
+            compensated_period = 65535.0
 
         return float(compensated_period)
 
@@ -423,6 +443,47 @@ class AppControllerCalibrationMixin(AppControllerContract):
         if float(before) == 0.0:
             return 0.0
         return (1.0 - abs(float(after)) / abs(float(before))) * 100.0
+
+    @staticmethod
+    def _calc_percentile_abs(values: list[float], percentile: float) -> float | None:
+        """Цель функции в расчете устойчивой оценки ошибки, затем она возвращает перцентиль абсолютного отклонения."""
+        if len(values) <= 0:
+            return None
+        sorted_abs = sorted(abs(float(value)) for value in values)
+        if len(sorted_abs) <= 0:
+            return None
+        ratio = max(0.0, min(1.0, float(percentile)))
+        index = int(round(ratio * float(len(sorted_abs) - 1)))
+        index = max(0, min(index, len(sorted_abs) - 1))
+        return float(sorted_abs[index])
+
+    @staticmethod
+    def _calc_level_error_metrics(level_values: list[float]) -> dict[str, float | tuple[float, float]] | None:
+        """Цель функции в человеко-понятной оценке компенсации, затем она считает коридор, максимум и P95 ошибки уровня."""
+        if len(level_values) <= 0:
+            return None
+
+        min_level = min(float(value) for value in level_values)
+        max_level = max(float(value) for value in level_values)
+        max_abs = max(abs(float(value)) for value in level_values)
+        p95_abs = AppControllerCalibrationMixin._calc_percentile_abs(level_values, 0.95)
+        if p95_abs is None:
+            return None
+
+        return {
+            "range": (float(min_level), float(max_level)),
+            "max_abs": float(max_abs),
+            "p95_abs": float(p95_abs),
+        }
+
+    @staticmethod
+    def _find_max_abs_level_error(level_values: list[float]) -> tuple[int | None, float | None]:
+        """Цель функции в поиске точки наихудшей ошибки, затем она возвращает индекс и signed-значение уровня."""
+        if len(level_values) <= 0:
+            return None, None
+        max_index = max(range(len(level_values)), key=lambda idx: abs(float(level_values[idx])))
+        return int(max_index), float(level_values[max_index])
+
     @staticmethod
     def _parse_csv_float(value: object) -> float | None:
         """Цель функции в чтении чисел из CSV, затем она преобразует строку с запятой или точкой в float."""
@@ -1055,6 +1116,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
         samples: list[dict[str, object]],
         *,
         compensated_periods: list[float] | None = None,
+        include_indices: list[int] | None = None,
     ) -> list[int]:
         """Цель функции в подготовке индексов графика без перегруза UI, затем она сохраняет пики и края каждого температурного сегмента."""
         total_points = len(samples)
@@ -1063,7 +1125,17 @@ class AppControllerCalibrationMixin(AppControllerContract):
 
         max_points = max(512, int(cls._TEMP_COMP_CHART_POINT_LIMIT))
         if total_points <= max_points:
-            return list(range(total_points))
+            selected_indices = list(range(total_points))
+            if include_indices is not None:
+                for required_index in include_indices:
+                    if not isinstance(required_index, int):
+                        continue
+                    if required_index < 0 or required_index >= total_points:
+                        continue
+                    if required_index not in selected_indices:
+                        selected_indices.append(required_index)
+            selected_indices.sort()
+            return selected_indices
 
         period_at = cls._build_temp_comp_period_accessor(samples, compensated_periods)
         bucket_count = max(1, max_points // 4)
@@ -1105,6 +1177,11 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 add_index(index)
 
         add_index(total_points - 1)
+        if include_indices is not None:
+            for required_index in include_indices:
+                if not isinstance(required_index, int):
+                    continue
+                add_index(int(required_index))
         selected_indices.sort()
         return selected_indices
 
@@ -1114,31 +1191,58 @@ class AppControllerCalibrationMixin(AppControllerContract):
         samples: list[dict[str, object]],
         *,
         compensated_periods: list[float] | None = None,
+        include_indices: list[int] | None = None,
+        highlight_labels_by_index: dict[int, str] | None = None,
     ) -> list[dict[str, object]]:
         """Цель функции в подготовке данных для TrendCanvas, затем она ограничивает payload без потери ключевой формы сигнала."""
         selected_indices = cls._select_temp_comp_chart_indices(
             samples,
             compensated_periods=compensated_periods,
+            include_indices=include_indices,
         )
         period_at = cls._build_temp_comp_period_accessor(samples, compensated_periods)
 
         points: list[dict[str, object]] = []
         for index in selected_indices:
             sample = samples[index]
-            points.append(
-                {
-                    "fuel": float(period_at(index)),
-                    "temperature": float(sample.get("temperature_c", 0.0)),
-                    "time": str(int(index) + 1),
-                }
-            )
+            point: dict[str, object] = {
+                "fuel": float(period_at(index)),
+                "temperature": float(sample.get("temperature_c", 0.0)),
+                "time": str(int(index) + 1),
+            }
+            if highlight_labels_by_index is not None and index in highlight_labels_by_index:
+                point["isHighlight"] = True
+                point["highlightLabel"] = str(highlight_labels_by_index[index])
+            points.append(point)
         return points
+
+    def _build_temp_comp_chart_series_entry(
+        self,
+        *,
+        name: str,
+        color: str,
+        points: list[dict[str, object]],
+        max_abs_level: float | None = None,
+    ) -> dict[str, object]:
+        """Цель функции в единообразном описании серии графика, затем она добавляет метрику max|ошибка| для легенды."""
+        series_entry: dict[str, object] = {
+            "node": str(name),
+            "color": str(color),
+            "points": list(points),
+        }
+        if max_abs_level is not None and math.isfinite(float(max_abs_level)):
+            series_entry["maxAbsLevel"] = float(max_abs_level)
+            series_entry["maxAbsLevelText"] = f"{float(max_abs_level):.3f} %"
+        return series_entry
+
     def _recompute_calibration_temp_comp_metrics(self):
-        """Цель функции в пересчете рекомендаций по K1, затем она обновляет метрики дрейфа и серии графика для UI."""
+        """Цель функции в пересчете рекомендаций по K1/K0, затем она обновляет метрики и серии графика для UI."""
         samples = list(self._calibration_temp_comp_samples)
         sample_count = len(samples)
         current_k1 = self._calibration_temp_comp_k1_x100_current
+        current_k0 = self._calibration_temp_comp_k0_count_current
         base_k1: int | None = None
+        base_k0: int | None = None
 
         ordered_samples = sorted(
             samples,
@@ -1153,6 +1257,9 @@ class AppControllerCalibrationMixin(AppControllerContract):
         recommended_k1: int | None = None
         delta_k1: int | None = None
         next_k1: int | None = None
+        recommended_k0: int | None = None
+        delta_k0: int | None = None
+        next_k0: int | None = None
 
         period_slope_before: float | None = None
         period_slope_after: float | None = None
@@ -1160,6 +1267,22 @@ class AppControllerCalibrationMixin(AppControllerContract):
         level_slope_after: float | None = None
         period_reduction_percent: float | None = None
         level_reduction_percent: float | None = None
+
+        level_error_range_before: tuple[float, float] | None = None
+        level_error_range_after: tuple[float, float] | None = None
+        level_error_max_before: float | None = None
+        level_error_max_after: float | None = None
+        level_error_p95_before: float | None = None
+        level_error_p95_after: float | None = None
+        raw_level_error_max: float | None = None
+        current_level_error_max: float | None = None
+        recommended_level_error_max: float | None = None
+        raw_level_error_index: int | None = None
+        current_level_error_index: int | None = None
+        recommended_level_error_index: int | None = None
+        raw_level_error_signed: float | None = None
+        current_level_error_signed: float | None = None
+        recommended_level_error_signed: float | None = None
 
         current_comp_periods: list[float] = []
         recommended_comp_periods: list[float] = []
@@ -1172,33 +1295,61 @@ class AppControllerCalibrationMixin(AppControllerContract):
 
         if sample_count > 0:
             base_k1 = int(current_k1) if current_k1 is not None else 0
+            base_k0 = int(current_k0) if current_k0 is not None else 0
+            current_comp_periods = [
+                self._apply_temperature_compensation_model_precise(
+                    float(sample.get("period", 0.0)),
+                    int(sample.get("temperature_x10", 0)),
+                    int(base_k1),
+                    int(base_k0),
+                )
+                for sample in ordered_samples
+            ]
 
-        if sample_count >= 2 and base_k1 is not None:
+        if sample_count >= 2 and base_k1 is not None and base_k0 is not None:
             period_slope_before = self._linear_regression_slope(temperatures, raw_periods)
             if period_slope_before is not None:
                 recommended_k1 = self._saturate_int16(int(round(float(period_slope_before) * 100.0)))
                 delta_k1 = int(recommended_k1) - int(base_k1)
                 next_k1 = int(recommended_k1)
 
+                recommended_periods_without_k0 = [
+                    self._apply_temperature_compensation_model_precise(
+                        float(sample.get("period", 0.0)),
+                        int(sample.get("temperature_x10", 0)),
+                        int(recommended_k1),
+                        0,
+                    )
+                    for sample in ordered_samples
+                ]
+
+                applied_k0_for_recommended = int(base_k0)
+                if level_calibration_ready:
+                    recommended_levels_without_k0 = [self._period_to_level_percent(value) for value in recommended_periods_without_k0]
+                    if all(level is not None for level in recommended_levels_without_k0):
+                        prepared_levels = [float(level) for level in recommended_levels_without_k0 if level is not None]
+                        if len(prepared_levels) == sample_count:
+                            min_level = min(prepared_levels)
+                            max_level = max(prepared_levels)
+                            desired_offset_pct = -((min_level + max_level) / 2.0)
+                            level_span = int(self._calibration_level_100) - int(self._calibration_level_0)
+                            recommended_k0 = self._saturate_int16(
+                                int(round((desired_offset_pct * float(level_span)) / 100.0))
+                            )
+                            delta_k0 = int(recommended_k0) - int(base_k0)
+                            next_k0 = int(recommended_k0)
+                            applied_k0_for_recommended = int(recommended_k0)
+
                 recommended_comp_periods = [
                     self._apply_temperature_compensation_model_precise(
                         float(sample.get("period", 0.0)),
                         int(sample.get("temperature_x10", 0)),
                         int(recommended_k1),
+                        int(applied_k0_for_recommended),
                     )
                     for sample in ordered_samples
                 ]
                 period_slope_after = self._linear_regression_slope(temperatures, recommended_comp_periods)
-
-            if current_k1 is not None:
-                current_comp_periods = [
-                    self._apply_temperature_compensation_model_precise(
-                        float(sample.get("period", 0.0)),
-                        int(sample.get("temperature_x10", 0)),
-                        int(current_k1),
-                    )
-                    for sample in ordered_samples
-                ]
 
             if level_calibration_ready:
                 raw_levels: list[float] = []
@@ -1211,42 +1362,100 @@ class AppControllerCalibrationMixin(AppControllerContract):
                     raw_levels.append(float(converted))
 
                 if raw_levels_valid and len(raw_levels) == sample_count:
-                    level_slope_before = self._linear_regression_slope(temperatures, raw_levels)
+                    raw_metrics = self._calc_level_error_metrics(raw_levels)
+                    if isinstance(raw_metrics, dict):
+                        raw_level_error_max = float(raw_metrics.get("max_abs", 0.0))
+                    raw_level_error_index, raw_level_error_signed = self._find_max_abs_level_error(raw_levels)
+
+                    before_levels = list(raw_levels)
+                    if len(current_comp_periods) == sample_count:
+                        current_levels = [self._period_to_level_percent(value) for value in current_comp_periods]
+                        if all(level is not None for level in current_levels):
+                            before_levels = [float(level) for level in current_levels if level is not None]
+                            current_metrics = self._calc_level_error_metrics(before_levels)
+                            if isinstance(current_metrics, dict):
+                                current_level_error_max = float(current_metrics.get("max_abs", 0.0))
+                            current_level_error_index, current_level_error_signed = self._find_max_abs_level_error(before_levels)
+                    if current_level_error_max is None and raw_level_error_max is not None:
+                        current_level_error_max = float(raw_level_error_max)
+                    if current_level_error_index is None and raw_level_error_index is not None:
+                        current_level_error_index = int(raw_level_error_index)
+                    if current_level_error_signed is None and raw_level_error_signed is not None:
+                        current_level_error_signed = float(raw_level_error_signed)
+
+                    level_slope_before = self._linear_regression_slope(temperatures, before_levels)
+                    before_metrics = self._calc_level_error_metrics(before_levels)
+                    if isinstance(before_metrics, dict):
+                        level_error_range_before = before_metrics.get("range")  # type: ignore[assignment]
+                        level_error_max_before = float(before_metrics.get("max_abs", 0.0))
+                        level_error_p95_before = float(before_metrics.get("p95_abs", 0.0))
+
                     if len(recommended_comp_periods) == sample_count:
                         recommended_levels = [self._period_to_level_percent(value) for value in recommended_comp_periods]
                         if all(level is not None for level in recommended_levels):
-                            level_slope_after = self._linear_regression_slope(
-                                temperatures,
-                                [float(level) for level in recommended_levels if level is not None],
-                            )
+                            prepared_levels = [float(level) for level in recommended_levels if level is not None]
+                            level_slope_after = self._linear_regression_slope(temperatures, prepared_levels)
+                            after_metrics = self._calc_level_error_metrics(prepared_levels)
+                            if isinstance(after_metrics, dict):
+                                level_error_range_after = after_metrics.get("range")  # type: ignore[assignment]
+                                level_error_max_after = float(after_metrics.get("max_abs", 0.0))
+                                level_error_p95_after = float(after_metrics.get("p95_abs", 0.0))
+                                recommended_level_error_max = float(level_error_max_after)
+                            recommended_level_error_index, recommended_level_error_signed = self._find_max_abs_level_error(prepared_levels)
 
             period_reduction_percent = self._calc_reduction_percent(period_slope_before, period_slope_after)
             level_reduction_percent = self._calc_reduction_percent(level_slope_before, level_slope_after)
 
         chart_series: list[dict[str, object]] = []
         if sample_count > 0:
+            raw_highlight_labels: dict[int, str] | None = None
+            if raw_level_error_index is not None:
+                raw_signed = 0.0 if raw_level_error_signed is None else float(raw_level_error_signed)
+                raw_label = f"max|ошибка|={abs(raw_signed):.3f}% ({raw_signed:+.3f}%)"
+                raw_highlight_labels = {int(raw_level_error_index): raw_label}
+
+            raw_points = self._build_calibration_temp_comp_chart_points(
+                ordered_samples,
+                include_indices=[int(raw_level_error_index)] if raw_level_error_index is not None else None,
+                highlight_labels_by_index=raw_highlight_labels,
+            )
             chart_series.append(
-                {
-                    "node": "Сырой период",
-                    "color": "#dc2626",
-                    "points": self._build_calibration_temp_comp_chart_points(ordered_samples),
-                }
+                self._build_temp_comp_chart_series_entry(
+                    name="Сырой период",
+                    color="#dc2626",
+                    points=raw_points,
+                    max_abs_level=raw_level_error_max,
+                )
             )
 
             if (
                 len(current_comp_periods) == sample_count
-                and current_k1 is not None
-                and (recommended_k1 is None or int(current_k1) != int(recommended_k1))
+                and (current_k1 is not None or current_k0 is not None)
+                and (
+                    recommended_k1 is None
+                    or recommended_k0 is None
+                    or int(base_k1) != int(recommended_k1)
+                    or int(base_k0) != int(recommended_k0)
+                )
             ):
+                current_highlight_labels: dict[int, str] | None = None
+                if current_level_error_index is not None:
+                    current_signed = 0.0 if current_level_error_signed is None else float(current_level_error_signed)
+                    current_label = f"max|ошибка|={abs(current_signed):.3f}% ({current_signed:+.3f}%)"
+                    current_highlight_labels = {int(current_level_error_index): current_label}
+                current_points = self._build_calibration_temp_comp_chart_points(
+                    ordered_samples,
+                    compensated_periods=current_comp_periods,
+                    include_indices=[int(current_level_error_index)] if current_level_error_index is not None else None,
+                    highlight_labels_by_index=current_highlight_labels,
+                )
                 chart_series.append(
-                    {
-                        "node": f"После текущего K1 ({int(current_k1)})",
-                        "color": "#2563eb",
-                        "points": self._build_calibration_temp_comp_chart_points(
-                            ordered_samples,
-                            compensated_periods=current_comp_periods,
-                        ),
-                    }
+                    self._build_temp_comp_chart_series_entry(
+                        name=f"После текущих K1/K0 ({int(base_k1)}/{int(base_k0)})",
+                        color="#2563eb",
+                        points=current_points,
+                        max_abs_level=current_level_error_max,
+                    )
                 )
 
             if len(recommended_comp_periods) == sample_count and recommended_k1 is not None:
@@ -1255,19 +1464,28 @@ class AppControllerCalibrationMixin(AppControllerContract):
                     for index in range(sample_count)
                 ) if sample_count > 0 else 0.0
                 shift_hint = "" if max_shift >= 0.05 else " (эффект очень мал)"
+                recommended_highlight_labels: dict[int, str] | None = None
+                if recommended_level_error_index is not None:
+                    recommended_signed = 0.0 if recommended_level_error_signed is None else float(recommended_level_error_signed)
+                    recommended_label = f"max|ошибка|={abs(recommended_signed):.3f}% ({recommended_signed:+.3f}%)"
+                    recommended_highlight_labels = {int(recommended_level_error_index): recommended_label}
+                recommended_points = self._build_calibration_temp_comp_chart_points(
+                    ordered_samples,
+                    compensated_periods=recommended_comp_periods,
+                    include_indices=[int(recommended_level_error_index)] if recommended_level_error_index is not None else None,
+                    highlight_labels_by_index=recommended_highlight_labels,
+                )
                 chart_series.append(
-                    {
-                        "node": f"После рекоменд. K1 ({int(recommended_k1)}){shift_hint}",
-                        "color": "#16a34a",
-                        "points": self._build_calibration_temp_comp_chart_points(
-                            ordered_samples,
-                            compensated_periods=recommended_comp_periods,
-                        ),
-                    }
+                    self._build_temp_comp_chart_series_entry(
+                        name=f"После рекоменд. K1/K0 ({int(recommended_k1)}/{int(next_k0 if next_k0 is not None else base_k0 or 0)}){shift_hint}",
+                        color="#16a34a",
+                        points=recommended_points,
+                        max_abs_level=recommended_level_error_max,
+                    )
                 )
 
         if sample_count <= 0:
-            detail_text = "Загрузите CSV из коллектора (all_nodes.csv или 0xNN.csv), чтобы рассчитать K1."
+            detail_text = "Загрузите CSV из коллектора (all_nodes.csv или 0xNN.csv), чтобы рассчитать K1/K0."
         elif sample_count < 2:
             detail_text = f"Собрано точек: {sample_count}. Для регрессии нужно минимум 2."
         else:
@@ -1281,12 +1499,22 @@ class AppControllerCalibrationMixin(AppControllerContract):
             )
             if base_k1 is not None:
                 detail_text += f" Базовый K1={int(base_k1)}."
+            if base_k0 is not None:
+                detail_text += f" Базовый K0={int(base_k0)}."
             if recommended_k1 is not None:
                 detail_text += f" Рекоменд. K1={int(recommended_k1)}."
+            if recommended_k0 is not None:
+                detail_text += f" Рекоменд. K0={int(recommended_k0)}."
             if delta_k1 is not None:
                 detail_text += f" dK1={int(delta_k1):+d}."
+            if delta_k0 is not None:
+                detail_text += f" dK0={int(delta_k0):+d}."
+            detail_text += " Этап «текущее» рассчитан по K1/K0, считанным из узла."
+            detail_text += " Если коэффициенты не считаны, используется офлайн-база K1/K0 = 0/0."
+            detail_text += " Метрика «текущее» относится к синей серии (если синяя отсутствует, то к красной)."
+            detail_text += " Метрика «после рекомендаций» относится к зеленой серии."
             if not level_calibration_ready:
-                detail_text += " Метрики в % будут доступны после чтения калибровок 0% и 100%."
+                detail_text += " Для расчета K0 и метрик ошибки нужны калибровки 0% и 100%."
 
         if sample_count <= 0:
             self._calibration_temp_comp_status = detail_text
@@ -1297,12 +1525,22 @@ class AppControllerCalibrationMixin(AppControllerContract):
         self._calibration_temp_comp_k1_x100_recommended = recommended_k1
         self._calibration_temp_comp_k1_x100_delta = delta_k1
         self._calibration_temp_comp_k1_x100_next = next_k1
+        self._calibration_temp_comp_k0_count_base = base_k0
+        self._calibration_temp_comp_k0_count_recommended = recommended_k0
+        self._calibration_temp_comp_k0_count_delta = delta_k0
+        self._calibration_temp_comp_k0_count_next = next_k0
         self._calibration_temp_comp_period_slope_before = period_slope_before
         self._calibration_temp_comp_period_slope_after = period_slope_after
         self._calibration_temp_comp_level_slope_before = level_slope_before
         self._calibration_temp_comp_level_slope_after = level_slope_after
         self._calibration_temp_comp_period_reduction_percent = period_reduction_percent
         self._calibration_temp_comp_level_reduction_percent = level_reduction_percent
+        self._calibration_temp_comp_level_error_range_before = level_error_range_before
+        self._calibration_temp_comp_level_error_range_after = level_error_range_after
+        self._calibration_temp_comp_level_error_max_before = level_error_max_before
+        self._calibration_temp_comp_level_error_max_after = level_error_max_after
+        self._calibration_temp_comp_level_error_p95_before = level_error_p95_before
+        self._calibration_temp_comp_level_error_p95_after = level_error_p95_after
         self._calibration_temp_comp_chart_series = chart_series
         self.calibrationTempCompChanged.emit()
 
@@ -1325,6 +1563,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
 
         if clear_coefficients:
             self._calibration_temp_comp_k1_x100_current = None
+            self._calibration_temp_comp_k0_count_current = None
 
         empty_value = payload.get("empty")
         full_value = payload.get("full")
@@ -1401,17 +1640,28 @@ class AppControllerCalibrationMixin(AppControllerContract):
 
         if clear_coefficients:
             self._calibration_temp_comp_k1_x100_current = None
+            self._calibration_temp_comp_k0_count_current = None
 
         self._calibration_temp_comp_k1_x100_base = None
         self._calibration_temp_comp_k1_x100_recommended = None
         self._calibration_temp_comp_k1_x100_delta = None
         self._calibration_temp_comp_k1_x100_next = None
+        self._calibration_temp_comp_k0_count_base = None
+        self._calibration_temp_comp_k0_count_recommended = None
+        self._calibration_temp_comp_k0_count_delta = None
+        self._calibration_temp_comp_k0_count_next = None
         self._calibration_temp_comp_period_slope_before = None
         self._calibration_temp_comp_period_slope_after = None
         self._calibration_temp_comp_level_slope_before = None
         self._calibration_temp_comp_level_slope_after = None
         self._calibration_temp_comp_period_reduction_percent = None
         self._calibration_temp_comp_level_reduction_percent = None
+        self._calibration_temp_comp_level_error_range_before = None
+        self._calibration_temp_comp_level_error_range_after = None
+        self._calibration_temp_comp_level_error_max_before = None
+        self._calibration_temp_comp_level_error_max_after = None
+        self._calibration_temp_comp_level_error_p95_before = None
+        self._calibration_temp_comp_level_error_p95_after = None
         self._calibration_temp_comp_chart_series = []
 
         self._recompute_calibration_temp_comp_metrics()
@@ -1433,6 +1683,18 @@ class AppControllerCalibrationMixin(AppControllerContract):
             self._calibration_read_service.read_data_by_identifier(
                 self._build_calibration_tx_identifier(),
                 UdsData.fuel_temp_comp_k1_x100,
+            )
+        )
+
+    def _request_calibration_temp_comp_k0_read(self) -> bool:
+        """Цель функции в чтении текущего K0 через UDS, затем она отправляет запрос DID 0x001C в выбранный узел."""
+        if not self._can.is_connect or not self._can.is_trace:
+            return False
+        self._configure_calibration_uds_services()
+        return bool(
+            self._calibration_read_service.read_data_by_identifier(
+                self._build_calibration_tx_identifier(),
+                UdsData.fuel_temp_comp_k0_count,
             )
         )
 
@@ -1653,6 +1915,14 @@ class AppControllerCalibrationMixin(AppControllerContract):
                     self._calibration_temp_comp_k1_x100_current = int(signed_k1)
                     self._append_log(f"Калибровка: считан коэффициент K1 = {int(signed_k1)}.", RowColor.green)
                 recompute_temp_comp = True
+            elif did == int(UdsData.fuel_temp_comp_k0_count.pid):
+                bits = max(8, int(UdsData.fuel_temp_comp_k0_count.size) * 8)
+                signed_k0 = self._decode_signed_value(raw_value, bits)
+                value = int(signed_k0)
+                if self._calibration_temp_comp_k0_count_current != signed_k0:
+                    self._calibration_temp_comp_k0_count_current = int(signed_k0)
+                    self._append_log(f"Калибровка: считан коэффициент K0 = {int(signed_k0)}.", RowColor.green)
+                recompute_temp_comp = True
 
             if self._calibration_sequence_waiting_action == "read_level_0" and did == int(UdsData.empty_fuel_tank.pid):
                 self._finish_calibration_sequence_wait("read_level_0")
@@ -1663,6 +1933,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 self._start_calibration_poll_timer()
                 self._request_calibration_runtime_snapshot()
                 self._request_calibration_temp_comp_k1_read()
+                self._request_calibration_temp_comp_k0_read()
                 self._append_log(
                     "Калибровка: extended-сессия и Security Access активны, исходные уровни считаны.",
                     RowColor.green,
@@ -1727,6 +1998,9 @@ class AppControllerCalibrationMixin(AppControllerContract):
             elif did == int(UdsData.fuel_temp_comp_k1_x100.pid):
                 self._append_log("Калибровка: коэффициент K1 успешно сохранен.", RowColor.green)
                 self._request_calibration_temp_comp_k1_read()
+            elif did == int(UdsData.fuel_temp_comp_k0_count.pid):
+                self._append_log("Калибровка: коэффициент K0 успешно сохранен.", RowColor.green)
+                self._request_calibration_temp_comp_k0_read()
 
             if self._calibration_restore_active and self._calibration_restore_current_did == did:
                 self._send_next_calibration_restore_write()
@@ -1908,3 +2182,28 @@ class AppControllerCalibrationMixin(AppControllerContract):
 
         return int(value)
 
+    @classmethod
+    def _resolve_calibration_k0_write_value(cls, text, fallback_value: int | None) -> int:
+        """Цель функции в удобном вводе K0 из UI, затем она парсит dec/hex и приводит значение к int16."""
+        raw = str(text).strip()
+        if not raw:
+            if fallback_value is None:
+                raise ValueError("Текущее значение K0 неизвестно. Сначала прочитайте DID 0x001C или введите число вручную.")
+            return cls._saturate_int16(int(fallback_value))
+
+        base = 16 if raw.lower().startswith(("0x", "-0x", "+0x")) else 10
+        try:
+            value = int(raw, base)
+        except ValueError as exc:
+            raise ValueError("Некорректное значение K0. Используйте signed dec или 0xHEX.") from exc
+
+        if base == 16 and value >= 0:
+            if value > 0xFFFF:
+                raise ValueError("HEX-значение K0 должно быть в диапазоне 0x0000..0xFFFF.")
+            if value > cls._INT16_MAX:
+                value -= 0x10000
+
+        if value < cls._INT16_MIN or value > cls._INT16_MAX:
+            raise ValueError("Значение K0 вне диапазона int16 (-32768..32767).")
+
+        return int(value)

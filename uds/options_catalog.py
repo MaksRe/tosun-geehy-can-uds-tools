@@ -45,6 +45,7 @@ UDS_OPTIONS: list[UdsOptionParameter] = [
     UdsOptionParameter(0x0018, 2, "Сырые данные уровня топлива", AccessMode.READ),
     UdsOptionParameter(0x0019, 2, "Сырые данные температуры", AccessMode.READ),
     UdsOptionParameter(0x001B, 2, "K1 температурной компенсации x100", AccessMode.READ_WRITE),
+    UdsOptionParameter(0x001C, 2, "K0 температурной компенсации, count", AccessMode.READ_WRITE),
     UdsOptionParameter(0xF188, 18, "Номер ПО ЭБУ", AccessMode.READ_WRITE),
     UdsOptionParameter(0xF189, 32, "Версия ПО ЭБУ", AccessMode.READ_WRITE),
     UdsOptionParameter(0xF18A, 32, "Поставщик системы и адрес", AccessMode.READ_WRITE),
