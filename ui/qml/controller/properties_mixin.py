@@ -600,6 +600,26 @@ class AppControllerPropertiesMixin(AppControllerContract):
     def calibrationTempCompOperationProgressDeterminate(self):
         return bool(self._calibration_temp_comp_operation_progress_determinate)
 
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompPreviewStatusText(self):
+        """Цель функции в выдаче текста локального превью, затем она показывает пользователю текущий этап пересчета графика."""
+        return str(self._calibration_temp_comp_preview_status)
+
+    @Property(bool, notify=calibrationTempCompChanged)
+    def calibrationTempCompPreviewBusy(self):
+        """Цель функции в выдаче флага занятости превью, затем она управляет индикатором выполнения рядом с графиком."""
+        return bool(self._calibration_temp_comp_preview_busy)
+
+    @Property(int, notify=calibrationTempCompChanged)
+    def calibrationTempCompPreviewProgressPercent(self):
+        """Цель функции в выдаче процента прогресса превью, затем она обновляет отдельный ProgressBar блока линейной коррекции."""
+        return int(self._calibration_temp_comp_preview_progress_percent)
+
+    @Property(bool, notify=calibrationTempCompChanged)
+    def calibrationTempCompPreviewProgressDeterminate(self):
+        """Цель функции в выдаче режима прогресса превью, затем она переключает ProgressBar между фиксированным и неопределенным режимом."""
+        return bool(self._calibration_temp_comp_preview_progress_determinate)
+
     def _calibration_temp_comp_has_enough_samples(self) -> bool:
         """Цель функции в проверке достаточности выборки, затем она определяет готовность регрессии по температуре."""
         return len(self._calibration_temp_comp_samples) >= 2
@@ -703,6 +723,32 @@ class AppControllerPropertiesMixin(AppControllerContract):
         if value is None:
             return "не считан (DID 0x001C)"
         return str(int(value))
+
+    @Property(bool, notify=calibrationTempCompChanged)
+    def calibrationTempCompLinearPreviewEnabled(self):
+        return bool(self._calibration_temp_comp_linear_preview_enabled)
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompLinearPreviewK1Text(self):
+        value = self._calibration_temp_comp_linear_preview_k1_x100
+        if value is not None:
+            return str(int(value))
+        if self._calibration_temp_comp_k1_x100_current is not None:
+            return str(int(self._calibration_temp_comp_k1_x100_current))
+        if self._calibration_temp_comp_k1_x100_base is not None:
+            return str(int(self._calibration_temp_comp_k1_x100_base))
+        return "0"
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompLinearPreviewK0Text(self):
+        value = self._calibration_temp_comp_linear_preview_k0_count
+        if value is not None:
+            return str(int(value))
+        if self._calibration_temp_comp_k0_count_current is not None:
+            return str(int(self._calibration_temp_comp_k0_count_current))
+        if self._calibration_temp_comp_k0_count_base is not None:
+            return str(int(self._calibration_temp_comp_k0_count_base))
+        return "0"
 
     @Property("QVariantList", notify=calibrationTempCompChanged)
     def calibrationTempCompAdvancedRows(self):

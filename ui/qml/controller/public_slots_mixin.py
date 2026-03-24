@@ -603,6 +603,170 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             determinate=True,
         )
 
+    @Slot(str, str)
+    def setCalibrationTempCompLinearPreview(self, k1_text, k0_text):
+        """Цель функции в локальном предпросмотре линейного режима, затем она применяет K1/K0 к графику без записи в МК."""
+        if len(self._calibration_temp_comp_samples) <= 0:
+            self._set_calibration_temp_comp_preview_status(
+                "Нет данных для превью. Сначала загрузите CSV.",
+                busy=False,
+                progress_percent=0,
+                determinate=True,
+            )
+            self.infoMessage.emit(
+                "Калибровка",
+                "Для предпросмотра сначала загрузите CSV с данными температурной компенсации.",
+            )
+            return
+
+        fallback_k1 = self._calibration_temp_comp_linear_preview_k1_x100
+        if fallback_k1 is None:
+            if self._calibration_temp_comp_k1_x100_current is not None:
+                fallback_k1 = int(self._calibration_temp_comp_k1_x100_current)
+            elif self._calibration_temp_comp_k1_x100_base is not None:
+                fallback_k1 = int(self._calibration_temp_comp_k1_x100_base)
+            else:
+                fallback_k1 = 0
+
+        fallback_k0 = self._calibration_temp_comp_linear_preview_k0_count
+        if fallback_k0 is None:
+            if self._calibration_temp_comp_k0_count_current is not None:
+                fallback_k0 = int(self._calibration_temp_comp_k0_count_current)
+            elif self._calibration_temp_comp_k0_count_base is not None:
+                fallback_k0 = int(self._calibration_temp_comp_k0_count_base)
+            else:
+                fallback_k0 = 0
+
+        try:
+            preview_k1 = self._resolve_calibration_k1_write_value(k1_text, int(fallback_k1))
+            preview_k0 = self._resolve_calibration_k0_write_value(k0_text, int(fallback_k0))
+        except ValueError as exc:
+            self._set_calibration_temp_comp_preview_status(
+                "Ошибка ввода коэффициентов превью.",
+                busy=False,
+                progress_percent=0,
+                determinate=True,
+            )
+            self.infoMessage.emit("Калибровка", str(exc))
+            return
+
+        normalized_k1 = int(preview_k1)
+        normalized_k0 = int(preview_k0)
+        unchanged = (
+            bool(self._calibration_temp_comp_linear_preview_enabled)
+            and self._calibration_temp_comp_linear_preview_k1_x100 is not None
+            and self._calibration_temp_comp_linear_preview_k0_count is not None
+            and int(self._calibration_temp_comp_linear_preview_k1_x100) == normalized_k1
+            and int(self._calibration_temp_comp_linear_preview_k0_count) == normalized_k0
+        )
+        if unchanged:
+            self._set_calibration_temp_comp_preview_status(
+                "Превью уже применено с этими K1/K0.",
+                busy=False,
+                progress_percent=100,
+                determinate=True,
+            )
+            return
+
+        self._set_calibration_temp_comp_operation_status(
+            "Пересчет графиков по линейному превью...",
+            busy=True,
+            progress_percent=0,
+            determinate=False,
+        )
+        self._set_calibration_temp_comp_preview_status(
+            "Подготовка параметров превью...",
+            busy=True,
+            progress_percent=10,
+            determinate=True,
+        )
+        QCoreApplication.processEvents()
+
+        self._calibration_temp_comp_linear_preview_enabled = True
+        self._calibration_temp_comp_linear_preview_k1_x100 = int(normalized_k1)
+        self._calibration_temp_comp_linear_preview_k0_count = int(normalized_k0)
+        self._set_calibration_temp_comp_preview_status(
+            "Применение K1/K0 и пересчет метрик...",
+            busy=True,
+            progress_percent=45,
+            determinate=True,
+        )
+        QCoreApplication.processEvents()
+        self._recompute_calibration_temp_comp_metrics()
+        self._set_calibration_temp_comp_preview_status(
+            "Обновление графика...",
+            busy=True,
+            progress_percent=85,
+            determinate=True,
+        )
+        QCoreApplication.processEvents()
+        self._set_calibration_temp_comp_preview_status(
+            f"Превью обновлено: K1={int(normalized_k1)}, K0={int(normalized_k0)}.",
+            busy=False,
+            progress_percent=100,
+            determinate=True,
+        )
+        self._set_calibration_temp_comp_operation_status(
+            "Линейное превью пересчитано.",
+            busy=False,
+            progress_percent=100,
+            determinate=True,
+        )
+
+    @Slot()
+    def clearCalibrationTempCompLinearPreview(self):
+        """Цель функции в сбросе локального превью K1/K0, затем она возвращает графики к текущим считанным параметрам."""
+        if (
+            (not bool(self._calibration_temp_comp_linear_preview_enabled))
+            and self._calibration_temp_comp_linear_preview_k1_x100 is None
+            and self._calibration_temp_comp_linear_preview_k0_count is None
+        ):
+            self._set_calibration_temp_comp_preview_status(
+                "Превью уже сброшено.",
+                busy=False,
+                progress_percent=100,
+                determinate=True,
+            )
+            return
+
+        self._set_calibration_temp_comp_operation_status(
+            "Сброс линейного превью и пересчет графиков...",
+            busy=True,
+            progress_percent=0,
+            determinate=False,
+        )
+        self._set_calibration_temp_comp_preview_status(
+            "Сброс превью и восстановление текущих параметров...",
+            busy=True,
+            progress_percent=20,
+            determinate=True,
+        )
+        QCoreApplication.processEvents()
+
+        self._calibration_temp_comp_linear_preview_enabled = False
+        self._calibration_temp_comp_linear_preview_k1_x100 = None
+        self._calibration_temp_comp_linear_preview_k0_count = None
+        self._set_calibration_temp_comp_preview_status(
+            "Пересчет графика после сброса...",
+            busy=True,
+            progress_percent=65,
+            determinate=True,
+        )
+        QCoreApplication.processEvents()
+        self._recompute_calibration_temp_comp_metrics()
+        self._set_calibration_temp_comp_preview_status(
+            "Превью сброшено. График вернулся к текущим параметрам.",
+            busy=False,
+            progress_percent=100,
+            determinate=True,
+        )
+        self._set_calibration_temp_comp_operation_status(
+            "Линейное превью сброшено.",
+            busy=False,
+            progress_percent=100,
+            determinate=True,
+        )
+
     def _seed_temp_comp_segment_tables_for_preview(self, mode_value: int):
         """Цель функции в подготовке осмысленного предпросмотра mode=1/2, затем она подставляет информативные сегментные таблицы вместо вырожденного linear-профиля."""
         normalized_mode = int(mode_value)

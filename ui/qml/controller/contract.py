@@ -98,6 +98,10 @@ class AppControllerContract:
     _calibration_temp_comp_operation_busy: Any
     _calibration_temp_comp_operation_progress_percent: Any
     _calibration_temp_comp_operation_progress_determinate: Any
+    _calibration_temp_comp_preview_status: Any
+    _calibration_temp_comp_preview_busy: Any
+    _calibration_temp_comp_preview_progress_percent: Any
+    _calibration_temp_comp_preview_progress_determinate: Any
     _calibration_temp_comp_samples: Any
     _calibration_temp_comp_samples_by_node: Any
     _calibration_temp_comp_sample_limit: Any
@@ -109,6 +113,9 @@ class AppControllerContract:
     _calibration_temp_comp_k1_x100_recommended: Any
     _calibration_temp_comp_k1_x100_delta: Any
     _calibration_temp_comp_k1_x100_next: Any
+    _calibration_temp_comp_linear_preview_enabled: Any
+    _calibration_temp_comp_linear_preview_k1_x100: Any
+    _calibration_temp_comp_linear_preview_k0_count: Any
     _calibration_temp_comp_advanced_values: Any
     _calibration_temp_comp_adv_read_active: Any
     _calibration_temp_comp_adv_read_queue: Any

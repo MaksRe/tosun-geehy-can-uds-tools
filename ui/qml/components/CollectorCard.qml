@@ -15,9 +15,18 @@ Card {
     readonly property int contentPadding: 10
     readonly property bool collectorEnabled: root.appController ? root.appController.collectorEnabled : false
     readonly property bool collectorTrendEnabled: root.appController ? root.appController.collectorTrendEnabled : false
+    property string collectorInfoTitle: ""
+    property string collectorInfoText: ""
 
     signal selectOutputDirectoryRequested()
     signal openTrendWindowRequested()
+
+    // Цель функции в открытии справки по колонке, затем она показывает простое описание источника и формулы значения.
+    function openCollectorInfo(titleText, bodyText) {
+        collectorInfoTitle = String(titleText || "")
+        collectorInfoText = String(bodyText || "")
+        collectorInfoPopup.open()
+    }
 
     Layout.fillWidth: true
     Layout.fillHeight: true
@@ -386,24 +395,88 @@ Card {
 
                             Repeater {
                                 model: [
-                                    "Узел",
-                                    "Период",
-                                    "Топливо",
-                                    "Топл.(расч.)",
-                                    "Температура",
-                                    "Cnt(топл.)",
-                                    "Cnt(темп.)",
-                                    "Время"
+                                    { "label": "Узел" },
+                                    { "label": "Период" },
+                                    {
+                                        "label": "Топливо",
+                                        "infoTitle": "Колонка «Топливо»",
+                                        "infoText": "Это значение приходит готовым с МК по DID 0x0018.\n\nКак считается на МК (простыми словами):\n1) Берется текущий период датчика.\n2) К периоду применяется алгоритм температурной компенсации (K1/K0 и выбранный режим компенсации).\n3) Результат ограничивается калибровочными границами empty/full.\n4) После этого период переводится в проценты топлива.\n\nФормат передачи: значение хранится в десятых долях процента.\nПример: 488 => 48.8%."
+                                    },
+                                    {
+                                        "label": "Топл.(расч.)",
+                                        "infoTitle": "Колонка «Топл.(расч.)»",
+                                        "infoText": "Это расчет на стороне GUI для наглядной проверки.\n\nЧто используется в расчете:\n1) Период из DID 0x0014.\n2) Калибровочные точки empty/full из DID 0x0012/0x0013.\n3) Линейная формула перевода периода в проценты: ((period - empty) * 100) / (full - empty).\n\nПро алгоритм компенсации:\n- В тракте уровня топлива компенсация температуры применяется на МК (K1/K0/режимы).\n- В этой колонке показывается расчетный канал по текущему периоду и калибровке, поэтому значение используется как контрольный индикатор и может отличаться от колонки «Топливо».\n\nФормат отображения: со знаком и одной цифрой после запятой."
+                                    },
+                                    { "label": "Температура" },
+                                    { "label": "Cnt(топл.)" },
+                                    { "label": "Cnt(темп.)" },
+                                    { "label": "Время" }
                                 ]
 
-                                delegate: Text {
+                                delegate: Item {
                                     Layout.preferredWidth: tableArea.columnWidth
-                                    text: modelData
-                                    color: root.textSoft
-                                    font.pixelSize: 10
-                                    font.family: "Bahnschrift"
-                                    font.bold: true
-                                    elide: Text.ElideRight
+                                    Layout.preferredHeight: 18
+                                    readonly property bool hasInfo: modelData.infoText !== undefined
+                                    clip: true
+
+                                    // Цель функции в позиционировании значка рядом с текстом заголовка, затем она удерживает иконку внутри ячейки.
+                                    function badgeX() {
+                                        var labelVisualWidth = Math.min(headerLabel.paintedWidth, headerLabel.width)
+                                        var desired = labelVisualWidth + 3
+                                        var maxX = Math.max(0, width - infoBadge.width)
+                                        return Math.max(0, Math.min(desired, maxX))
+                                    }
+
+                                    Text {
+                                        id: headerLabel
+                                        anchors.left: parent.left
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: hasInfo ? Math.max(8, parent.width - infoBadge.width - 2) : parent.width
+                                        text: modelData.label
+                                        color: root.textSoft
+                                        font.pixelSize: 10
+                                        font.family: "Bahnschrift"
+                                        font.bold: true
+                                        elide: Text.ElideRight
+                                        verticalAlignment: Text.AlignVCenter
+                                    }
+
+                                    Rectangle {
+                                        id: infoBadge
+                                        visible: hasInfo
+                                        width: 14
+                                        height: 14
+                                        radius: 7
+                                        x: parent.badgeX()
+                                        anchors.verticalCenter: headerLabel.verticalCenter
+                                        color: infoBadgeMouse.containsMouse ? "#e6effb" : "#f3f7fd"
+                                        border.color: infoBadgeMouse.containsMouse ? "#7fa2cc" : "#99b5d6"
+
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: "i"
+                                            color: "#1e3a8a"
+                                            font.pixelSize: 10
+                                            font.bold: true
+                                            font.family: "Bahnschrift"
+                                        }
+
+                                        MouseArea {
+                                            id: infoBadgeMouse
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: root.openCollectorInfo(
+                                                modelData.infoTitle,
+                                                modelData.infoText
+                                            )
+                                        }
+
+                                        ToolTip.visible: infoBadgeMouse.containsMouse
+                                        ToolTip.delay: 220
+                                        ToolTip.timeout: 2000
+                                        ToolTip.text: "Пояснение"
+                                    }
                                 }
                             }
 
@@ -583,6 +656,82 @@ Card {
         function onCollectorCyclePauseChanged() {
             if (!cyclePauseField.activeFocus && root.appController) {
                 cyclePauseField.text = String(root.appController.collectorCyclePauseMs)
+            }
+        }
+    }
+
+    Popup {
+        id: collectorInfoPopup
+        modal: true
+        focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        width: Math.min(640, Math.max(360, root.width * 0.78))
+        x: (root.width - width) / 2
+        y: Math.max(18, (root.height - height) / 2)
+        padding: 0
+
+        background: Rectangle {
+            radius: 10
+            color: "#ffffff"
+            border.color: "#c9d9ea"
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 10
+            spacing: 8
+
+            Text {
+                Layout.fillWidth: true
+                text: root.collectorInfoTitle
+                color: root.textMain
+                font.pixelSize: 14
+                font.bold: true
+                font.family: "Bahnschrift"
+                wrapMode: Text.WordWrap
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                radius: 8
+                color: "#f8fbff"
+                border.color: "#d6e2ef"
+                implicitHeight: 170
+
+                Flickable {
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    contentWidth: width
+                    contentHeight: infoTextBlock.implicitHeight
+                    clip: true
+
+                    Text {
+                        id: infoTextBlock
+                        width: parent.width
+                        text: root.collectorInfoText
+                        color: root.textMain
+                        font.pixelSize: 12
+                        font.family: "Bahnschrift"
+                        wrapMode: Text.WordWrap
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+
+                FancyButton {
+                    Layout.preferredWidth: 88
+                    Layout.preferredHeight: 28
+                    fontPixelSize: 11
+                    text: "Закрыть"
+                    tone: "#64748b"
+                    toneHover: "#55657a"
+                    tonePressed: "#465669"
+                    onClicked: collectorInfoPopup.close()
+                }
             }
         }
     }

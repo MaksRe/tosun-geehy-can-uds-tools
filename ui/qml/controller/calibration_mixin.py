@@ -2178,6 +2178,9 @@ class AppControllerCalibrationMixin(AppControllerContract):
         sample_count = len(samples)
         current_k1 = self._calibration_temp_comp_k1_x100_current
         current_k0 = self._calibration_temp_comp_k0_count_current
+        linear_preview_enabled = bool(self._calibration_temp_comp_linear_preview_enabled)
+        linear_preview_k1 = self._calibration_temp_comp_linear_preview_k1_x100
+        linear_preview_k0 = self._calibration_temp_comp_linear_preview_k0_count
         base_k1: int | None = None
         base_k0: int | None = None
 
@@ -2244,10 +2247,17 @@ class AppControllerCalibrationMixin(AppControllerContract):
         if sample_count > 0:
             base_k1 = int(current_k1) if current_k1 is not None else 0
             base_k0 = int(current_k0) if current_k0 is not None else 0
+            if linear_preview_enabled:
+                if linear_preview_k1 is not None:
+                    base_k1 = int(linear_preview_k1)
+                if linear_preview_k0 is not None:
+                    base_k0 = int(linear_preview_k0)
             current_advanced_values = {
                 str(key): (None if value is None else int(value))
                 for key, value in self._calibration_temp_comp_advanced_values.items()
             }
+            if linear_preview_enabled:
+                current_advanced_values["mode"] = int(self._TEMP_COMP_MODE_SINGLE_LINEAR)
             initial_recommended_values = self._build_temp_comp_advanced_recommendations(
                 samples,
                 fallback_linear_k1_x100=int(base_k1),
@@ -2273,6 +2283,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 (current_k1 is not None)
                 or (current_k0 is not None)
                 or any(value is not None for value in current_advanced_values.values())
+                or bool(linear_preview_enabled)
             )
 
         if sample_count >= 2 and base_k1 is not None and base_k0 is not None:
@@ -2526,6 +2537,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
                         name=(
                             f"После текущих K1/K0 ({int(base_k1)}/{int(base_k0)}), mode "
                             f"{int(current_mode_for_label) if current_mode_for_label is not None else 0}"
+                            + (" [линейное превью]" if linear_preview_enabled else "")
                         ),
                         color="#2563eb",
                         points=current_points,
@@ -2593,6 +2605,8 @@ class AppControllerCalibrationMixin(AppControllerContract):
             detail_text += " Рекомендованные DID 0x001D..0x002C отображаются рядом с текущими значениями в расширенной таблице."
             detail_text += " Метрика «текущее» относится к синей серии (если синяя отсутствует, то к красной)."
             detail_text += " Метрика «после рекомендаций» относится к зеленой серии."
+            if linear_preview_enabled:
+                detail_text += " Для синей серии включено локальное линейное превью K1/K0 (без записи в МК)."
             if recommendation_guard_triggered:
                 detail_text += " Защитное правило: новая рекомендация оказалась хуже текущего набора, поэтому предложено сохранить текущие параметры."
             if not level_calibration_ready:
@@ -2643,6 +2657,15 @@ class AppControllerCalibrationMixin(AppControllerContract):
         self._calibration_temp_comp_last_period = int(last_sample.get("period", 0))
         self._calibration_temp_comp_last_temperature_x10 = int(last_sample.get("temperature_x10", 0))
         self._calibration_temp_comp_last_temperature_c = float(last_sample.get("temperature_c", 0.0))
+        self._calibration_temp_comp_linear_preview_enabled = False
+        self._calibration_temp_comp_linear_preview_k1_x100 = None
+        self._calibration_temp_comp_linear_preview_k0_count = None
+        self._set_calibration_temp_comp_preview_status(
+            "Ожидание превью.",
+            busy=False,
+            progress_percent=0,
+            determinate=True,
+        )
 
         if clear_coefficients:
             self._calibration_temp_comp_k1_x100_current = None
@@ -2732,6 +2755,15 @@ class AppControllerCalibrationMixin(AppControllerContract):
             self._calibration_temp_comp_k0_count_current = None
             self._calibration_temp_comp_advanced_values = {}
             self._calibration_temp_comp_advanced_recommended_values = {}
+        self._calibration_temp_comp_linear_preview_enabled = False
+        self._calibration_temp_comp_linear_preview_k1_x100 = None
+        self._calibration_temp_comp_linear_preview_k0_count = None
+        self._set_calibration_temp_comp_preview_status(
+            "Ожидание превью.",
+            busy=False,
+            progress_percent=0,
+            determinate=True,
+        )
 
         self._calibration_temp_comp_k1_x100_base = None
         self._calibration_temp_comp_k1_x100_recommended = None
@@ -2855,6 +2887,44 @@ class AppControllerCalibrationMixin(AppControllerContract):
         self._calibration_temp_comp_operation_busy = normalized_busy
         self._calibration_temp_comp_operation_progress_percent = int(normalized_progress_percent)
         self._calibration_temp_comp_operation_progress_determinate = bool(normalized_determinate)
+        if changed:
+            self.calibrationTempCompChanged.emit()
+
+    def _set_calibration_temp_comp_preview_status(
+        self,
+        text: str,
+        *,
+        busy: bool,
+        progress_percent: int | None = None,
+        determinate: bool | None = None,
+    ):
+        """Цель функции в обновлении статуса локального превью, затем она синхронизирует отдельный текст и прогресс блока рядом с графиком."""
+        normalized_text = str(text or "").strip()
+        if not normalized_text:
+            normalized_text = "Ожидание превью."
+        normalized_busy = bool(busy)
+        normalized_determinate = (
+            bool(progress_percent is not None)
+            if determinate is None
+            else bool(determinate)
+        )
+        normalized_progress_percent = 0
+        if normalized_determinate:
+            if progress_percent is None:
+                normalized_progress_percent = 100 if not normalized_busy else 0
+            else:
+                normalized_progress_percent = max(0, min(100, int(progress_percent)))
+
+        changed = (
+            str(self._calibration_temp_comp_preview_status) != normalized_text
+            or bool(self._calibration_temp_comp_preview_busy) != normalized_busy
+            or int(self._calibration_temp_comp_preview_progress_percent) != int(normalized_progress_percent)
+            or bool(self._calibration_temp_comp_preview_progress_determinate) != bool(normalized_determinate)
+        )
+        self._calibration_temp_comp_preview_status = normalized_text
+        self._calibration_temp_comp_preview_busy = normalized_busy
+        self._calibration_temp_comp_preview_progress_percent = int(normalized_progress_percent)
+        self._calibration_temp_comp_preview_progress_determinate = bool(normalized_determinate)
         if changed:
             self.calibrationTempCompChanged.emit()
 

@@ -23,6 +23,7 @@ Item {
     property bool tempCompShowRawSeries: true
     property bool tempCompShowCurrentSeries: true
     property bool tempCompShowRecommendedSeries: true
+    property var tempCompFilteredSeries: []
 
     function applyCapturedToField(targetField, targetSwitch) {
         if (!root.appController) {
@@ -60,9 +61,11 @@ Item {
         return true
     }
 
-    function filteredTempCompSeries() {
+    // Цель функции в стабилизации набора серий для графика, затем она обновляет кэш только при смене данных или фильтров.
+    function rebuildFilteredTempCompSeries() {
         if (!root.appController) {
-            return []
+            root.tempCompFilteredSeries = []
+            return
         }
         var source = root.appController.calibrationTempCompTrendSeries
         var filtered = []
@@ -71,8 +74,76 @@ Item {
                 filtered.push(source[i])
             }
         }
-        return filtered
+        root.tempCompFilteredSeries = filtered
     }
+
+    // Цель функции в извлечении signed-числа из текстовой метки, затем она возвращает только пригодное для ввода значение.
+    function parseSignedIntText(value) {
+        var normalized = String(value === undefined || value === null ? "" : value).trim()
+        if (normalized.length <= 0) {
+            return ""
+        }
+        var match = normalized.match(/^[-+]?\d+/)
+        if (!match || match.length <= 0) {
+            return ""
+        }
+        return String(match[0])
+    }
+
+    // Цель функции в синхронизации полей превью с данными контроллера, затем она обновляет K1/K0 без перезаписи активного ввода.
+    function syncLinearPreviewFields(forceUpdate) {
+        if (!root.appController) {
+            return
+        }
+        var force = (forceUpdate === true)
+        if (force || !tempCompPreviewK1Field.activeFocus) {
+            tempCompPreviewK1Field.text = String(root.appController.calibrationTempCompLinearPreviewK1Text)
+        }
+        if (force || !tempCompPreviewK0Field.activeFocus) {
+            tempCompPreviewK0Field.text = String(root.appController.calibrationTempCompLinearPreviewK0Text)
+        }
+    }
+
+    // Цель функции в локальном запуске пересчета графика, затем она передает K1/K0 из полей в preview-слот контроллера.
+    function applyLinearPreviewFromFields() {
+        if (!root.appController) {
+            return
+        }
+        root.appController.setCalibrationTempCompLinearPreview(
+            tempCompPreviewK1Field.text,
+            tempCompPreviewK0Field.text
+        )
+    }
+
+    // Цель функции в быстром заполнении превью текущими коэффициентами, затем она сразу запускает пересчет графика и метрик.
+    function fillLinearPreviewFromCurrent() {
+        if (!root.appController) {
+            return
+        }
+        var currentK1 = parseSignedIntText(root.appController.calibrationTempCompCurrentK1Text)
+        var currentK0 = parseSignedIntText(root.appController.calibrationTempCompCurrentK0Text)
+        tempCompPreviewK1Field.text = currentK1 !== "" ? currentK1 : String(root.appController.calibrationTempCompLinearPreviewK1Text)
+        tempCompPreviewK0Field.text = currentK0 !== "" ? currentK0 : String(root.appController.calibrationTempCompLinearPreviewK0Text)
+        applyLinearPreviewFromFields()
+    }
+
+    // Цель функции в быстром заполнении превью рекомендованными коэффициентами, затем она сразу запускает пересчет графика и метрик.
+    function fillLinearPreviewFromRecommended() {
+        if (!root.appController) {
+            return
+        }
+        var recommendedK1 = parseSignedIntText(root.appController.calibrationTempCompRecommendedK1Text)
+        var recommendedK0 = parseSignedIntText(root.appController.calibrationTempCompRecommendedK0Text)
+        if (recommendedK1 !== "") {
+            tempCompPreviewK1Field.text = recommendedK1
+        }
+        if (recommendedK0 !== "") {
+            tempCompPreviewK0Field.text = recommendedK0
+        }
+        applyLinearPreviewFromFields()
+    }
+
+    onAppControllerChanged: rebuildFilteredTempCompSeries()
 
     Layout.fillWidth: true
     implicitHeight: contentColumn.implicitHeight + (root.contentPadding * 2)
@@ -1465,6 +1536,217 @@ Item {
 
                         Rectangle {
                             Layout.fillWidth: true
+                            radius: 8
+                            color: "#eef3f9"
+                            border.color: "#c9d6e8"
+                            implicitHeight: linearPreviewPanelLayout.implicitHeight + 10
+
+                            ColumnLayout {
+                                id: linearPreviewPanelLayout
+                                anchors.fill: parent
+                                anchors.margins: 5
+                                spacing: 5
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Text {
+                                        text: "Быстрое превью линейного режима"
+                                        color: "#1f3a56"
+                                        font.pixelSize: 11
+                                        font.bold: true
+                                        font.family: "Bahnschrift"
+                                    }
+
+                                    Item { Layout.fillWidth: true }
+
+                                    Rectangle {
+                                        radius: 5
+                                        color: root.appController && root.appController.calibrationTempCompLinearPreviewEnabled ? "#dcfce7" : "#e2e8f0"
+                                        border.color: root.appController && root.appController.calibrationTempCompLinearPreviewEnabled ? "#86efac" : "#cbd5e1"
+                                        implicitWidth: 98
+                                        implicitHeight: 20
+
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: root.appController && root.appController.calibrationTempCompLinearPreviewEnabled ? "Превью: вкл" : "Превью: выкл"
+                                            color: root.appController && root.appController.calibrationTempCompLinearPreviewEnabled ? "#166534" : "#475569"
+                                            font.pixelSize: 9
+                                            font.family: "Bahnschrift"
+                                        }
+                                    }
+                                }
+
+                                GridLayout {
+                                    Layout.fillWidth: true
+                                    columns: 4
+                                    rowSpacing: 4
+                                    columnSpacing: 6
+
+                                    Text {
+                                        Layout.alignment: Qt.AlignVCenter
+                                        text: "K1"
+                                        color: "#334155"
+                                        font.pixelSize: 10
+                                        font.family: "Bahnschrift"
+                                    }
+
+                                    FancyTextField {
+                                        id: tempCompPreviewK1Field
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 28
+                                        placeholderText: "signed dec/hex"
+                                        textColor: root.textMain
+                                        bgColor: root.inputBg
+                                        borderColor: root.inputBorder
+                                        focusBorderColor: root.inputFocus
+                                        onAccepted: root.applyLinearPreviewFromFields()
+                                    }
+
+                                    Text {
+                                        Layout.alignment: Qt.AlignVCenter
+                                        text: "K0"
+                                        color: "#334155"
+                                        font.pixelSize: 10
+                                        font.family: "Bahnschrift"
+                                    }
+
+                                    FancyTextField {
+                                        id: tempCompPreviewK0Field
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 28
+                                        placeholderText: "signed dec/hex"
+                                        textColor: root.textMain
+                                        bgColor: root.inputBg
+                                        borderColor: root.inputBorder
+                                        focusBorderColor: root.inputFocus
+                                        onAccepted: root.applyLinearPreviewFromFields()
+                                    }
+                                }
+
+                                Flow {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    FancyButton {
+                                        implicitWidth: 124
+                                        height: 26
+                                        text: "Применить превью"
+                                        fontPixelSize: 12
+                                        tone: "#0284c7"
+                                        toneHover: "#0369a1"
+                                        tonePressed: "#075985"
+                                        enabled: root.appController !== null
+                                        onClicked: root.applyLinearPreviewFromFields()
+                                    }
+
+                                    FancyButton {
+                                        implicitWidth: 108
+                                        height: 26
+                                        text: "Сброс превью"
+                                        fontPixelSize: 12
+                                        tone: "#64748b"
+                                        toneHover: "#475569"
+                                        tonePressed: "#334155"
+                                        enabled: root.appController && root.appController.calibrationTempCompLinearPreviewEnabled
+                                        onClicked: if (root.appController) {
+                                            root.appController.clearCalibrationTempCompLinearPreview()
+                                            tempCompPreviewK1Field.focus = false
+                                            tempCompPreviewK0Field.focus = false
+                                            root.syncLinearPreviewFields(true)
+                                        }
+                                    }
+
+                                    FancyButton {
+                                        implicitWidth: 132
+                                        height: 26
+                                        text: "Текущие K1/K0"
+                                        fontPixelSize: 12
+                                        tone: "#0f766e"
+                                        toneHover: "#115e59"
+                                        tonePressed: "#134e4a"
+                                        enabled: root.appController !== null
+                                        onClicked: root.fillLinearPreviewFromCurrent()
+                                    }
+
+                                    FancyButton {
+                                        implicitWidth: 146
+                                        height: 26
+                                        text: "Рекоменд. K1/K0"
+                                        fontPixelSize: 12
+                                        tone: "#166534"
+                                        toneHover: "#14532d"
+                                        tonePressed: "#052e16"
+                                        enabled: root.appController !== null
+                                        onClicked: root.fillLinearPreviewFromRecommended()
+                                    }
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: root.appController ? root.appController.calibrationTempCompPreviewStatusText : "Ожидание превью."
+                                    color: "#334155"
+                                    font.pixelSize: 9
+                                    font.family: "Bahnschrift"
+                                    wrapMode: Text.WordWrap
+                                    maximumLineCount: 2
+                                    elide: Text.ElideRight
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 4
+                                    visible: root.appController !== null
+
+                                    BusyIndicator {
+                                        running: root.appController ? root.appController.calibrationTempCompPreviewBusy : false
+                                        visible: running
+                                        Layout.preferredWidth: 14
+                                        Layout.preferredHeight: 14
+                                    }
+
+                                    ProgressBar {
+                                        Layout.fillWidth: true
+                                        from: 0
+                                        to: 100
+                                        value: root.appController ? root.appController.calibrationTempCompPreviewProgressPercent : 0
+                                        indeterminate: root.appController ? (
+                                            !root.appController.calibrationTempCompPreviewProgressDeterminate
+                                            && root.appController.calibrationTempCompPreviewBusy
+                                        ) : false
+                                        visible: root.appController ? (
+                                            root.appController.calibrationTempCompPreviewBusy
+                                            || root.appController.calibrationTempCompPreviewProgressDeterminate
+                                        ) : false
+                                    }
+
+                                    Text {
+                                        Layout.preferredWidth: 36
+                                        horizontalAlignment: Text.AlignRight
+                                        text: root.appController && root.appController.calibrationTempCompPreviewProgressDeterminate
+                                            ? (root.appController.calibrationTempCompPreviewProgressPercent + "%")
+                                            : ""
+                                        color: "#475569"
+                                        font.pixelSize: 9
+                                        font.family: "Bahnschrift"
+                                        visible: root.appController && root.appController.calibrationTempCompPreviewProgressDeterminate
+                                    }
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: "Режим только для предпросмотра: значения в МК не записываются."
+                                    color: "#64748b"
+                                    font.pixelSize: 9
+                                    font.family: "Bahnschrift"
+                                    elide: Text.ElideRight
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
                             radius: 7
                             color: "#fff7ed"
                             border.color: "#fed7aa"
@@ -1560,19 +1842,28 @@ Item {
                             CheckBox {
                                 text: "Сырой"
                                 checked: root.tempCompShowRawSeries
-                                onToggled: root.tempCompShowRawSeries = checked
+                                onToggled: {
+                                    root.tempCompShowRawSeries = checked
+                                    root.rebuildFilteredTempCompSeries()
+                                }
                             }
 
                             CheckBox {
                                 text: "Текущий K1/K0"
                                 checked: root.tempCompShowCurrentSeries
-                                onToggled: root.tempCompShowCurrentSeries = checked
+                                onToggled: {
+                                    root.tempCompShowCurrentSeries = checked
+                                    root.rebuildFilteredTempCompSeries()
+                                }
                             }
 
                             CheckBox {
                                 text: "Рекоменд. K1/K0"
                                 checked: root.tempCompShowRecommendedSeries
-                                onToggled: root.tempCompShowRecommendedSeries = checked
+                                onToggled: {
+                                    root.tempCompShowRecommendedSeries = checked
+                                    root.rebuildFilteredTempCompSeries()
+                                }
                             }
 
                             Item { Layout.fillWidth: true }
@@ -1584,7 +1875,7 @@ Item {
                         spacing: 3
 
                         Repeater {
-                            model: root.filteredTempCompSeries()
+                            model: root.tempCompFilteredSeries
 
                             RowLayout {
                                 Layout.fillWidth: true
@@ -1638,7 +1929,7 @@ Item {
                         secondaryYAxisTitle: "Уровень, %"
                         secondaryYAxisEmptyPeriod: root.appController ? root.appController.calibrationLevel0Value : NaN
                         secondaryYAxisFullPeriod: root.appController ? root.appController.calibrationLevel100Value : NaN
-                        series: root.filteredTempCompSeries()
+                        series: root.tempCompFilteredSeries
                         emptyText: "Загрузите CSV из Коллектора для построения графика."
                         customXAxisTitle: "Температура, °C"
                         customYAxisTitle: "Период, count"
@@ -1730,6 +2021,8 @@ Item {
                 var currentK0 = root.appController.calibrationTempCompCurrentK0Text
                 tempCompK0Field.text = (currentK0 && currentK0 !== "-") ? currentK0 : ""
             }
+            root.syncLinearPreviewFields()
+            root.rebuildFilteredTempCompSeries()
         }
     }
 
@@ -1740,6 +2033,8 @@ Item {
             tempCompK1Field.text = (currentK1 && currentK1 !== "-") ? currentK1 : ""
             var currentK0 = root.appController.calibrationTempCompCurrentK0Text
             tempCompK0Field.text = (currentK0 && currentK0 !== "-") ? currentK0 : ""
+            root.syncLinearPreviewFields()
+            root.rebuildFilteredTempCompSeries()
         }
     }
 }

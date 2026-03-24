@@ -139,6 +139,10 @@ class AppController(
         self._calibration_temp_comp_operation_busy = False
         self._calibration_temp_comp_operation_progress_percent = 0
         self._calibration_temp_comp_operation_progress_determinate = False
+        self._calibration_temp_comp_preview_status = "Ожидание превью."
+        self._calibration_temp_comp_preview_busy = False
+        self._calibration_temp_comp_preview_progress_percent = 0
+        self._calibration_temp_comp_preview_progress_determinate = False
         self._calibration_temp_comp_samples: list[dict[str, object]] = []
         self._calibration_temp_comp_samples_by_node: dict[int, dict[str, object]] = {}
         self._calibration_temp_comp_sample_limit = 3000
@@ -151,6 +155,9 @@ class AppController(
         self._calibration_temp_comp_k1_x100_delta: int | None = None
         self._calibration_temp_comp_k1_x100_next: int | None = None
         self._calibration_temp_comp_k0_count_current: int | None = None
+        self._calibration_temp_comp_linear_preview_enabled = False
+        self._calibration_temp_comp_linear_preview_k1_x100: int | None = None
+        self._calibration_temp_comp_linear_preview_k0_count: int | None = None
         self._calibration_temp_comp_advanced_values: dict[str, int | None] = {}
         self._calibration_temp_comp_adv_read_active = False
         self._calibration_temp_comp_adv_read_queue: list[str] = []
