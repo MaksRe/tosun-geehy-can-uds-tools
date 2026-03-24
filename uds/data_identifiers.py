@@ -32,6 +32,22 @@ class UdsData:
         "raw_temperature"   : UdsVar(0x0019, 2, "Сырые данные текущей температуры"),
         "fuel_temp_comp_k1_x100": UdsVar(0x001B, 2, "Температурная компенсация K1 x100"),
         "fuel_temp_comp_k0_count": UdsVar(0x001C, 2, "Температурная компенсация K0 count"),
+        "fuel_temp_comp_mode": UdsVar(0x001D, 1, "Режим температурной компенсации"),
+        "fuel_temp_comp_dir_hyst_x10": UdsVar(0x001E, 2, "Гистерезис ветки нагрев/охлаждение, 0.1°C"),
+        "fuel_temp_comp_seg_t1_x10": UdsVar(0x001F, 2, "Граница сегментов S1/S2, 0.1°C"),
+        "fuel_temp_comp_seg_t2_x10": UdsVar(0x0020, 2, "Граница сегментов S2/S3, 0.1°C"),
+        "fuel_temp_comp_seg_t3_x10": UdsVar(0x0021, 2, "Граница сегментов S3/S4, 0.1°C"),
+        "fuel_temp_comp_seg_t4_x10": UdsVar(0x0022, 2, "Граница сегментов S4/S5, 0.1°C"),
+        "fuel_temp_comp_k1_cool_seg1_x100": UdsVar(0x0023, 2, "K1 охлаждения S1 x100"),
+        "fuel_temp_comp_k1_cool_seg2_x100": UdsVar(0x0024, 2, "K1 охлаждения S2 x100"),
+        "fuel_temp_comp_k1_cool_seg3_x100": UdsVar(0x0025, 2, "K1 охлаждения S3 x100"),
+        "fuel_temp_comp_k1_cool_seg4_x100": UdsVar(0x0026, 2, "K1 охлаждения S4 x100"),
+        "fuel_temp_comp_k1_cool_seg5_x100": UdsVar(0x0027, 2, "K1 охлаждения S5 x100"),
+        "fuel_temp_comp_k1_heat_seg1_x100": UdsVar(0x0028, 2, "K1 нагрева S1 x100"),
+        "fuel_temp_comp_k1_heat_seg2_x100": UdsVar(0x0029, 2, "K1 нагрева S2 x100"),
+        "fuel_temp_comp_k1_heat_seg3_x100": UdsVar(0x002A, 2, "K1 нагрева S3 x100"),
+        "fuel_temp_comp_k1_heat_seg4_x100": UdsVar(0x002B, 2, "K1 нагрева S4 x100"),
+        "fuel_temp_comp_k1_heat_seg5_x100": UdsVar(0x002C, 2, "K1 нагрева S5 x100"),
 
         "vmecusndid"        : UdsVar(0xF188, 18, "Номер ПО ЭБУ изготовителя ТС"),
         "vmecusvndid"       : UdsVar(0xF189, 32, "Номер версии ПО ЭБУ изготовителя ТС"),
@@ -67,6 +83,22 @@ class UdsData:
     raw_temperature     = vars.get("raw_temperature")
     fuel_temp_comp_k1_x100 = vars.get("fuel_temp_comp_k1_x100")
     fuel_temp_comp_k0_count = vars.get("fuel_temp_comp_k0_count")
+    fuel_temp_comp_mode = vars.get("fuel_temp_comp_mode")
+    fuel_temp_comp_dir_hyst_x10 = vars.get("fuel_temp_comp_dir_hyst_x10")
+    fuel_temp_comp_seg_t1_x10 = vars.get("fuel_temp_comp_seg_t1_x10")
+    fuel_temp_comp_seg_t2_x10 = vars.get("fuel_temp_comp_seg_t2_x10")
+    fuel_temp_comp_seg_t3_x10 = vars.get("fuel_temp_comp_seg_t3_x10")
+    fuel_temp_comp_seg_t4_x10 = vars.get("fuel_temp_comp_seg_t4_x10")
+    fuel_temp_comp_k1_cool_seg1_x100 = vars.get("fuel_temp_comp_k1_cool_seg1_x100")
+    fuel_temp_comp_k1_cool_seg2_x100 = vars.get("fuel_temp_comp_k1_cool_seg2_x100")
+    fuel_temp_comp_k1_cool_seg3_x100 = vars.get("fuel_temp_comp_k1_cool_seg3_x100")
+    fuel_temp_comp_k1_cool_seg4_x100 = vars.get("fuel_temp_comp_k1_cool_seg4_x100")
+    fuel_temp_comp_k1_cool_seg5_x100 = vars.get("fuel_temp_comp_k1_cool_seg5_x100")
+    fuel_temp_comp_k1_heat_seg1_x100 = vars.get("fuel_temp_comp_k1_heat_seg1_x100")
+    fuel_temp_comp_k1_heat_seg2_x100 = vars.get("fuel_temp_comp_k1_heat_seg2_x100")
+    fuel_temp_comp_k1_heat_seg3_x100 = vars.get("fuel_temp_comp_k1_heat_seg3_x100")
+    fuel_temp_comp_k1_heat_seg4_x100 = vars.get("fuel_temp_comp_k1_heat_seg4_x100")
+    fuel_temp_comp_k1_heat_seg5_x100 = vars.get("fuel_temp_comp_k1_heat_seg5_x100")
 
     vmecusndid          = vars.get("vmecusndid")
     vmecusvndid         = vars.get("vmecusvndid")

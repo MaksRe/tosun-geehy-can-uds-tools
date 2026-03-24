@@ -296,7 +296,19 @@ class Bootloader(QObject):
                 self.signal_new_state.emit(f"Передача блока ({block_size} байт)", RowColor.blue)
 
         elif self._state == BootloaderState.TRANSFER_DATA_FF:
-            if self._service_transfer_data.verify_flow_control(_data):
+            # Для короткого блока (Single Frame) ECU сразу отвечает позитивным TransferData.
+            if (self._service_transfer_data.block_transferred() and
+                    self._service_transfer_data.verify_answer_after_sent_block(_data)):
+                if self._service_transfer_data.data_transferred():
+                    self.signal_new_state.emit("Все данные переданы", RowColor.green)
+
+                    self._state = BootloaderState.REQUEST_TRANSFER_EXIT
+                    self._service_request_transfer_exit.request_transfer_exit()
+                    self.signal_new_state.emit("Завершение передачи", RowColor.blue)
+                else:
+                    block_size = self._service_transfer_data.send_first_frame()
+                    self.signal_new_state.emit(f"Передача блока ({block_size} байт)", RowColor.blue)
+            elif self._service_transfer_data.verify_flow_control(_data):
                 self._state = BootloaderState.TRANSFER_DATA_CF
                 self._service_transfer_data.send_consecutive_frames()
             else:
@@ -406,5 +418,4 @@ class Bootloader(QObject):
         if self._state == BootloaderState.ERROR:
             pass
             # CanDevice.instance().signal_new_message.disconnect(self.on_new_message)
-
 

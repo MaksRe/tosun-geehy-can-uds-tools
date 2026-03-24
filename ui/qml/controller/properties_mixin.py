@@ -584,6 +584,22 @@ class AppControllerPropertiesMixin(AppControllerContract):
     def calibrationTempCompStatusText(self):
         return str(self._calibration_temp_comp_status)
 
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompOperationText(self):
+        return str(self._calibration_temp_comp_operation_text)
+
+    @Property(bool, notify=calibrationTempCompChanged)
+    def calibrationTempCompOperationBusy(self):
+        return bool(self._calibration_temp_comp_operation_busy)
+
+    @Property(int, notify=calibrationTempCompChanged)
+    def calibrationTempCompOperationProgressPercent(self):
+        return int(self._calibration_temp_comp_operation_progress_percent)
+
+    @Property(bool, notify=calibrationTempCompChanged)
+    def calibrationTempCompOperationProgressDeterminate(self):
+        return bool(self._calibration_temp_comp_operation_progress_determinate)
+
     def _calibration_temp_comp_has_enough_samples(self) -> bool:
         """Цель функции в проверке достаточности выборки, затем она определяет готовность регрессии по температуре."""
         return len(self._calibration_temp_comp_samples) >= 2
@@ -687,6 +703,38 @@ class AppControllerPropertiesMixin(AppControllerContract):
         if value is None:
             return "не считан (DID 0x001C)"
         return str(int(value))
+
+    @Property("QVariantList", notify=calibrationTempCompChanged)
+    def calibrationTempCompAdvancedRows(self):
+        rows: list[dict[str, object]] = []
+        for field in self._temp_comp_advanced_fields():
+            field_var = field.get("var")
+            if field_var is None:
+                continue
+
+            field_key = str(field.get("key", ""))
+            raw_value = self._calibration_temp_comp_advanced_values.get(field_key)
+            display_text = self._temp_comp_field_ui_value_text(field, raw_value)
+            raw_text = "" if raw_value is None else str(int(raw_value))
+            recommended_raw_value = self._calibration_temp_comp_advanced_recommended_values.get(field_key)
+            has_recommended = recommended_raw_value is not None
+            recommended_display_text = self._temp_comp_field_ui_value_text(field, recommended_raw_value) if has_recommended else "не рассчитан"
+            recommended_raw_text = "" if recommended_raw_value is None else str(int(recommended_raw_value))
+            rows.append(
+                {
+                    "key": field_key,
+                    "did": f"0x{int(field_var.pid) & 0xFFFF:04X}",
+                    "label": str(field.get("label", "")),
+                    "unit": str(field.get("unit", "")),
+                    "valueText": display_text,
+                    "valueRawText": raw_text,
+                    "recommendedText": recommended_display_text,
+                    "recommendedRawText": recommended_raw_text,
+                    "hasRecommended": bool(has_recommended),
+                    "placeholder": str(field.get("placeholder", "dec/0xHEX")),
+                }
+            )
+        return rows
 
     @Property(str, notify=calibrationTempCompChanged)
     def calibrationTempCompBaseK1Text(self):

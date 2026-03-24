@@ -16,6 +16,13 @@ Item {
     property color inputBorder: "#c8d9ea"
     property color inputFocus: "#0ea5e9"
     readonly property int contentPadding: 10
+    readonly property int advancedParamColumnWidth: 250
+    readonly property int advancedRecommendedColumnWidth: 260
+    readonly property int advancedReadButtonWidth: 76
+    readonly property int advancedWriteButtonWidth: 88
+    property bool tempCompShowRawSeries: true
+    property bool tempCompShowCurrentSeries: true
+    property bool tempCompShowRecommendedSeries: true
 
     function applyCapturedToField(targetField, targetSwitch) {
         if (!root.appController) {
@@ -37,6 +44,34 @@ Item {
             return seriesItem[fieldName]
         }
         return fallbackValue
+    }
+
+    function tempCompSeriesVisible(seriesItem) {
+        var name = String(seriesField(seriesItem, "node", ""))
+        if (name.indexOf("Сырой период") === 0) {
+            return tempCompShowRawSeries
+        }
+        if (name.indexOf("После текущих") === 0) {
+            return tempCompShowCurrentSeries
+        }
+        if (name.indexOf("После рекоменд.") === 0) {
+            return tempCompShowRecommendedSeries
+        }
+        return true
+    }
+
+    function filteredTempCompSeries() {
+        if (!root.appController) {
+            return []
+        }
+        var source = root.appController.calibrationTempCompTrendSeries
+        var filtered = []
+        for (var i = 0; i < source.length; i += 1) {
+            if (tempCompSeriesVisible(source[i])) {
+                filtered.push(source[i])
+            }
+        }
+        return filtered
     }
 
     Layout.fillWidth: true
@@ -544,8 +579,8 @@ Item {
             Layout.fillWidth: true
             Layout.fillHeight: expanded
             Layout.minimumHeight: 44
-            title: "Температурная компенсация K1/K0"
-            hintText: "Офлайн-анализ CSV из Коллектора (без онлайн-дублирования)"
+            title: "Температурная компенсация"
+            hintText: "Офлайн-анализ CSV и настройка K1/K0 + segmented heat/cool"
             cardColor: root.cardColor
             cardBorder: root.cardBorder
             textMain: root.textMain
@@ -561,11 +596,28 @@ Item {
                 color: "#f8fbff"
                 border.color: "#d6e2ef"
 
-                ColumnLayout {
-                    id: tempCompLayout
+                Flickable {
+                    id: tempCompFlick
                     anchors.fill: parent
-                    anchors.margins: 7
-                    spacing: 6
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    contentWidth: width
+                    contentHeight: tempCompLayout.implicitHeight + 14
+
+                    ScrollBar.vertical: ScrollBar {
+                        policy: ScrollBar.AsNeeded
+                    }
+
+                    ScrollBar.horizontal: ScrollBar {
+                        policy: ScrollBar.AlwaysOff
+                    }
+
+                    ColumnLayout {
+                        id: tempCompLayout
+                        x: 7
+                        y: 7
+                        width: Math.max(0, tempCompFlick.width - 14)
+                        spacing: 6
 
                     RowLayout {
                         Layout.fillWidth: true
@@ -603,138 +655,654 @@ Item {
                         Text {
                             Layout.fillWidth: true
                             Layout.minimumWidth: 260
-                            text: root.appController ? root.appController.calibrationTempCompStatusText : "Ожидание CSV"
+                            text: "Подробный статус расчета и рекомендуемые параметры смотрите в спойлере «Итог офлайн-анализа»."
+                            color: root.textSoft
+                            font.pixelSize: 11
+                            font.family: "Bahnschrift"
+                            wrapMode: Text.WordWrap
+                            maximumLineCount: 3
+                            elide: Text.ElideRight
+                            horizontalAlignment: Text.AlignRight
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        radius: 7
+                        color: "#eef6ff"
+                        border.color: "#c7d9ee"
+                        implicitHeight: 44
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.margins: 4
+                            spacing: 6
+
+                            FancyButton {
+                                Layout.preferredWidth: 138
+                                Layout.preferredHeight: 28
+                                text: "Загрузить CSV"
+                                tone: "#0284c7"
+                                toneHover: "#0369a1"
+                                tonePressed: "#075985"
+                                enabled: root.appController !== null
+                                onClicked: tempCompCsvFileDialog.open()
+                            }
+
+                            FancyButton {
+                                Layout.preferredWidth: 106
+                                Layout.preferredHeight: 28
+                                text: "Очистить"
+                                tone: "#475569"
+                                toneHover: "#334155"
+                                tonePressed: "#1e293b"
+                                enabled: root.appController !== null
+                                onClicked: if (root.appController) root.appController.clearCalibrationTempCompSamples()
+                            }
+
+                            FancyButton {
+                                Layout.preferredWidth: 170
+                                Layout.preferredHeight: 28
+                                text: "Прочитать из МК"
+                                tone: "#0f766e"
+                                toneHover: "#115e59"
+                                tonePressed: "#134e4a"
+                                enabled: root.appController !== null
+                                onClicked: if (root.appController) {
+                                    root.appController.readCalibrationTempCompK1()
+                                    root.appController.readCalibrationTempCompK0()
+                                    root.appController.readCalibrationTempCompAdvanced()
+                                }
+                            }
+
+                            FancyButton {
+                                Layout.preferredWidth: 198
+                                Layout.preferredHeight: 28
+                                text: "Записать рекомендации"
+                                tone: "#16a34a"
+                                toneHover: "#15803d"
+                                tonePressed: "#166534"
+                                enabled: root.appController && (
+                                    root.appController.calibrationTempCompCanApplyNext
+                                    || root.appController.calibrationTempCompCanApplyNextK0
+                                )
+                                onClicked: if (root.appController) root.appController.applyCalibrationTempCompRecommendations()
+                            }
+
+                            Item { Layout.fillWidth: true }
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+
+                        Rectangle {
+                            width: 10
+                            height: 10
+                            radius: 5
+                            color: {
+                                if (!root.appController) return "#94a3b8"
+                                return root.appController.calibrationTempCompOperationBusy ? "#f59e0b" : "#16a34a"
+                            }
+                        }
+
+                        BusyIndicator {
+                            running: root.appController && root.appController.calibrationTempCompOperationBusy
+                            visible: running
+                            Layout.preferredWidth: 16
+                            Layout.preferredHeight: 16
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: root.appController ? root.appController.calibrationTempCompOperationText : "Ожидание операций."
                             color: root.textSoft
                             font.pixelSize: 11
                             font.family: "Bahnschrift"
                             wrapMode: Text.WordWrap
                             maximumLineCount: 2
                             elide: Text.ElideRight
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+                        visible: root.appController !== null
+
+                        ProgressBar {
+                            Layout.fillWidth: true
+                            from: 0
+                            to: 100
+                            value: root.appController ? root.appController.calibrationTempCompOperationProgressPercent : 0
+                            indeterminate: root.appController ? (
+                                !root.appController.calibrationTempCompOperationProgressDeterminate
+                                && root.appController.calibrationTempCompOperationBusy
+                            ) : false
+                            visible: root.appController ? (
+                                root.appController.calibrationTempCompOperationBusy
+                                || root.appController.calibrationTempCompOperationProgressDeterminate
+                            ) : false
+                        }
+
+                        Text {
+                            Layout.preferredWidth: 42
                             horizontalAlignment: Text.AlignRight
+                            text: root.appController && root.appController.calibrationTempCompOperationProgressDeterminate
+                                ? (root.appController.calibrationTempCompOperationProgressPercent + "%")
+                                : ""
+                            color: root.textSoft
+                            font.pixelSize: 10
+                            font.family: "Bahnschrift"
+                            visible: root.appController && root.appController.calibrationTempCompOperationProgressDeterminate
                         }
                     }
 
-                    RowLayout {
+                    Text {
                         Layout.fillWidth: true
-                        spacing: 6
-
-                        FancyButton {
-                            Layout.preferredWidth: 128
-                            Layout.preferredHeight: 30
-                            text: "Загрузить CSV"
-                            tone: "#0284c7"
-                            toneHover: "#0369a1"
-                            tonePressed: "#075985"
-                            enabled: root.appController !== null
-                            onClicked: tempCompCsvFileDialog.open()
-                        }
-
-                        FancyButton {
-                            Layout.preferredWidth: 112
-                            Layout.preferredHeight: 30
-                            text: "Очистить"
-                            tone: "#475569"
-                            toneHover: "#334155"
-                            tonePressed: "#1e293b"
-                            enabled: root.appController !== null
-                            onClicked: if (root.appController) root.appController.clearCalibrationTempCompSamples()
-                        }
-
-                        FancyButton {
-                            Layout.preferredWidth: 110
-                            Layout.preferredHeight: 30
-                            text: "Прочитать K1"
-                            tone: "#0f766e"
-                            toneHover: "#115e59"
-                            tonePressed: "#134e4a"
-                            enabled: root.appController !== null
-                            onClicked: if (root.appController) root.appController.readCalibrationTempCompK1()
-                        }
-
-                        FancyButton {
-                            Layout.preferredWidth: 110
-                            Layout.preferredHeight: 30
-                            text: "Прочитать K0"
-                            tone: "#0f766e"
-                            toneHover: "#115e59"
-                            tonePressed: "#134e4a"
-                            enabled: root.appController !== null
-                            onClicked: if (root.appController) root.appController.readCalibrationTempCompK0()
-                        }
-
-                        FancyButton {
-                            Layout.preferredWidth: 128
-                            Layout.preferredHeight: 30
-                            text: "Применить next K1"
-                            tone: "#16a34a"
-                            toneHover: "#15803d"
-                            tonePressed: "#166534"
-                            enabled: root.appController && root.appController.calibrationTempCompCanApplyNext
-                            onClicked: if (root.appController) root.appController.applyCalibrationTempCompNextK1()
-                        }
-
-                        FancyButton {
-                            Layout.preferredWidth: 128
-                            Layout.preferredHeight: 30
-                            text: "Применить next K0"
-                            tone: "#16a34a"
-                            toneHover: "#15803d"
-                            tonePressed: "#166534"
-                            enabled: root.appController && root.appController.calibrationTempCompCanApplyNextK0
-                            onClicked: if (root.appController) root.appController.applyCalibrationTempCompNextK0()
-                        }
-
-                        Item { Layout.fillWidth: true }
+                        text: "Базовый поток: загрузить CSV -> проверить график -> записать рекомендации. Ручные DID доступны в расширенном блоке."
+                        color: root.textSoft
+                        font.pixelSize: 10
+                        font.family: "Bahnschrift"
+                        wrapMode: Text.WordWrap
                     }
 
-                    RowLayout {
+                    SpoilerSection {
+                        id: tempCompSummarySpoiler
                         Layout.fillWidth: true
-                        spacing: 6
+                        Layout.fillHeight: false
+                        title: "Итог офлайн-анализа"
+                        hintText: "Подробный статус и рекомендуемые параметры для записи в МК"
+                        cardColor: "#f4f8fd"
+                        cardBorder: "#d6e2ef"
+                        textMain: root.textMain
+                        textSoft: root.textSoft
+                        accentColor: "#0284c7"
+                        expanded: false
 
-                        FancyTextField {
-                            id: tempCompK1Field
-                            Layout.preferredWidth: 200
-                            Layout.preferredHeight: 30
-                            placeholderText: "K1 (signed dec / 0xHEX)"
-                            textColor: root.textMain
-                            bgColor: root.inputBg
-                            borderColor: root.inputBorder
-                            focusBorderColor: root.inputFocus
-                            onAccepted: if (root.appController) root.appController.writeCalibrationTempCompK1(text)
+                        Rectangle {
+                            Layout.fillWidth: true
+                            radius: 9
+                            color: "#ffffff"
+                            border.color: "#d6e2ef"
+                            implicitHeight: summaryLayout.implicitHeight + 12
+
+                            ColumnLayout {
+                                id: summaryLayout
+                                anchors.fill: parent
+                                anchors.margins: 6
+                                spacing: 6
+
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    radius: 7
+                                    color: "#f8fbff"
+                                    border.color: "#d6e2ef"
+                                    implicitHeight: summaryStatusText.implicitHeight + 14
+
+                                    Text {
+                                        id: summaryStatusText
+                                        anchors.fill: parent
+                                        anchors.margins: 7
+                                        text: root.appController ? root.appController.calibrationTempCompStatusText : "Ожидание CSV."
+                                        color: root.textMain
+                                        font.pixelSize: 11
+                                        font.family: "Bahnschrift"
+                                        wrapMode: Text.WordWrap
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        radius: 7
+                                        color: "#eff6ff"
+                                        border.color: "#bfdbfe"
+                                        implicitHeight: k1SummaryLayout.implicitHeight + 10
+
+                                        ColumnLayout {
+                                            id: k1SummaryLayout
+                                            anchors.fill: parent
+                                            anchors.margins: 5
+                                            spacing: 2
+
+                                            Text {
+                                                Layout.fillWidth: true
+                                                text: "K1 (DID 0x001B)"
+                                                color: "#1e3a8a"
+                                                font.pixelSize: 11
+                                                font.bold: true
+                                                font.family: "Bahnschrift"
+                                            }
+
+                                            LabelValue {
+                                                Layout.fillWidth: true
+                                                labelText: "Текущее"
+                                                valueText: root.appController ? root.appController.calibrationTempCompCurrentK1Text : "-"
+                                                labelColor: root.textSoft
+                                                valueColor: root.textMain
+                                                fontFamily: "Bahnschrift"
+                                            }
+
+                                            LabelValue {
+                                                Layout.fillWidth: true
+                                                labelText: "Рекоменд."
+                                                valueText: root.appController ? root.appController.calibrationTempCompRecommendedK1Text : "-"
+                                                labelColor: root.textSoft
+                                                valueColor: "#0f766e"
+                                                fontFamily: "Bahnschrift"
+                                            }
+
+                                            LabelValue {
+                                                Layout.fillWidth: true
+                                                labelText: "Изменение"
+                                                valueText: root.appController ? root.appController.calibrationTempCompDeltaK1Text : "-"
+                                                labelColor: root.textSoft
+                                                valueColor: root.textMain
+                                                fontFamily: "Bahnschrift"
+                                            }
+
+                                            LabelValue {
+                                                Layout.fillWidth: true
+                                                labelText: "К записи"
+                                                valueText: root.appController ? root.appController.calibrationTempCompNextK1Text : "-"
+                                                labelColor: root.textSoft
+                                                valueColor: "#166534"
+                                                fontFamily: "Bahnschrift"
+                                            }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        radius: 7
+                                        color: "#f0fdf4"
+                                        border.color: "#bbf7d0"
+                                        implicitHeight: k0SummaryLayout.implicitHeight + 10
+
+                                        ColumnLayout {
+                                            id: k0SummaryLayout
+                                            anchors.fill: parent
+                                            anchors.margins: 5
+                                            spacing: 2
+
+                                            Text {
+                                                Layout.fillWidth: true
+                                                text: "K0 (DID 0x001C)"
+                                                color: "#14532d"
+                                                font.pixelSize: 11
+                                                font.bold: true
+                                                font.family: "Bahnschrift"
+                                            }
+
+                                            LabelValue {
+                                                Layout.fillWidth: true
+                                                labelText: "Текущее"
+                                                valueText: root.appController ? root.appController.calibrationTempCompCurrentK0Text : "-"
+                                                labelColor: root.textSoft
+                                                valueColor: root.textMain
+                                                fontFamily: "Bahnschrift"
+                                            }
+
+                                            LabelValue {
+                                                Layout.fillWidth: true
+                                                labelText: "Рекоменд."
+                                                valueText: root.appController ? root.appController.calibrationTempCompRecommendedK0Text : "-"
+                                                labelColor: root.textSoft
+                                                valueColor: "#0f766e"
+                                                fontFamily: "Bahnschrift"
+                                            }
+
+                                            LabelValue {
+                                                Layout.fillWidth: true
+                                                labelText: "Изменение"
+                                                valueText: root.appController ? root.appController.calibrationTempCompDeltaK0Text : "-"
+                                                labelColor: root.textSoft
+                                                valueColor: root.textMain
+                                                fontFamily: "Bahnschrift"
+                                            }
+
+                                            LabelValue {
+                                                Layout.fillWidth: true
+                                                labelText: "К записи"
+                                                valueText: root.appController ? root.appController.calibrationTempCompNextK0Text : "-"
+                                                labelColor: root.textSoft
+                                                valueColor: "#166534"
+                                                fontFamily: "Bahnschrift"
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: root.appController && (root.appController.calibrationTempCompCanApplyNext || root.appController.calibrationTempCompCanApplyNextK0)
+                                        ? "Рекомендации готовы к записи. Кнопка «Записать рекомендации» записывает все доступные рассчитанные параметры по очереди."
+                                        : "Рекомендации еще не готовы. Загрузите CSV и дождитесь расчета."
+                                    color: root.textSoft
+                                    font.pixelSize: 10
+                                    font.family: "Bahnschrift"
+                                    wrapMode: Text.WordWrap
+                                }
+                            }
                         }
+                    }
 
-                        FancyButton {
-                            Layout.preferredWidth: 132
-                            Layout.preferredHeight: 30
-                            text: "Записать K1"
-                            tone: "#0284c7"
-                            toneHover: "#0369a1"
-                            tonePressed: "#075985"
-                            enabled: root.appController !== null
-                            onClicked: if (root.appController) root.appController.writeCalibrationTempCompK1(tempCompK1Field.text)
-                        }
+                    SpoilerSection {
+                        id: tempCompAdvancedSpoiler
+                        Layout.fillWidth: true
+                        Layout.fillHeight: false
+                        title: "Расширенные настройки (DID 0x001D..0x002C)"
+                        hintText: "Ручной ввод K1/K0 и детальные DID по сегментной компенсации"
+                        cardColor: "#f4f8fd"
+                        cardBorder: "#d6e2ef"
+                        textMain: root.textMain
+                        textSoft: root.textSoft
+                        accentColor: "#0f766e"
+                        expanded: false
 
-                        FancyTextField {
-                            id: tempCompK0Field
-                            Layout.preferredWidth: 200
-                            Layout.preferredHeight: 30
-                            placeholderText: "K0 (signed dec / 0xHEX)"
-                            textColor: root.textMain
-                            bgColor: root.inputBg
-                            borderColor: root.inputBorder
-                            focusBorderColor: root.inputFocus
-                            onAccepted: if (root.appController) root.appController.writeCalibrationTempCompK0(text)
-                        }
+                        Rectangle {
+                            Layout.fillWidth: true
+                            radius: 9
+                            color: "#ffffff"
+                            border.color: "#d6e2ef"
+                            implicitHeight: advancedCompLayout.implicitHeight + 12
 
-                        FancyButton {
-                            Layout.preferredWidth: 132
-                            Layout.preferredHeight: 30
-                            text: "Записать K0"
-                            tone: "#0284c7"
-                            toneHover: "#0369a1"
-                            tonePressed: "#075985"
-                            enabled: root.appController !== null
-                            onClicked: if (root.appController) root.appController.writeCalibrationTempCompK0(tempCompK0Field.text)
+                            ColumnLayout {
+                                id: advancedCompLayout
+                                anchors.fill: parent
+                                anchors.margins: 6
+                                spacing: 4
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Text {
+                                        Layout.preferredWidth: 140
+                                        text: "K1 / K0"
+                                        color: root.textSoft
+                                        font.pixelSize: 11
+                                        font.bold: true
+                                        font.family: "Bahnschrift"
+                                    }
+
+                                    FancyTextField {
+                                        id: tempCompK1Field
+                                        Layout.preferredWidth: 180
+                                        Layout.preferredHeight: 34
+                                        placeholderText: "K1 (signed dec / 0xHEX)"
+                                        textColor: root.textMain
+                                        bgColor: root.inputBg
+                                        borderColor: root.inputBorder
+                                        focusBorderColor: root.inputFocus
+                                        onAccepted: if (root.appController) root.appController.writeCalibrationTempCompK1(text)
+                                    }
+
+                                    FancyButton {
+                                        Layout.preferredWidth: 106
+                                        Layout.preferredHeight: 32
+                                        text: "Записать K1"
+                                        tone: "#0284c7"
+                                        toneHover: "#0369a1"
+                                        tonePressed: "#075985"
+                                        enabled: root.appController !== null
+                                        onClicked: if (root.appController) root.appController.writeCalibrationTempCompK1(tempCompK1Field.text)
+                                    }
+
+                                    FancyTextField {
+                                        id: tempCompK0Field
+                                        Layout.preferredWidth: 180
+                                        Layout.preferredHeight: 34
+                                        placeholderText: "K0 (signed dec / 0xHEX)"
+                                        textColor: root.textMain
+                                        bgColor: root.inputBg
+                                        borderColor: root.inputBorder
+                                        focusBorderColor: root.inputFocus
+                                        onAccepted: if (root.appController) root.appController.writeCalibrationTempCompK0(text)
+                                    }
+
+                                    FancyButton {
+                                        Layout.preferredWidth: 106
+                                        Layout.preferredHeight: 32
+                                        text: "Записать K0"
+                                        tone: "#0284c7"
+                                        toneHover: "#0369a1"
+                                        tonePressed: "#075985"
+                                        enabled: root.appController !== null
+                                        onClicked: if (root.appController) root.appController.writeCalibrationTempCompK0(tempCompK0Field.text)
+                                    }
+
+                                    Item { Layout.fillWidth: true }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: "Каждая строка: чтение/запись DID. При загрузке CSV автоматически рассчитываются рекомендации по 0x001D..0x002C. Режим (0x001D) выбирается из списка. Гистерезис (0x001E): единицы 0.1 °C, пример 5 = 0.5 °C."
+                                        color: root.textSoft
+                                        font.pixelSize: 10
+                                        font.family: "Bahnschrift"
+                                        wrapMode: Text.WordWrap
+                                    }
+
+                                    FancyButton {
+                                        Layout.preferredWidth: 194
+                                        Layout.preferredHeight: 32
+                                        text: "Прочитать все DID"
+                                        tone: "#0f766e"
+                                        toneHover: "#115e59"
+                                        tonePressed: "#134e4a"
+                                        enabled: root.appController !== null
+                                        onClicked: if (root.appController) root.appController.readCalibrationTempCompAdvanced()
+                                    }
+                                }
+
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    radius: 6
+                                    color: "#e2e8f0"
+                                    border.color: "#cbd5e1"
+                                    implicitHeight: 28
+
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: 4
+                                        spacing: 6
+
+                                        Text {
+                                            Layout.preferredWidth: root.advancedParamColumnWidth
+                                            text: "Параметр"
+                                            color: "#334155"
+                                            font.pixelSize: 10
+                                            font.bold: true
+                                            font.family: "Bahnschrift"
+                                            elide: Text.ElideRight
+                                            verticalAlignment: Text.AlignVCenter
+                                        }
+
+                                        Text {
+                                            Layout.preferredWidth: root.advancedRecommendedColumnWidth
+                                            text: "Рекомендуемое (из CSV)"
+                                            color: "#334155"
+                                            font.pixelSize: 10
+                                            font.bold: true
+                                            font.family: "Bahnschrift"
+                                            elide: Text.ElideRight
+                                            verticalAlignment: Text.AlignVCenter
+                                        }
+
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: "Ввод и действия"
+                                            color: "#334155"
+                                            font.pixelSize: 10
+                                            font.bold: true
+                                            font.family: "Bahnschrift"
+                                            elide: Text.ElideRight
+                                            verticalAlignment: Text.AlignVCenter
+                                        }
+                                    }
+                                }
+
+                                Repeater {
+                                    model: root.appController ? root.appController.calibrationTempCompAdvancedRows : []
+
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        radius: 7
+                                        color: index % 2 === 0 ? "#f8fafc" : "#f1f5f9"
+                                        border.color: "#dbe3ec"
+                                        implicitHeight: advancedRowLayout.implicitHeight + 8
+
+                                        RowLayout {
+                                            id: advancedRowLayout
+                                            anchors.fill: parent
+                                            anchors.margins: 4
+                                            spacing: 6
+
+                                            function advancedFieldKey() {
+                                                return String(root.seriesField(modelData, "key", ""))
+                                            }
+
+                                            function advancedIsModeField() {
+                                                return advancedFieldKey() === "mode"
+                                            }
+
+                                            function advancedWriteValueText() {
+                                                if (advancedIsModeField()) {
+                                                    return String(modeValueCombo.currentIndex)
+                                                }
+                                                return advancedValueField.text
+                                            }
+
+                                            Text {
+                                                Layout.preferredWidth: root.advancedParamColumnWidth
+                                                Layout.preferredHeight: 32
+                                                text: {
+                                                    var title = String(root.seriesField(modelData, "label", "Параметр"))
+                                                    var did = String(root.seriesField(modelData, "did", "0x----"))
+                                                    return title + " (" + did + ")"
+                                                }
+                                                color: root.textMain
+                                                font.pixelSize: 11
+                                                font.family: "Bahnschrift"
+                                                elide: Text.ElideRight
+                                                verticalAlignment: Text.AlignVCenter
+                                            }
+
+                                            Text {
+                                                Layout.preferredWidth: root.advancedRecommendedColumnWidth
+                                                Layout.preferredHeight: 32
+                                                text: String(root.seriesField(modelData, "recommendedText", "не рассчитан"))
+                                                color: root.seriesField(modelData, "hasRecommended", false) ? "#0f766e" : "#94a3b8"
+                                                font.pixelSize: 10
+                                                font.family: "Bahnschrift"
+                                                elide: Text.ElideRight
+                                                verticalAlignment: Text.AlignVCenter
+                                            }
+
+                                            Item {
+                                                Layout.fillWidth: true
+                                                Layout.minimumWidth: 130
+                                                Layout.preferredWidth: 180
+                                                Layout.preferredHeight: 34
+
+                                                FancyTextField {
+                                                    id: advancedValueField
+                                                    anchors.fill: parent
+                                                    visible: !advancedRowLayout.advancedIsModeField()
+                                                    placeholderText: String(root.seriesField(modelData, "placeholder", "dec/0xHEX"))
+                                                    text: String(root.seriesField(modelData, "valueRawText", ""))
+                                                    textColor: root.textMain
+                                                    bgColor: root.inputBg
+                                                    borderColor: root.inputBorder
+                                                    focusBorderColor: root.inputFocus
+                                                    onAccepted: if (root.appController) {
+                                                        root.appController.writeCalibrationTempCompAdvancedParam(
+                                                            String(root.seriesField(modelData, "key", "")),
+                                                            text
+                                                        )
+                                                    }
+                                                }
+
+                                                FancyComboBox {
+                                                    id: modeValueCombo
+                                                    anchors.fill: parent
+                                                    visible: advancedRowLayout.advancedIsModeField()
+                                                    property bool previewReady: false
+                                                    model: [
+                                                        "0 - single (линейный K1)",
+                                                        "1 - segmented (K1 по сегментам)",
+                                                        "2 - segmented heat/cool (нагрев/охлаждение)"
+                                                    ]
+                                                    function pushPreviewToController() {
+                                                        if (!root.appController) {
+                                                            return
+                                                        }
+                                                        root.appController.setCalibrationTempCompAdvancedPreviewValue(
+                                                            String(root.seriesField(modelData, "key", "")),
+                                                            String(currentIndex)
+                                                        )
+                                                    }
+                                                    currentIndex: {
+                                                        var parsed = parseInt(String(root.seriesField(modelData, "valueRawText", "0")))
+                                                        if (isNaN(parsed) || parsed < 0 || parsed > 2) {
+                                                            return 0
+                                                        }
+                                                        return parsed
+                                                    }
+                                                    textColor: root.textMain
+                                                    bgColor: root.inputBg
+                                                    borderColor: root.inputBorder
+                                                    focusBorderColor: root.inputFocus
+                                                    onActivated: pushPreviewToController()
+                                                    onCurrentIndexChanged: if (previewReady) pushPreviewToController()
+                                                    Component.onCompleted: previewReady = true
+                                                }
+                                            }
+
+                                            FancyButton {
+                                                Layout.preferredWidth: root.advancedReadButtonWidth
+                                                Layout.preferredHeight: 32
+                                                text: "Читать"
+                                                tone: "#0284c7"
+                                                toneHover: "#0369a1"
+                                                tonePressed: "#075985"
+                                                enabled: root.appController !== null
+                                                onClicked: if (root.appController) {
+                                                    root.appController.readCalibrationTempCompAdvancedParam(
+                                                        String(root.seriesField(modelData, "key", ""))
+                                                    )
+                                                }
+                                            }
+
+                                            FancyButton {
+                                                Layout.preferredWidth: root.advancedWriteButtonWidth
+                                                Layout.preferredHeight: 32
+                                                text: "Записать"
+                                                tone: "#16a34a"
+                                                toneHover: "#15803d"
+                                                tonePressed: "#166534"
+                                                enabled: root.appController !== null
+                                                onClicked: if (root.appController) {
+                                                    root.appController.writeCalibrationTempCompAdvancedParam(
+                                                        String(root.seriesField(modelData, "key", "")),
+                                                        advancedRowLayout.advancedWriteValueText()
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -818,14 +1386,14 @@ Item {
 
                         GridLayout {
                             Layout.fillWidth: true
-                            columns: 3
+                            columns: 2
                             rowSpacing: 4
                             columnSpacing: 6
 
                             LabelValue {
                                 Layout.fillWidth: true
-                                labelText: "Текущие K1/K0"
-                                valueText: root.appController ? (root.appController.calibrationTempCompCurrentK1Text + " / " + root.appController.calibrationTempCompCurrentK0Text) : "-"
+                                labelText: "K1 текущее"
+                                valueText: root.appController ? root.appController.calibrationTempCompCurrentK1Text : "-"
                                 labelColor: root.textSoft
                                 valueColor: root.textMain
                                 fontFamily: "Bahnschrift"
@@ -833,8 +1401,8 @@ Item {
 
                             LabelValue {
                                 Layout.fillWidth: true
-                                labelText: "Рекоменд. K1/K0"
-                                valueText: root.appController ? (root.appController.calibrationTempCompRecommendedK1Text + " / " + root.appController.calibrationTempCompRecommendedK0Text) : "-"
+                                labelText: "K1 рекоменд."
+                                valueText: root.appController ? root.appController.calibrationTempCompRecommendedK1Text : "-"
                                 labelColor: root.textSoft
                                 valueColor: "#0f766e"
                                 fontFamily: "Bahnschrift"
@@ -842,10 +1410,55 @@ Item {
 
                             LabelValue {
                                 Layout.fillWidth: true
-                                labelText: "dK1 / dK0"
-                                valueText: root.appController ? (root.appController.calibrationTempCompDeltaK1Text + " / " + root.appController.calibrationTempCompDeltaK0Text) : "-"
+                                labelText: "dK1"
+                                valueText: root.appController ? root.appController.calibrationTempCompDeltaK1Text : "-"
                                 labelColor: root.textSoft
                                 valueColor: root.textMain
+                                fontFamily: "Bahnschrift"
+                            }
+
+                            LabelValue {
+                                Layout.fillWidth: true
+                                labelText: "K1 к записи"
+                                valueText: root.appController ? root.appController.calibrationTempCompNextK1Text : "-"
+                                labelColor: root.textSoft
+                                valueColor: "#166534"
+                                fontFamily: "Bahnschrift"
+                            }
+
+                            LabelValue {
+                                Layout.fillWidth: true
+                                labelText: "K0 текущее"
+                                valueText: root.appController ? root.appController.calibrationTempCompCurrentK0Text : "-"
+                                labelColor: root.textSoft
+                                valueColor: root.textMain
+                                fontFamily: "Bahnschrift"
+                            }
+
+                            LabelValue {
+                                Layout.fillWidth: true
+                                labelText: "K0 рекоменд."
+                                valueText: root.appController ? root.appController.calibrationTempCompRecommendedK0Text : "-"
+                                labelColor: root.textSoft
+                                valueColor: "#0f766e"
+                                fontFamily: "Bahnschrift"
+                            }
+
+                            LabelValue {
+                                Layout.fillWidth: true
+                                labelText: "dK0"
+                                valueText: root.appController ? root.appController.calibrationTempCompDeltaK0Text : "-"
+                                labelColor: root.textSoft
+                                valueColor: root.textMain
+                                fontFamily: "Bahnschrift"
+                            }
+
+                            LabelValue {
+                                Layout.fillWidth: true
+                                labelText: "K0 к записи"
+                                valueText: root.appController ? root.appController.calibrationTempCompNextK0Text : "-"
+                                labelColor: root.textSoft
+                                valueColor: "#166534"
                                 fontFamily: "Bahnschrift"
                             }
                         }
@@ -939,16 +1552,42 @@ Item {
                             text: "Формат метрик: текущее -> после рекомендаций. Цвета: красная/синяя/зеленая."
                             elide: Text.ElideRight
                         }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 12
+
+                            CheckBox {
+                                text: "Сырой"
+                                checked: root.tempCompShowRawSeries
+                                onToggled: root.tempCompShowRawSeries = checked
+                            }
+
+                            CheckBox {
+                                text: "Текущий K1/K0"
+                                checked: root.tempCompShowCurrentSeries
+                                onToggled: root.tempCompShowCurrentSeries = checked
+                            }
+
+                            CheckBox {
+                                text: "Рекоменд. K1/K0"
+                                checked: root.tempCompShowRecommendedSeries
+                                onToggled: root.tempCompShowRecommendedSeries = checked
+                            }
+
+                            Item { Layout.fillWidth: true }
+                        }
                     }
 
-                    RowLayout {
+                    ColumnLayout {
                         Layout.fillWidth: true
-                        spacing: 10
+                        spacing: 3
 
                         Repeater {
-                            model: root.appController ? root.appController.calibrationTempCompTrendSeries : []
+                            model: root.filteredTempCompSeries()
 
                             RowLayout {
+                                Layout.fillWidth: true
                                 spacing: 5
 
                                 Rectangle {
@@ -960,6 +1599,7 @@ Item {
                                 }
 
                                 Text {
+                                    Layout.fillWidth: true
                                     text: {
                                         var baseText = String(root.seriesField(modelData, "node", "-"))
                                         var maxErrorText = String(root.seriesField(modelData, "maxAbsLevelText", ""))
@@ -977,27 +1617,28 @@ Item {
                                     color: root.textSoft
                                     font.pixelSize: 11
                                     font.family: "Bahnschrift"
+                                    wrapMode: Text.WordWrap
                                 }
                             }
                         }
-
-                        Item { Layout.fillWidth: true }
                     }
 
                     TrendCanvas {
                         Layout.fillWidth: true
-                        Layout.fillHeight: true
+                        Layout.fillHeight: false
+                        Layout.preferredHeight: Math.max(360, tempCompFlick.height * 0.58)
                         Layout.minimumHeight: 80
                         overlayMode: true
-                        resetViewportOnDataChange: true
+                        resetViewportOnDataChange: false
                         xMajorTicks: 12
                         yMajorTicks: 12
-                        adaptiveRenderFactor: 2
+                        adaptiveRenderFactor: 1
+                        maxMarkerPoints: 0
                         secondaryYAxisEnabled: root.appController ? root.appController.calibrationLevelBoundsKnown : false
                         secondaryYAxisTitle: "Уровень, %"
                         secondaryYAxisEmptyPeriod: root.appController ? root.appController.calibrationLevel0Value : NaN
                         secondaryYAxisFullPeriod: root.appController ? root.appController.calibrationLevel100Value : NaN
-                        series: root.appController ? root.appController.calibrationTempCompTrendSeries : []
+                        series: root.filteredTempCompSeries()
                         emptyText: "Загрузите CSV из Коллектора для построения графика."
                         customXAxisTitle: "Температура, °C"
                         customYAxisTitle: "Период, count"
@@ -1006,6 +1647,12 @@ Item {
                         smoothSeriesAlpha: 0.2
                         panelBg: "#ffffff"
                         panelBorder: "#d6e2ef"
+                    }
+
+                        Item {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 6
+                        }
                     }
                 }
             }

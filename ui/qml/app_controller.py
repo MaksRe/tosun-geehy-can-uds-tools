@@ -125,7 +125,7 @@ class AppController(
         self._calibration_sequence_next_action = ""
         self._calibration_sequence_waiting_action = ""
         self._calibration_sequence_delay_ms = 180
-        self._calibration_sequence_timeout_ms = 4000
+        self._calibration_sequence_timeout_ms = 6000
         self._calibration_level0_written = False
         self._calibration_level100_written = False
         self._calibration_verify0_ok = False
@@ -135,6 +135,10 @@ class AppController(
         self._calibration_captured_level = 0
         self._calibration_captured_available = False
         self._calibration_temp_comp_status = "Загрузите CSV из коллектора для офлайн-анализа температурной компенсации."
+        self._calibration_temp_comp_operation_text = "Ожидание операций."
+        self._calibration_temp_comp_operation_busy = False
+        self._calibration_temp_comp_operation_progress_percent = 0
+        self._calibration_temp_comp_operation_progress_determinate = False
         self._calibration_temp_comp_samples: list[dict[str, object]] = []
         self._calibration_temp_comp_samples_by_node: dict[int, dict[str, object]] = {}
         self._calibration_temp_comp_sample_limit = 3000
@@ -147,6 +151,15 @@ class AppController(
         self._calibration_temp_comp_k1_x100_delta: int | None = None
         self._calibration_temp_comp_k1_x100_next: int | None = None
         self._calibration_temp_comp_k0_count_current: int | None = None
+        self._calibration_temp_comp_advanced_values: dict[str, int | None] = {}
+        self._calibration_temp_comp_adv_read_active = False
+        self._calibration_temp_comp_adv_read_queue: list[str] = []
+        self._calibration_temp_comp_adv_read_inflight_key: str | None = None
+        self._calibration_temp_comp_adv_read_total_count = 0
+        self._calibration_temp_comp_adv_read_success_count = 0
+        self._calibration_temp_comp_adv_read_timeout_ms = 1200
+        self._calibration_temp_comp_adv_read_delay_ms = 80
+        self._calibration_temp_comp_recommendation_apply_queue: list[str] = []
         self._calibration_temp_comp_k0_count_base: int | None = None
         self._calibration_temp_comp_k0_count_recommended: int | None = None
         self._calibration_temp_comp_k0_count_delta: int | None = None
@@ -164,6 +177,7 @@ class AppController(
         self._calibration_temp_comp_level_error_p95_before: float | None = None
         self._calibration_temp_comp_level_error_p95_after: float | None = None
         self._calibration_temp_comp_chart_series: list[dict[str, object]] = []
+        self._calibration_temp_comp_advanced_recommended_values: dict[str, int | None] = {}
         self._calibration_backup_available = False
         self._calibration_backup_level_0 = 0
         self._calibration_backup_level_100 = 0
@@ -173,6 +187,7 @@ class AppController(
         self._calibration_restore_queue: list[tuple[int, int]] = []
         self._calibration_restore_current_did: int | None = None
         self._calibration_target_node_sa: int | None = None
+        self._calibration_runtime_target_sa: int | None = None
         self._calibration_node_options: list[str] = ["Авто (по текущим UDS ID)"]
         self._calibration_node_values: list[int | None] = [None]
         self._selected_calibration_node_index = 0
@@ -341,6 +356,18 @@ class AppController(
         self._calibration_sequence_timeout_timer.setSingleShot(True)
         self._calibration_sequence_timeout_timer.setInterval(self._calibration_sequence_timeout_ms)
         self._calibration_sequence_timeout_timer.timeout.connect(self._on_calibration_sequence_timeout)
+        self._calibration_temp_comp_adv_read_timeout_timer = QTimer(self)
+        self._calibration_temp_comp_adv_read_timeout_timer.setSingleShot(True)
+        self._calibration_temp_comp_adv_read_timeout_timer.setInterval(self._calibration_temp_comp_adv_read_timeout_ms)
+        self._calibration_temp_comp_adv_read_timeout_timer.timeout.connect(
+            self._on_calibration_temp_comp_advanced_read_timeout
+        )
+        self._calibration_temp_comp_adv_read_delay_timer = QTimer(self)
+        self._calibration_temp_comp_adv_read_delay_timer.setSingleShot(True)
+        self._calibration_temp_comp_adv_read_delay_timer.setInterval(self._calibration_temp_comp_adv_read_delay_ms)
+        self._calibration_temp_comp_adv_read_delay_timer.timeout.connect(
+            self._on_calibration_temp_comp_advanced_read_delay_timeout
+        )
 
         self._collector_poll_timer = QTimer(self)
         self._collector_poll_timer.setInterval(self._collector_poll_interval_ms)

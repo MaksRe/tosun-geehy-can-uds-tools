@@ -92,7 +92,12 @@ class AppControllerContract:
     _calibration_session_ready: Any
     _calibration_session_service: Any
     _calibration_target_node_sa: Any
+    _calibration_runtime_target_sa: Any
     _calibration_temp_comp_status: Any
+    _calibration_temp_comp_operation_text: Any
+    _calibration_temp_comp_operation_busy: Any
+    _calibration_temp_comp_operation_progress_percent: Any
+    _calibration_temp_comp_operation_progress_determinate: Any
     _calibration_temp_comp_samples: Any
     _calibration_temp_comp_samples_by_node: Any
     _calibration_temp_comp_sample_limit: Any
@@ -104,6 +109,17 @@ class AppControllerContract:
     _calibration_temp_comp_k1_x100_recommended: Any
     _calibration_temp_comp_k1_x100_delta: Any
     _calibration_temp_comp_k1_x100_next: Any
+    _calibration_temp_comp_advanced_values: Any
+    _calibration_temp_comp_adv_read_active: Any
+    _calibration_temp_comp_adv_read_queue: Any
+    _calibration_temp_comp_adv_read_inflight_key: Any
+    _calibration_temp_comp_adv_read_total_count: Any
+    _calibration_temp_comp_adv_read_success_count: Any
+    _calibration_temp_comp_adv_read_timeout_ms: Any
+    _calibration_temp_comp_adv_read_delay_ms: Any
+    _calibration_temp_comp_adv_read_timeout_timer: Any
+    _calibration_temp_comp_adv_read_delay_timer: Any
+    _calibration_temp_comp_recommendation_apply_queue: Any
     _calibration_temp_comp_period_slope_before: Any
     _calibration_temp_comp_period_slope_after: Any
     _calibration_temp_comp_level_slope_before: Any

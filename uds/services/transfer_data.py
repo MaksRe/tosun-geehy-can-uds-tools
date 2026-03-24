@@ -46,15 +46,36 @@ class ServiceTransferData(QObject):
     def set_firmware(self, binary_content: bytes):
         self._binary_content = binary_content
         self._binary_content_size = len(self._binary_content)
-        # Учитываем, что для каждого блока (_ff_max_data_length) еще по 2 байта служебной информации в виде sid и block_sequence
-        num_of_blocks = math.ceil(self._binary_content_size / self._ff_max_data_length)
+        # Для каждого запроса TransferData добавляются 2 служебных байта (SID + block_sequence).
+        # Максимум полезных данных в одном запросе = _ff_max_data_length - 2.
+        max_payload_per_block = self._ff_max_data_length - 2
+        num_of_blocks = math.ceil(self._binary_content_size / max_payload_per_block) if self._binary_content_size > 0 else 0
         self._binary_content_size += num_of_blocks * 2
 
     def _form_first_message(self, data_length) -> list | None:
         if self._binary_content is None:
             return None
 
+        if data_length <= 0:
+            return None
+
         self._block_sequence += 1
+
+        # Для короткого TransferData (до 7 байт UDS payload) используем Single Frame.
+        if data_length <= 7:
+            message = [data_length & 0x0F, self._sid, self._block_sequence]
+            payload_size = data_length - 2
+            for i in range(payload_size):
+                message.append(self._binary_content[self._index_binary_content + i])
+            while len(message) < 8:
+                message.append(0xFF)
+
+            self._frame_number = 0
+            self._index_binary_content += payload_size
+            self._total_bytes_sent += data_length
+            self._bytes_sent = data_length
+
+            return message
 
         message = [
             0x10 | ((data_length >> 8) & 0xf),
@@ -87,10 +108,10 @@ class ServiceTransferData(QObject):
         return message
 
     def block_transferred(self) -> bool:
-        return self._bytes_sent == self._ff_data_length
+        return self._bytes_sent >= self._ff_data_length
 
     def data_transferred(self):
-        return self._total_bytes_sent == self._binary_content_size
+        return self._total_bytes_sent >= self._binary_content_size
 
     def send_first_frame(self) -> int:
         if self._total_bytes_sent + self._ff_max_data_length < self._binary_content_size:
@@ -111,12 +132,18 @@ class ServiceTransferData(QObject):
             return
         if self._flow_control.block_size == 0:
             return
+        if self.block_transferred():
+            return
         if self._flow_control.sep_time > 0:
             self._timer.start(self._flow_control.sep_time)
         else:
             self._timer.start(10)
 
     def _send_consecutive_frame(self):
+        if self._bytes_sent >= self._ff_data_length:
+            self._timer.stop()
+            return
+
         self._frame_number += 1
         if self._frame_number > 0xf:
             self._frame_number = 0
@@ -167,4 +194,7 @@ class ServiceTransferData(QObject):
 
     def reset_transfer(self):
         self._total_bytes_sent = 0
+        self._bytes_sent = 0
+        self._index_binary_content = 0
+        self._block_sequence = 0
         self._frame_number = 0
