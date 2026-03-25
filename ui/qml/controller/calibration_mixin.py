@@ -5,6 +5,10 @@ import math
 from pathlib import Path
 import re
 import time
+try:
+    from openpyxl import load_workbook
+except Exception:
+    load_workbook = None
 
 from j1939.j1939_can_identifier import J1939CanIdentifier
 from colors import RowColor
@@ -41,6 +45,26 @@ class AppControllerCalibrationMixin(AppControllerContract):
     _TEMP_COMP_TREND_COOLING = -1
     _TEMP_COMP_TREND_STABLE = 0
     _TEMP_COMP_TREND_HEATING = 1
+    _TEMP_COMP_ADV_SEGMENT_BORDER_KEYS = (
+        "seg_t1_x10",
+        "seg_t2_x10",
+        "seg_t3_x10",
+        "seg_t4_x10",
+    )
+    _TEMP_COMP_ADV_COOLING_KEYS = (
+        "k1_cool_seg1_x100",
+        "k1_cool_seg2_x100",
+        "k1_cool_seg3_x100",
+        "k1_cool_seg4_x100",
+        "k1_cool_seg5_x100",
+    )
+    _TEMP_COMP_ADV_HEATING_KEYS = (
+        "k1_heat_seg1_x100",
+        "k1_heat_seg2_x100",
+        "k1_heat_seg3_x100",
+        "k1_heat_seg4_x100",
+        "k1_heat_seg5_x100",
+    )
     _TEMP_COMP_ADVANCED_FIELDS = (
         {
             "key": "mode",
@@ -1797,13 +1821,61 @@ class AppControllerCalibrationMixin(AppControllerContract):
 
         return node_data_by_sa
 
+    @staticmethod
+    def _normalize_temp_comp_table_cell(cell_value: object) -> str:
+        """Цель функции в приведении ячейки к строке, затем она возвращает безопасное текстовое значение для общего парсера."""
+        if cell_value is None:
+            return ""
+        return str(cell_value).strip()
+
+    def _read_calibration_temp_comp_table_rows(
+        self,
+        table_path: Path,
+    ) -> tuple[list[list[str]], str | None]:
+        """Цель функции в чтении CSV/XLSX, затем она возвращает строки таблицы в едином формате или текст ошибки."""
+        try:
+            resolved_path = Path(table_path).expanduser().resolve()
+        except Exception:
+            resolved_path = Path(table_path)
+
+        if not resolved_path.exists() or not resolved_path.is_file():
+            return [], "Файл не найден."
+
+        suffix = str(resolved_path.suffix or "").casefold()
+        if suffix == ".csv":
+            try:
+                with resolved_path.open("r", encoding="utf-8-sig", newline="") as file:
+                    rows = list(csv.reader(file, delimiter=";"))
+            except Exception as exc:
+                return [], f"Не удалось прочитать CSV: {str(exc)}"
+            return rows, None
+
+        if suffix == ".xlsx":
+            if load_workbook is None:
+                return [], "Для загрузки XLSX установите пакет openpyxl."
+            try:
+                workbook = load_workbook(filename=str(resolved_path), read_only=True, data_only=True)
+                worksheet = workbook.active
+                rows: list[list[str]] = []
+                for row in worksheet.iter_rows(values_only=True):
+                    normalized_row = [self._normalize_temp_comp_table_cell(cell) for cell in row]
+                    while len(normalized_row) > 0 and normalized_row[-1] == "":
+                        normalized_row.pop()
+                    rows.append(normalized_row)
+                workbook.close()
+            except Exception as exc:
+                return [], f"Не удалось прочитать XLSX: {str(exc)}"
+            return rows, None
+
+        return [], "Поддерживаются только файлы CSV и XLSX."
+
     def _parse_calibration_temp_comp_csv_file(
         self,
         csv_path: Path,
         *,
         selected_sa: int | None,
     ) -> tuple[list[dict[str, object]], int | None, int | None, int | None, set[int]]:
-        """Цель функции в разборе одного CSV лога, затем она извлекает точки period+temperature для анализа K1."""
+        """Цель функции в разборе одного CSV/XLSX лога, затем она извлекает точки period+temperature для анализа K1."""
         try:
             resolved_path = Path(csv_path).expanduser().resolve()
         except Exception:
@@ -1812,12 +1884,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
         if not resolved_path.exists() or not resolved_path.is_file():
             return [], None, None, None, set()
 
-        try:
-            with resolved_path.open("r", encoding="utf-8-sig", newline="") as file:
-                rows = list(csv.reader(file, delimiter=";"))
-        except Exception:
-            return [], None, None, None, set()
-
+        rows, _ = self._read_calibration_temp_comp_table_rows(resolved_path)
         if len(rows) == 0:
             return [], None, None, None, set()
 
@@ -1847,7 +1914,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
         self,
         csv_path: Path,
     ) -> tuple[dict[int, dict[str, object]], set[int]]:
-        """Цель функции в извлечении выборок всех узлов из одного CSV, затем она подготавливает карту SA->данные."""
+        """Цель функции в извлечении выборок всех узлов из одного CSV/XLSX, затем она подготавливает карту SA->данные."""
         try:
             resolved_path = Path(csv_path).expanduser().resolve()
         except Exception:
@@ -1856,12 +1923,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
         if not resolved_path.exists() or not resolved_path.is_file():
             return {}, set()
 
-        try:
-            with resolved_path.open("r", encoding="utf-8-sig", newline="") as file:
-                rows = list(csv.reader(file, delimiter=";"))
-        except Exception:
-            return {}, set()
-
+        rows, _ = self._read_calibration_temp_comp_table_rows(resolved_path)
         if len(rows) == 0:
             return {}, set()
 
@@ -1879,9 +1941,15 @@ class AppControllerCalibrationMixin(AppControllerContract):
         return {}, node_candidates
 
     def _load_calibration_temp_comp_csv_files(self, paths: list[Path]) -> tuple[int, int]:
-        """Цель функции в пакетной загрузке CSV, затем она агрегирует выборки по узлам и обновляет анализ K1."""
+        """Цель функции в пакетной загрузке CSV/XLSX, затем она агрегирует выборки по узлам и обновляет анализ K1."""
         selected_sa = self._calibration_target_node_sa
         selected_key = None if selected_sa is None else (int(selected_sa) & 0xFF)
+        preferred_dataset_sa = self._selected_calibration_temp_comp_dataset_sa()
+        if preferred_dataset_sa is None:
+            if selected_key is not None:
+                preferred_dataset_sa = int(selected_key) & 0xFF
+            else:
+                preferred_dataset_sa = int(self._resolve_calibration_target_sa()) & 0xFF
         requested_files = len(paths)
         loaded_files = 0
         loaded_points = 0
@@ -1906,18 +1974,33 @@ class AppControllerCalibrationMixin(AppControllerContract):
                     round((float(int(file_index) - 1.0) / float(int(requested_files))) * 100.0)
                 )
             self._set_calibration_temp_comp_operation_status(
-                f"Загрузка CSV и пересчет графиков: файл {int(file_index)}/{int(requested_files)} ({file_name}).",
+                f"Загрузка CSV/XLSX и пересчет графиков: файл {int(file_index)}/{int(requested_files)} ({file_name}).",
                 busy=True,
                 progress_percent=progress_percent,
                 determinate=True,
             )
+            file_suffix = str(Path(source_path).suffix or "").casefold()
+            if file_suffix == ".xlsx" and load_workbook is None:
+                skipped_files += 1
+                self._append_log(
+                    "Калибровка: для загрузки XLSX требуется пакет openpyxl. Установите зависимость и повторите попытку.",
+                    RowColor.red,
+                )
+                self._set_calibration_temp_comp_operation_status(
+                    "Загрузка XLSX невозможна: не установлен пакет openpyxl.",
+                    busy=False,
+                    progress_percent=100,
+                    determinate=True,
+                )
+                continue
+
             file_node_data, file_node_candidates = self._parse_calibration_temp_comp_csv_file_all_nodes(source_path)
             csv_node_candidates.update(int(value) & 0xFF for value in file_node_candidates)
 
             if len(file_node_data) <= 0:
                 samples, node_sa_used, empty_period, full_period, fallback_candidates = self._parse_calibration_temp_comp_csv_file(
                     source_path,
-                    selected_sa=selected_key,
+                    selected_sa=selected_key if selected_key is not None else preferred_dataset_sa,
                 )
                 csv_node_candidates.update(int(value) & 0xFF for value in fallback_candidates)
                 if len(samples) <= 0:
@@ -1980,42 +2063,45 @@ class AppControllerCalibrationMixin(AppControllerContract):
 
         if len(prepared_by_sa) <= 0:
             self._calibration_temp_comp_samples_by_node = {}
+            self._refresh_calibration_temp_comp_dataset_options(preferred_sa=None)
             self._calibration_temp_comp_status = (
-                f"CSV-файлы обработаны ({int(requested_files)}), но данные period/temperature не распознаны."
+                f"CSV/XLSX файлы обработаны ({int(requested_files)}), но данные period/temperature не распознаны."
             )
             if len(csv_node_candidates) > 0:
-                self._calibration_csv_node_candidates = set(int(value) & 0xFF for value in csv_node_candidates)
-                self._refresh_calibration_node_options()
-                if selected_key is not None:
-                    available_nodes = ", ".join(f"0x{value:02X}" for value in sorted(csv_node_candidates))
-                    self._calibration_temp_comp_status = (
-                        f"В выбранных CSV нет данных для узла 0x{selected_key:02X}. "
-                        f"Доступные узлы в файлах: {available_nodes}."
-                    )
+                available_nodes = ", ".join(f"0x{value:02X}" for value in sorted(csv_node_candidates))
+                self._calibration_temp_comp_status = (
+                    f"CSV/XLSX файлы обработаны ({int(requested_files)}), но данные period/temperature не распознаны. "
+                    f"Доступные узлы в файлах: {available_nodes}."
+                )
             self.calibrationTempCompChanged.emit()
             return 0, 0
 
         self._calibration_temp_comp_samples_by_node = prepared_by_sa
-        # В селектор узлов добавляем только узлы, для которых реально построена выборка period+temperature.
-        self._calibration_csv_node_candidates = set(int(value) & 0xFF for value in prepared_by_sa.keys())
-        self._refresh_calibration_node_options()
-
-        applied_sa = self._select_calibration_temp_comp_cached_node(
-            selected_sa=selected_key,
-            clear_coefficients=False,
-        )
-
-        if applied_sa is None and selected_key is not None:
-            available_nodes = ", ".join(f"0x{value:02X}" for value in sorted(prepared_by_sa.keys()))
+        applied_sa = self._refresh_calibration_temp_comp_dataset_options(preferred_sa=preferred_dataset_sa)
+        if applied_sa is None:
             self._reset_calibration_temp_comp_state(
                 clear_samples=True,
                 clear_coefficients=False,
                 clear_cached_nodes=False,
             )
             self._calibration_temp_comp_status = (
-                f"В выбранных CSV нет данных для узла 0x{selected_key:02X}. "
-                f"Доступные узлы в файлах: {available_nodes}. "
-                "Выберите другой узел в списке сверху."
+                "Не удалось выбрать набор CSV/XLSX для офлайн-анализа. "
+                "Проверьте содержимое файла и повторите загрузку."
+            )
+            self.calibrationTempCompChanged.emit()
+            return loaded_files, loaded_points
+
+        if not self._apply_calibration_temp_comp_node_samples(
+            applied_sa,
+            clear_coefficients=False,
+        ):
+            self._reset_calibration_temp_comp_state(
+                clear_samples=True,
+                clear_coefficients=False,
+                clear_cached_nodes=False,
+            )
+            self._calibration_temp_comp_status = (
+                f"Не удалось применить набор CSV/XLSX для узла 0x{int(applied_sa) & 0xFF:02X}."
             )
             self.calibrationTempCompChanged.emit()
             return loaded_files, loaded_points
@@ -2024,12 +2110,12 @@ class AppControllerCalibrationMixin(AppControllerContract):
         if applied_sa is not None:
             status_hints.append(f"Активный узел анализа: 0x{int(applied_sa) & 0xFF:02X}.")
             if len(prepared_by_sa) > 1:
-                status_hints.append("Для просмотра другого узла переключите селектор узла сверху.")
+                status_hints.append("Для просмотра другого узла переключите селектор набора CSV/XLSX в этом блоке.")
         if skipped_files > 0:
             status_hints.append(f"Пропущено файлов без подходящих данных: {int(skipped_files)}.")
         if len(prepared_by_sa) > 1:
             sorted_sas = ", ".join(f"0x{value:02X}" for value in sorted(prepared_by_sa.keys()))
-            status_hints.append(f"В CSV обнаружены узлы: {sorted_sas}.")
+            status_hints.append(f"В CSV/XLSX обнаружены узлы: {sorted_sas}.")
 
         if len(status_hints) > 0:
             self._calibration_temp_comp_status = f"{self._calibration_temp_comp_status} {' '.join(status_hints)}"
@@ -2183,6 +2269,8 @@ class AppControllerCalibrationMixin(AppControllerContract):
         linear_preview_k0 = self._calibration_temp_comp_linear_preview_k0_count
         base_k1: int | None = None
         base_k0: int | None = None
+        current_series_k1: int = 0
+        current_series_k0: int = 0
 
         ordered_samples_by_time = sorted(
             samples,
@@ -2237,6 +2325,8 @@ class AppControllerCalibrationMixin(AppControllerContract):
         recommended_mode_for_label: int | None = None
         applied_k0_for_recommended: int | None = None
         has_current_comp_context = False
+        recommendation_base_k1 = 0
+        recommendation_base_k0 = 0
 
         level_calibration_ready = (
             bool(self._calibration_level_0_known)
@@ -2245,13 +2335,16 @@ class AppControllerCalibrationMixin(AppControllerContract):
         )
 
         if sample_count > 0:
-            base_k1 = int(current_k1) if current_k1 is not None else 0
-            base_k0 = int(current_k0) if current_k0 is not None else 0
+            # Цель в чистом оффлайн-режиме рекомендаций: база K1/K0 всегда 0/0 и не зависит от текущих DID МК.
+            base_k1 = int(recommendation_base_k1)
+            base_k0 = int(recommendation_base_k0)
+            current_series_k1 = int(current_k1) if current_k1 is not None else 0
+            current_series_k0 = int(current_k0) if current_k0 is not None else 0
             if linear_preview_enabled:
                 if linear_preview_k1 is not None:
-                    base_k1 = int(linear_preview_k1)
+                    current_series_k1 = int(linear_preview_k1)
                 if linear_preview_k0 is not None:
-                    base_k0 = int(linear_preview_k0)
+                    current_series_k0 = int(linear_preview_k0)
             current_advanced_values = {
                 str(key): (None if value is None else int(value))
                 for key, value in self._calibration_temp_comp_advanced_values.items()
@@ -2260,7 +2353,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 current_advanced_values["mode"] = int(self._TEMP_COMP_MODE_SINGLE_LINEAR)
             initial_recommended_values = self._build_temp_comp_advanced_recommendations(
                 samples,
-                fallback_linear_k1_x100=int(base_k1),
+                fallback_linear_k1_x100=int(current_series_k1),
             )
             effective_current_values = self._build_effective_temp_comp_values(
                 current_advanced_values,
@@ -2269,8 +2362,8 @@ class AppControllerCalibrationMixin(AppControllerContract):
             current_mode_for_label = self._temp_comp_get_mode_from_values(effective_current_values)
             current_comp_period_by_sample_id = self._apply_temp_comp_mode_sequence(
                 ordered_samples_by_time,
-                linear_k1_x100=int(base_k1),
-                k0_count=int(base_k0),
+                linear_k1_x100=int(current_series_k1),
+                k0_count=int(current_series_k0),
                 advanced_values=effective_current_values,
             )
             current_comp_periods = [
@@ -2288,9 +2381,6 @@ class AppControllerCalibrationMixin(AppControllerContract):
 
         if sample_count >= 2 and base_k1 is not None and base_k0 is not None:
             periods_before = list(raw_periods)
-            if has_current_comp_context and len(current_comp_periods) == sample_count:
-                periods_before = list(current_comp_periods)
-
             period_slope_before = self._linear_regression_slope(temperatures, periods_before)
             if period_slope_before is None:
                 period_slope_before = self._linear_regression_slope(temperatures, raw_periods)
@@ -2320,7 +2410,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
                     for sample in ordered_samples
                 ]
 
-                candidate_k0 = int(base_k0)
+                candidate_k0 = int(recommendation_base_k0)
                 if level_calibration_ready:
                     candidate_levels_without_k0 = [self._period_to_level_percent(value) for value in candidate_periods_without_k0]
                     if all(level is not None for level in candidate_levels_without_k0):
@@ -2386,11 +2476,11 @@ class AppControllerCalibrationMixin(AppControllerContract):
                     if has_current_comp_context and len(current_comp_periods) == sample_count:
                         current_levels = [self._period_to_level_percent(value) for value in current_comp_periods]
                         if all(level is not None for level in current_levels):
-                            before_levels = [float(level) for level in current_levels if level is not None]
-                            current_metrics = self._calc_level_error_metrics(before_levels)
+                            prepared_current_levels = [float(level) for level in current_levels if level is not None]
+                            current_metrics = self._calc_level_error_metrics(prepared_current_levels)
                             if isinstance(current_metrics, dict):
                                 current_level_error_max = float(current_metrics.get("max_abs", 0.0))
-                            current_level_error_index, current_level_error_signed = self._find_max_abs_level_error(before_levels)
+                            current_level_error_index, current_level_error_signed = self._find_max_abs_level_error(prepared_current_levels)
                     if current_level_error_max is None and raw_level_error_max is not None:
                         current_level_error_max = float(raw_level_error_max)
                     if current_level_error_index is None and raw_level_error_index is not None:
@@ -2447,50 +2537,37 @@ class AppControllerCalibrationMixin(AppControllerContract):
 
                 if candidate_worse:
                     recommendation_guard_triggered = True
-                    if has_current_comp_context and len(current_comp_periods) == sample_count:
-                        recommended_comp_periods = list(current_comp_periods)
-                        period_slope_after = period_slope_before
-                        level_slope_after = level_slope_before
-                        level_error_range_after = level_error_range_before
-                        level_error_max_after = level_error_max_before
-                        level_error_p95_after = level_error_p95_before
-                        recommended_level_error_max = current_level_error_max
-                        recommended_level_error_index = current_level_error_index
-                        recommended_level_error_signed = current_level_error_signed
-                        recommended_k1 = int(base_k1)
-                        delta_k1 = 0
-                        next_k1 = int(base_k1)
-                        recommended_mode_for_label = current_mode_for_label
-                        advanced_recommended_values = {
-                            str(key): int(value)
-                            for key, value in self._build_effective_temp_comp_values(
-                                current_advanced_values,
-                                advanced_recommended_values,
-                            ).items()
-                            if value is not None
-                        }
+                    recommended_comp_periods = list(raw_periods)
+                    period_slope_after = self._linear_regression_slope(temperatures, raw_periods)
+                    level_slope_after = level_slope_before
+                    level_error_range_after = level_error_range_before
+                    level_error_max_after = level_error_max_before
+                    level_error_p95_after = level_error_p95_before
+                    recommended_level_error_max = raw_level_error_max
+                    recommended_level_error_index = raw_level_error_index
+                    recommended_level_error_signed = raw_level_error_signed
+                    recommended_k1 = int(recommendation_base_k1)
+                    delta_k1 = int(recommended_k1) - int(base_k1)
+                    next_k1 = int(recommended_k1)
+                    recommended_mode_for_label = int(self._TEMP_COMP_MODE_SINGLE_LINEAR)
+                    advanced_recommended_values = {
+                        "mode": int(self._TEMP_COMP_MODE_SINGLE_LINEAR),
+                    }
+                    if level_calibration_ready:
+                        recommended_k0 = int(recommendation_base_k0)
+                        delta_k0 = int(recommended_k0) - int(base_k0)
+                        next_k0 = int(recommended_k0)
+                elif (
+                    recommended_k1 is not None
+                    and int(recommended_k1) == int(recommendation_base_k1)
+                    and recommended_mode_for_label is None
+                ):
+                    recommended_mode_for_label = int(self._TEMP_COMP_MODE_SINGLE_LINEAR)
+                    if len(advanced_recommended_values) <= 0:
                         if level_calibration_ready:
-                            recommended_k0 = int(base_k0)
-                            delta_k0 = 0
-                            next_k0 = int(base_k0)
-                    else:
-                        recommended_comp_periods = list(raw_periods)
-                        period_slope_after = self._linear_regression_slope(temperatures, raw_periods)
-                        level_slope_after = level_slope_before
-                        level_error_range_after = level_error_range_before
-                        level_error_max_after = level_error_max_before
-                        level_error_p95_after = level_error_p95_before
-                        recommended_level_error_max = raw_level_error_max
-                        recommended_level_error_index = raw_level_error_index
-                        recommended_level_error_signed = raw_level_error_signed
-                        recommended_k1 = int(base_k1)
-                        delta_k1 = 0
-                        next_k1 = int(base_k1)
-                        recommended_mode_for_label = current_mode_for_label
-                        if level_calibration_ready:
-                            recommended_k0 = int(base_k0)
-                            delta_k0 = 0
-                            next_k0 = int(base_k0)
+                            recommended_k0 = int(recommendation_base_k0)
+                            delta_k0 = int(recommended_k0) - int(base_k0)
+                            next_k0 = int(recommended_k0)
 
             period_reduction_percent = self._calc_reduction_percent(period_slope_before, period_slope_after)
             level_reduction_percent = self._calc_reduction_percent(level_slope_before, level_slope_after)
@@ -2535,7 +2612,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 chart_series.append(
                     self._build_temp_comp_chart_series_entry(
                         name=(
-                            f"После текущих K1/K0 ({int(base_k1)}/{int(base_k0)}), mode "
+                            f"После текущих K1/K0 ({int(current_series_k1)}/{int(current_series_k0)}), mode "
                             f"{int(current_mode_for_label) if current_mode_for_label is not None else 0}"
                             + (" [линейное превью]" if linear_preview_enabled else "")
                         ),
@@ -2576,7 +2653,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 )
 
         if sample_count <= 0:
-            detail_text = "Загрузите CSV из коллектора (all_nodes.csv или 0xNN.csv), чтобы рассчитать K1/K0."
+            detail_text = "Загрузите CSV/XLSX из коллектора (all_nodes.csv, 0xNN.csv или XLSX), чтобы рассчитать K1/K0."
         elif sample_count < 2:
             detail_text = f"Собрано точек: {sample_count}. Для регрессии нужно минимум 2."
         else:
@@ -2601,6 +2678,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
             if delta_k0 is not None:
                 detail_text += f" dK0={int(delta_k0):+d}."
             detail_text += " Этап «текущее» рассчитан по активному режиму компенсации (mode/segment/heat-cool) и текущим DID узла."
+            detail_text += " Рекомендации K1/K0 считаются только по данным выбранного CSV/XLSX набора узла (без влияния текущих коэффициентов МК)."
             detail_text += " Если коэффициенты не считаны, используется офлайн-база K1/K0 = 0/0."
             detail_text += " Рекомендованные DID 0x001D..0x002C отображаются рядом с текущими значениями в расширенной таблице."
             detail_text += " Метрика «текущее» относится к синей серии (если синяя отсутствует, то к красной)."
@@ -2615,7 +2693,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
         if sample_count <= 0:
             self._calibration_temp_comp_status = detail_text
         else:
-            self._calibration_temp_comp_status = f"Офлайн-анализ CSV. {detail_text}"
+            self._calibration_temp_comp_status = f"Офлайн-анализ CSV/XLSX. {detail_text}"
 
         self._calibration_temp_comp_k1_x100_base = base_k1
         self._calibration_temp_comp_k1_x100_recommended = recommended_k1
@@ -2638,6 +2716,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
         self._calibration_temp_comp_level_error_p95_before = level_error_p95_before
         self._calibration_temp_comp_level_error_p95_after = level_error_p95_after
         self._calibration_temp_comp_chart_series = chart_series
+        self._calibration_temp_comp_chart_revision = int(self._calibration_temp_comp_chart_revision) + 1
         self._calibration_temp_comp_advanced_recommended_values = dict(advanced_recommended_values)
         self.calibrationTempCompChanged.emit()
 
@@ -2697,6 +2776,48 @@ class AppControllerCalibrationMixin(AppControllerContract):
         self._recompute_calibration_temp_comp_metrics()
         return True
 
+    def _selected_calibration_temp_comp_dataset_sa(self) -> int | None:
+        """Цель функции в чтении текущего выбора набора CSV/XLSX, затем она возвращает SA активного офлайн-узла."""
+        selected_index = int(self._selected_calibration_temp_comp_dataset_index)
+        if selected_index < 0 or selected_index >= len(self._calibration_temp_comp_dataset_values):
+            return None
+        return int(self._calibration_temp_comp_dataset_values[selected_index]) & 0xFF
+
+    def _refresh_calibration_temp_comp_dataset_options(self, *, preferred_sa: int | None) -> int | None:
+        """Цель функции в обновлении списка наборов CSV/XLSX, затем она сохраняет согласованный индекс выбранного узла анализа."""
+        previous_options = list(self._calibration_temp_comp_dataset_options)
+        previous_values = list(self._calibration_temp_comp_dataset_values)
+        previous_index = int(self._selected_calibration_temp_comp_dataset_index)
+        previous_selected_sa = self._selected_calibration_temp_comp_dataset_sa()
+
+        dataset_values = sorted(int(value) & 0xFF for value in self._calibration_temp_comp_samples_by_node.keys())
+        dataset_options = [f"Набор CSV/XLSX: 0x{int(value) & 0xFF:02X}" for value in dataset_values]
+
+        preferred_key = None if preferred_sa is None else (int(preferred_sa) & 0xFF)
+        selected_sa = None
+        if preferred_key is not None and preferred_key in dataset_values:
+            selected_sa = preferred_key
+        elif previous_selected_sa is not None and previous_selected_sa in dataset_values:
+            selected_sa = previous_selected_sa
+        elif len(dataset_values) > 0:
+            selected_sa = int(dataset_values[0]) & 0xFF
+
+        selected_index = -1
+        if selected_sa is not None:
+            selected_index = dataset_values.index(int(selected_sa) & 0xFF)
+
+        self._calibration_temp_comp_dataset_values = list(dataset_values)
+        self._calibration_temp_comp_dataset_options = list(dataset_options)
+        self._selected_calibration_temp_comp_dataset_index = int(selected_index)
+
+        if (
+            previous_options != self._calibration_temp_comp_dataset_options
+            or previous_values != self._calibration_temp_comp_dataset_values
+            or previous_index != self._selected_calibration_temp_comp_dataset_index
+        ):
+            self.calibrationTempCompChanged.emit()
+        return selected_sa
+
     def _select_calibration_temp_comp_cached_node(
         self,
         *,
@@ -2747,8 +2868,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
             self._calibration_temp_comp_samples = []
             if clear_cached_nodes:
                 self._calibration_temp_comp_samples_by_node = {}
-                self._calibration_csv_node_candidates = set()
-                self._refresh_calibration_node_options()
+            self._refresh_calibration_temp_comp_dataset_options(preferred_sa=None)
 
         if clear_coefficients:
             self._calibration_temp_comp_k1_x100_current = None
@@ -2769,6 +2889,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
         self._calibration_temp_comp_k1_x100_recommended = None
         self._calibration_temp_comp_k1_x100_delta = None
         self._calibration_temp_comp_k1_x100_next = None
+        self._reset_calibration_temp_comp_k0_air_zero_adjust_state()
         self._calibration_temp_comp_k0_count_base = None
         self._calibration_temp_comp_k0_count_recommended = None
         self._calibration_temp_comp_k0_count_delta = None
@@ -2796,6 +2917,157 @@ class AppControllerCalibrationMixin(AppControllerContract):
         self._configure_calibration_uds_services()
         tx_identifier = self._build_calibration_tx_identifier()
         self._calibration_read_service.read_data_by_identifier(tx_identifier, UdsData.curr_fuel_tank)
+
+    def _reset_calibration_temp_comp_k0_air_zero_adjust_state(self):
+        """Цель функции в сбросе автоподстройки K0, затем она очищает временные значения DID 0x0012/0x0013/0x0018/0x001C."""
+        if self._calibration_temp_comp_k0_air_zero_adjust_timeout_timer.isActive():
+            self._calibration_temp_comp_k0_air_zero_adjust_timeout_timer.stop()
+        self._calibration_temp_comp_k0_air_zero_adjust_active = False
+        self._calibration_temp_comp_k0_air_zero_adjust_empty_period = None
+        self._calibration_temp_comp_k0_air_zero_adjust_full_period = None
+        self._calibration_temp_comp_k0_air_zero_adjust_level_x10 = None
+        self._calibration_temp_comp_k0_air_zero_adjust_current_k0 = None
+
+    def _request_next_calibration_temp_comp_k0_air_zero_adjust_did(self) -> bool:
+        """Цель функции в пошаговом чтении DID для автоподстройки K0, затем она отправляет только следующий необходимый запрос."""
+        if not bool(self._calibration_temp_comp_k0_air_zero_adjust_active):
+            return False
+
+        next_var = None
+        if self._calibration_temp_comp_k0_air_zero_adjust_empty_period is None:
+            next_var = UdsData.empty_fuel_tank
+        elif self._calibration_temp_comp_k0_air_zero_adjust_full_period is None:
+            next_var = UdsData.full_fuel_tank
+        elif self._calibration_temp_comp_k0_air_zero_adjust_level_x10 is None:
+            next_var = UdsData.raw_fuel_level
+        elif self._calibration_temp_comp_k0_air_zero_adjust_current_k0 is None:
+            next_var = UdsData.fuel_temp_comp_k0_count
+        else:
+            return False
+
+        self._configure_calibration_uds_services()
+        sent = bool(
+            self._calibration_read_service.read_data_by_identifier(
+                self._build_calibration_tx_identifier(),
+                next_var,
+            )
+        )
+        if not sent:
+            return False
+
+        self._calibration_temp_comp_k0_air_zero_adjust_timeout_timer.start(
+            max(300, int(self._calibration_temp_comp_k0_air_zero_adjust_timeout_ms))
+        )
+        return True
+
+    def _continue_calibration_temp_comp_k0_air_zero_adjust(self):
+        """Цель функции в продолжении автоподстройки K0 после ответа DID, затем она запрашивает следующий DID или завершает расчет."""
+        if not bool(self._calibration_temp_comp_k0_air_zero_adjust_active):
+            return
+
+        if self._calibration_temp_comp_k0_air_zero_adjust_timeout_timer.isActive():
+            self._calibration_temp_comp_k0_air_zero_adjust_timeout_timer.stop()
+
+        missing_data = (
+            self._calibration_temp_comp_k0_air_zero_adjust_empty_period is None
+            or self._calibration_temp_comp_k0_air_zero_adjust_full_period is None
+            or self._calibration_temp_comp_k0_air_zero_adjust_level_x10 is None
+            or self._calibration_temp_comp_k0_air_zero_adjust_current_k0 is None
+        )
+        if missing_data:
+            if self._request_next_calibration_temp_comp_k0_air_zero_adjust_did():
+                return
+            self._reset_calibration_temp_comp_k0_air_zero_adjust_state()
+            self._set_calibration_temp_comp_operation_status(
+                "Автоподстройка K0 остановлена: не удалось отправить следующий DID-запрос.",
+                busy=False,
+                progress_percent=100,
+                determinate=True,
+            )
+            return
+
+        self._try_apply_calibration_temp_comp_k0_air_zero_adjust()
+
+    def _on_calibration_temp_comp_k0_air_zero_adjust_timeout(self):
+        """Цель функции в защите от зависания автоподстройки K0, затем она завершает операцию по таймауту шага чтения DID."""
+        if not bool(self._calibration_temp_comp_k0_air_zero_adjust_active):
+            return
+        self._reset_calibration_temp_comp_k0_air_zero_adjust_state()
+        self._set_calibration_temp_comp_operation_status(
+            "Автоподстройка K0 остановлена по таймауту чтения DID. Повторите операцию.",
+            busy=False,
+            progress_percent=100,
+            determinate=True,
+        )
+        self._append_log(
+            "Калибровка: автоподстройка K0 остановлена по таймауту (ожидание DID 0x0012/0x0013/0x0018/0x001C).",
+            RowColor.red,
+        )
+
+    def _try_apply_calibration_temp_comp_k0_air_zero_adjust(self):
+        """Цель функции в завершении автоподстройки K0, затем она вычисляет K0 по фактическому уровню DID 0x0018 и отправляет DID 0x001C."""
+        if not bool(self._calibration_temp_comp_k0_air_zero_adjust_active):
+            return
+
+        empty_period = self._calibration_temp_comp_k0_air_zero_adjust_empty_period
+        full_period = self._calibration_temp_comp_k0_air_zero_adjust_full_period
+        current_level_x10 = self._calibration_temp_comp_k0_air_zero_adjust_level_x10
+        current_k0 = self._calibration_temp_comp_k0_air_zero_adjust_current_k0
+        if (
+            empty_period is None
+            or full_period is None
+            or current_level_x10 is None
+            or current_k0 is None
+        ):
+            return
+
+        span = int(full_period) - int(empty_period)
+        if span <= 0:
+            self._reset_calibration_temp_comp_k0_air_zero_adjust_state()
+            self._set_calibration_temp_comp_operation_status(
+                "Автоподстройка K0 остановлена: некорректные границы 0%/100% (DID 0x0012/0x0013).",
+                busy=False,
+                progress_percent=100,
+                determinate=True,
+            )
+            return
+
+        normalized_level_x10 = max(0, min(1000, int(current_level_x10)))
+        delta_k0 = self._c_trunc_div((-int(normalized_level_x10)) * int(span), 1000)
+        target_k0 = self._saturate_int16(int(current_k0) + int(delta_k0))
+        self._reset_calibration_temp_comp_k0_air_zero_adjust_state()
+        self._append_log(
+            (
+                "Калибровка: автоподстройка K0 по фактическому уровню МК: "
+                f"level={int(normalized_level_x10) / 10.0:.1f}%, span={int(span)} count, "
+                f"dK0={int(delta_k0)}, K0new={int(current_k0)}+{int(delta_k0)}={int(target_k0)}."
+            ),
+            RowColor.blue,
+        )
+
+        pending_key = int(UdsData.fuel_temp_comp_k0_count.pid)
+        pending_before = pending_key in self._calibration_write_verify_pending
+        self.writeCalibrationTempCompK0(str(int(target_k0)))
+        pending_after = pending_key in self._calibration_write_verify_pending
+
+        if (not pending_before) and pending_after:
+            self._set_calibration_temp_comp_operation_status(
+                (
+                    "Автоподстройка K0: рассчитано и отправлено значение "
+                    f"{int(target_k0)} в DID 0x001C. Ожидается автопроверка."
+                ),
+                busy=False,
+                progress_percent=100,
+                determinate=True,
+            )
+            return
+
+        self._set_calibration_temp_comp_operation_status(
+            "Автоподстройка K0 завершена с ошибкой: запись DID 0x001C не подтверждена.",
+            busy=False,
+            progress_percent=100,
+            determinate=True,
+        )
 
     def _request_calibration_temp_comp_k1_read(self) -> bool:
         """Цель функции в чтении текущего K1 через UDS, затем она отправляет запрос DID 0x001B в выбранный узел."""
@@ -2850,6 +3122,36 @@ class AppControllerCalibrationMixin(AppControllerContract):
             if not key:
                 continue
             result.append(key)
+        return result
+
+    @classmethod
+    def _calibration_temp_comp_advanced_read_field_keys_for_mode(
+        cls,
+        mode_value: int,
+        *,
+        include_mode: bool,
+    ) -> list[str]:
+        """Цель функции в выборе набора DID для режима компенсации, затем она возвращает только связанные с mode поля."""
+        normalized_mode = int(mode_value)
+        if (
+            normalized_mode < int(cls._TEMP_COMP_MODE_SINGLE_LINEAR)
+            or normalized_mode > int(cls._TEMP_COMP_MODE_SEGMENTED_HEAT_COOL)
+        ):
+            normalized_mode = int(cls._TEMP_COMP_MODE_SINGLE_LINEAR)
+
+        result: list[str] = []
+        if include_mode:
+            result.append("mode")
+
+        if normalized_mode == int(cls._TEMP_COMP_MODE_SINGLE_LINEAR):
+            return result
+
+        result.extend(cls._TEMP_COMP_ADV_SEGMENT_BORDER_KEYS)
+        result.extend(cls._TEMP_COMP_ADV_COOLING_KEYS)
+
+        if normalized_mode == int(cls._TEMP_COMP_MODE_SEGMENTED_HEAT_COOL):
+            result.insert(1 if include_mode else 0, "dir_hyst_x10")
+            result.extend(cls._TEMP_COMP_ADV_HEATING_KEYS)
         return result
 
     def _set_calibration_temp_comp_operation_status(
@@ -2955,6 +3257,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
     def _stop_calibration_temp_comp_advanced_read_sequence(self):
         """Цель функции в безопасной остановке очереди чтения, затем она сбрасывает состояние и таймеры последовательного опроса."""
         had_active_sequence = bool(self._calibration_temp_comp_adv_read_active) or int(self._calibration_temp_comp_adv_read_total_count) > 0
+        pending_recompute = bool(self._calibration_temp_comp_adv_read_recompute_pending)
         if self._calibration_temp_comp_adv_read_timeout_timer.isActive():
             self._calibration_temp_comp_adv_read_timeout_timer.stop()
         if self._calibration_temp_comp_adv_read_delay_timer.isActive():
@@ -2964,6 +3267,11 @@ class AppControllerCalibrationMixin(AppControllerContract):
         self._calibration_temp_comp_adv_read_inflight_key = None
         self._calibration_temp_comp_adv_read_total_count = 0
         self._calibration_temp_comp_adv_read_success_count = 0
+        self._calibration_temp_comp_adv_read_mode_aware = False
+        self._calibration_temp_comp_adv_read_expected_mode = None
+        self._calibration_temp_comp_adv_read_recompute_pending = False
+        if pending_recompute:
+            self._recompute_calibration_temp_comp_metrics()
         if had_active_sequence:
             self._set_calibration_temp_comp_operation_status(
                 "Чтение параметров из МК остановлено.",
@@ -2975,6 +3283,9 @@ class AppControllerCalibrationMixin(AppControllerContract):
     def _start_calibration_temp_comp_advanced_read_sequence(
         self,
         field_keys: list[str],
+        *,
+        mode_aware: bool = False,
+        expected_mode: int | None = None,
     ) -> tuple[int, int]:
         """Цель функции в запуске последовательного чтения DID, затем она активирует очередь запросов с контролем таймаутов."""
         if not self._can.is_connect or not self._can.is_trace:
@@ -3002,6 +3313,11 @@ class AppControllerCalibrationMixin(AppControllerContract):
         self._calibration_temp_comp_adv_read_inflight_key = None
         self._calibration_temp_comp_adv_read_total_count = total_count
         self._calibration_temp_comp_adv_read_success_count = 0
+        self._calibration_temp_comp_adv_read_mode_aware = bool(mode_aware)
+        if expected_mode is None:
+            self._calibration_temp_comp_adv_read_expected_mode = None
+        else:
+            self._calibration_temp_comp_adv_read_expected_mode = int(expected_mode)
         self._set_calibration_temp_comp_operation_status(
             self._build_calibration_temp_comp_advanced_read_progress_text(
                 prefix="Чтение параметров из МК:",
@@ -3012,6 +3328,32 @@ class AppControllerCalibrationMixin(AppControllerContract):
         )
         self._calibration_temp_comp_adv_read_delay_timer.start(0)
         return total_count, total_count
+
+    def _adapt_calibration_temp_comp_mode_aware_queue(self, actual_mode: int):
+        """Цель функции в адаптации очереди к фактическому mode, затем она оставляет только релевантные DID для выбранного режима."""
+        if not self._calibration_temp_comp_adv_read_mode_aware:
+            return
+        if int(self._calibration_temp_comp_adv_read_success_count) <= 0:
+            return
+
+        normalized_mode = int(actual_mode)
+        if (
+            normalized_mode < int(self._TEMP_COMP_MODE_SINGLE_LINEAR)
+            or normalized_mode > int(self._TEMP_COMP_MODE_SEGMENTED_HEAT_COOL)
+        ):
+            normalized_mode = int(self._TEMP_COMP_MODE_SINGLE_LINEAR)
+
+        expected_mode = self._calibration_temp_comp_adv_read_expected_mode
+        if expected_mode is not None and int(expected_mode) == normalized_mode:
+            return
+
+        self._calibration_temp_comp_adv_read_expected_mode = int(normalized_mode)
+        remaining_keys = self._calibration_temp_comp_advanced_read_field_keys_for_mode(
+            normalized_mode,
+            include_mode=False,
+        )
+        self._calibration_temp_comp_adv_read_queue = list(remaining_keys)
+        self._calibration_temp_comp_adv_read_total_count = int(self._calibration_temp_comp_adv_read_success_count) + len(remaining_keys)
 
     def _schedule_next_calibration_temp_comp_advanced_read(self, *, immediate: bool):
         """Цель функции в планировании следующего запроса из очереди, затем она запускает таймер задержки с нужным интервалом."""
@@ -3037,6 +3379,12 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 RowColor.green if success == total else RowColor.yellow,
             )
             self._calibration_temp_comp_adv_read_active = False
+            self._calibration_temp_comp_adv_read_mode_aware = False
+            self._calibration_temp_comp_adv_read_expected_mode = None
+            pending_recompute = bool(self._calibration_temp_comp_adv_read_recompute_pending)
+            self._calibration_temp_comp_adv_read_recompute_pending = False
+            if pending_recompute:
+                self._recompute_calibration_temp_comp_metrics()
             self._set_calibration_temp_comp_operation_status(
                 f"Чтение параметров из МК завершено: {success}/{total}.",
                 busy=False,
@@ -3102,7 +3450,31 @@ class AppControllerCalibrationMixin(AppControllerContract):
     def _request_calibration_temp_comp_advanced_read_all(self) -> tuple[int, int]:
         """Цель функции в запуске очереди чтения расширенной компенсации, затем она выполняет DID 0x001D..0x002C по одному."""
         field_keys = self._calibration_temp_comp_advanced_read_field_keys()
-        return self._start_calibration_temp_comp_advanced_read_sequence(field_keys)
+        return self._start_calibration_temp_comp_advanced_read_sequence(
+            field_keys,
+            mode_aware=False,
+            expected_mode=None,
+        )
+
+    def _request_calibration_temp_comp_advanced_read_for_mode(self, mode_value: int) -> tuple[int, int]:
+        """Цель функции в запуске чтения параметров конкретного режима, затем она ограничивает очередь DID только нужными полями."""
+        normalized_mode = int(mode_value)
+        if (
+            normalized_mode < int(self._TEMP_COMP_MODE_SINGLE_LINEAR)
+            or normalized_mode > int(self._TEMP_COMP_MODE_SEGMENTED_HEAT_COOL)
+        ):
+            normalized_mode = int(self._TEMP_COMP_MODE_SINGLE_LINEAR)
+
+        field_keys = self._calibration_temp_comp_advanced_read_field_keys_for_mode(
+            normalized_mode,
+            include_mode=True,
+        )
+        self._calibration_temp_comp_adv_read_recompute_pending = False
+        return self._start_calibration_temp_comp_advanced_read_sequence(
+            field_keys,
+            mode_aware=True,
+            expected_mode=normalized_mode,
+        )
 
     def _reset_calibration_temp_comp_recommendation_apply_queue(self):
         """Цель функции в остановке цепочки записи рекомендаций, затем она очищает очередь шагов K1/K0."""
@@ -3142,6 +3514,29 @@ class AppControllerCalibrationMixin(AppControllerContract):
                     continue
                 self._append_log(f"Калибровка: запись рекомендованного K0 = {int(value)}.", RowColor.blue)
                 self.writeCalibrationTempCompK0(str(int(value)))
+            elif step.startswith("adv:"):
+                field_key = str(step[4:]).strip()
+                if not field_key:
+                    continue
+                field = self._temp_comp_advanced_field_by_key(field_key)
+                if field is None:
+                    self._append_log(
+                        f"Калибровка: шаг рекомендаций {field_key} пропущен, параметр не найден в карте DID.",
+                        RowColor.yellow,
+                    )
+                    continue
+                value = self._calibration_temp_comp_advanced_recommended_values.get(field_key)
+                if value is None:
+                    self._append_log(
+                        f"Калибровка: шаг рекомендаций {field_key} пропущен, значение не рассчитано.",
+                        RowColor.yellow,
+                    )
+                    continue
+                self._append_log(
+                    f"Калибровка: запись рекомендации {self._temp_comp_field_display_name(field)} = {int(value)}.",
+                    RowColor.blue,
+                )
+                self.writeCalibrationTempCompAdvancedParam(field_key, str(int(value)))
             else:
                 continue
 
@@ -3376,15 +3771,25 @@ class AppControllerCalibrationMixin(AppControllerContract):
             elif did == int(UdsData.empty_fuel_tank.pid):
                 self._calibration_level_0 = value
                 self._calibration_level_0_known = True
+                if bool(self._calibration_temp_comp_k0_air_zero_adjust_active):
+                    self._calibration_temp_comp_k0_air_zero_adjust_empty_period = int(value)
                 changed = True
                 recompute_temp_comp = True
                 self._append_log(f"Калибровка: считан уровень 0% = {value}.", RowColor.green)
             elif did == int(UdsData.full_fuel_tank.pid):
                 self._calibration_level_100 = value
                 self._calibration_level_100_known = True
+                if bool(self._calibration_temp_comp_k0_air_zero_adjust_active):
+                    self._calibration_temp_comp_k0_air_zero_adjust_full_period = int(value)
                 changed = True
                 recompute_temp_comp = True
                 self._append_log(f"Калибровка: считан уровень 100% = {value}.", RowColor.green)
+            elif did == int(UdsData.raw_fuel_level.pid):
+                bits = max(8, int(UdsData.raw_fuel_level.size) * 8)
+                signed_level = self._decode_signed_value(raw_value, bits)
+                value = int(signed_level)
+                if bool(self._calibration_temp_comp_k0_air_zero_adjust_active):
+                    self._calibration_temp_comp_k0_air_zero_adjust_level_x10 = int(signed_level)
             elif did == int(UdsData.raw_temperature.pid):
                 bits = max(8, int(UdsData.raw_temperature.size) * 8)
                 signed_temperature = self._decode_signed_value(raw_value, bits)
@@ -3400,7 +3805,10 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 if self._calibration_temp_comp_k1_x100_current != signed_k1:
                     self._calibration_temp_comp_k1_x100_current = int(signed_k1)
                     self._append_log(f"Калибровка: считан коэффициент K1 = {int(signed_k1)}.", RowColor.green)
-                recompute_temp_comp = True
+                if self._calibration_temp_comp_adv_read_active:
+                    self._calibration_temp_comp_adv_read_recompute_pending = True
+                else:
+                    recompute_temp_comp = True
             elif did == int(UdsData.fuel_temp_comp_k0_count.pid):
                 bits = max(8, int(UdsData.fuel_temp_comp_k0_count.size) * 8)
                 signed_k0 = self._decode_signed_value(raw_value, bits)
@@ -3408,7 +3816,12 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 if self._calibration_temp_comp_k0_count_current != signed_k0:
                     self._calibration_temp_comp_k0_count_current = int(signed_k0)
                     self._append_log(f"Калибровка: считан коэффициент K0 = {int(signed_k0)}.", RowColor.green)
-                recompute_temp_comp = True
+                if bool(self._calibration_temp_comp_k0_air_zero_adjust_active):
+                    self._calibration_temp_comp_k0_air_zero_adjust_current_k0 = int(signed_k0)
+                if self._calibration_temp_comp_adv_read_active:
+                    self._calibration_temp_comp_adv_read_recompute_pending = True
+                else:
+                    recompute_temp_comp = True
             else:
                 advanced_field = self._temp_comp_advanced_field_by_did(did)
                 if advanced_field is not None:
@@ -3425,6 +3838,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
                     value = int(parsed_value)
 
                     previous_value = self._calibration_temp_comp_advanced_values.get(field_key)
+                    advanced_value_changed = previous_value != value
                     if previous_value != value:
                         self._calibration_temp_comp_advanced_values[field_key] = int(value)
                         label_text = str(advanced_field.get("label", "Параметр"))
@@ -3450,8 +3864,14 @@ class AppControllerCalibrationMixin(AppControllerContract):
                             progress_percent=self._calibration_temp_comp_advanced_read_progress_percent(),
                             determinate=True,
                         )
+                        if field_key == "mode":
+                            self._adapt_calibration_temp_comp_mode_aware_queue(int(value))
                         self._schedule_next_calibration_temp_comp_advanced_read(immediate=False)
-                    recompute_temp_comp = True
+                    if advanced_value_changed:
+                        if self._calibration_temp_comp_adv_read_active:
+                            self._calibration_temp_comp_adv_read_recompute_pending = True
+                        else:
+                            recompute_temp_comp = True
 
             if self._calibration_sequence_waiting_action == "read_level_0" and did == int(UdsData.empty_fuel_tank.pid):
                 self._finish_calibration_sequence_wait("read_level_0")
@@ -3506,6 +3926,9 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 self.calibrationVerificationChanged.emit()
                 self._recompute_calibration_wizard_state()
                 self._continue_calibration_temp_comp_recommendation_apply_queue()
+
+            if bool(self._calibration_temp_comp_k0_air_zero_adjust_active):
+                self._continue_calibration_temp_comp_k0_air_zero_adjust()
 
             if changed:
                 self.calibrationValuesChanged.emit()
@@ -3647,10 +4070,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
         new_values: list[int | None] = [None]
         new_options: list[str] = ["Авто (по текущим UDS ID)"]
 
-        if len(self._calibration_csv_node_candidates) > 0:
-            merged_candidates = set(int(value) & 0xFF for value in self._calibration_csv_node_candidates)
-        else:
-            merged_candidates = set(int(value) & 0xFF for value in self._observed_candidate_values)
+        merged_candidates = set(int(value) & 0xFF for value in self._observed_candidate_values)
 
         for sa in sorted(merged_candidates):
             new_values.append(sa)

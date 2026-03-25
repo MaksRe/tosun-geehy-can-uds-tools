@@ -164,9 +164,18 @@ class AppController(
         self._calibration_temp_comp_adv_read_inflight_key: str | None = None
         self._calibration_temp_comp_adv_read_total_count = 0
         self._calibration_temp_comp_adv_read_success_count = 0
+        self._calibration_temp_comp_adv_read_mode_aware = False
+        self._calibration_temp_comp_adv_read_expected_mode: int | None = None
+        self._calibration_temp_comp_adv_read_recompute_pending = False
         self._calibration_temp_comp_adv_read_timeout_ms = 1200
         self._calibration_temp_comp_adv_read_delay_ms = 80
         self._calibration_temp_comp_recommendation_apply_queue: list[str] = []
+        self._calibration_temp_comp_k0_air_zero_adjust_active = False
+        self._calibration_temp_comp_k0_air_zero_adjust_empty_period: int | None = None
+        self._calibration_temp_comp_k0_air_zero_adjust_full_period: int | None = None
+        self._calibration_temp_comp_k0_air_zero_adjust_level_x10: int | None = None
+        self._calibration_temp_comp_k0_air_zero_adjust_current_k0: int | None = None
+        self._calibration_temp_comp_k0_air_zero_adjust_timeout_ms = 1500
         self._calibration_temp_comp_k0_count_base: int | None = None
         self._calibration_temp_comp_k0_count_recommended: int | None = None
         self._calibration_temp_comp_k0_count_delta: int | None = None
@@ -184,6 +193,7 @@ class AppController(
         self._calibration_temp_comp_level_error_p95_before: float | None = None
         self._calibration_temp_comp_level_error_p95_after: float | None = None
         self._calibration_temp_comp_chart_series: list[dict[str, object]] = []
+        self._calibration_temp_comp_chart_revision = 0
         self._calibration_temp_comp_advanced_recommended_values: dict[str, int | None] = {}
         self._calibration_backup_available = False
         self._calibration_backup_level_0 = 0
@@ -198,7 +208,9 @@ class AppController(
         self._calibration_node_options: list[str] = ["Авто (по текущим UDS ID)"]
         self._calibration_node_values: list[int | None] = [None]
         self._selected_calibration_node_index = 0
-        self._calibration_csv_node_candidates: set[int] = set()
+        self._calibration_temp_comp_dataset_options: list[str] = []
+        self._calibration_temp_comp_dataset_values: list[int] = []
+        self._selected_calibration_temp_comp_dataset_index = -1
         self._calibration_read_service = ServiceReadDataById()
         self._calibration_write_service = ServiceWriteDataById()
         self._calibration_session_service = ServiceSession()
@@ -374,6 +386,14 @@ class AppController(
         self._calibration_temp_comp_adv_read_delay_timer.setInterval(self._calibration_temp_comp_adv_read_delay_ms)
         self._calibration_temp_comp_adv_read_delay_timer.timeout.connect(
             self._on_calibration_temp_comp_advanced_read_delay_timeout
+        )
+        self._calibration_temp_comp_k0_air_zero_adjust_timeout_timer = QTimer(self)
+        self._calibration_temp_comp_k0_air_zero_adjust_timeout_timer.setSingleShot(True)
+        self._calibration_temp_comp_k0_air_zero_adjust_timeout_timer.setInterval(
+            self._calibration_temp_comp_k0_air_zero_adjust_timeout_ms
+        )
+        self._calibration_temp_comp_k0_air_zero_adjust_timeout_timer.timeout.connect(
+            self._on_calibration_temp_comp_k0_air_zero_adjust_timeout
         )
 
         self._collector_poll_timer = QTimer(self)

@@ -670,6 +670,24 @@ class AppControllerPropertiesMixin(AppControllerContract):
     def calibrationTempCompSampleCount(self):
         return len(self._calibration_temp_comp_samples)
 
+    @Property("QStringList", notify=calibrationTempCompChanged)
+    def calibrationTempCompDatasetOptions(self):
+        """Цель функции в выдаче списка наборов CSV, затем она заполняет селектор узлов внутри блока температурной компенсации."""
+        return self._calibration_temp_comp_dataset_options
+
+    @Property(int, notify=calibrationTempCompChanged)
+    def selectedCalibrationTempCompDatasetIndex(self):
+        """Цель функции в выдаче текущего индекса набора CSV, затем она синхронизирует выбор QML-комбобокса."""
+        return int(self._selected_calibration_temp_comp_dataset_index)
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompSelectedDatasetText(self):
+        """Цель функции в выдаче подписи активного набора CSV, затем она показывает оператору узел офлайн-анализа."""
+        selected_index = int(self._selected_calibration_temp_comp_dataset_index)
+        if 0 <= selected_index < len(self._calibration_temp_comp_dataset_options):
+            return str(self._calibration_temp_comp_dataset_options[selected_index])
+        return "Набор CSV не выбран"
+
     @Property(str, notify=calibrationTempCompChanged)
     def calibrationTempCompPeriodRangeText(self):
         value = self._calibration_temp_comp_period_range()
@@ -1003,3 +1021,8 @@ class AppControllerPropertiesMixin(AppControllerContract):
     @Property("QVariantList", notify=calibrationTempCompChanged)
     def calibrationTempCompTrendSeries(self):
         return self._calibration_temp_comp_chart_series
+
+    @Property(int, notify=calibrationTempCompChanged)
+    def calibrationTempCompChartRevision(self):
+        """Цель функции в выдаче версии графика температурной компенсации, затем она позволяет QML пропускать лишние перерисовки."""
+        return int(self._calibration_temp_comp_chart_revision)

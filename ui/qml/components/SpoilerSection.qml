@@ -17,13 +17,23 @@ ColumnLayout {
     property color textMain: "#1f2d3d"
     property color textSoft: "#607084"
     property color accentColor: "#2563eb"
+    property bool contentFillAvailableHeight: false
 
     default property alias contentData: contentLayout.data
 
     Layout.fillWidth: true
+    implicitHeight: headerRect.implicitHeight
+                    + (root.expanded
+                       ? (
+                           root.contentFillAvailableHeight
+                           ? 0
+                           : (root.spacing + contentLayout.implicitHeight)
+                         )
+                       : 0)
     spacing: 6
 
     Rectangle {
+        id: headerRect
         Layout.fillWidth: true
         implicitHeight: 44
         radius: 10
@@ -91,10 +101,14 @@ ColumnLayout {
     ColumnLayout {
         id: contentLayout
         Layout.fillWidth: true
-        Layout.fillHeight: root.expanded
+        Layout.fillHeight: root.expanded && root.contentFillAvailableHeight
         Layout.minimumHeight: 0
-        Layout.preferredHeight: root.expanded ? -1 : 0
-        Layout.maximumHeight: root.expanded ? 16777215 : 0
+        Layout.preferredHeight: root.expanded
+                                ? (root.contentFillAvailableHeight ? -1 : contentLayout.implicitHeight)
+                                : 0
+        Layout.maximumHeight: root.expanded
+                              ? (root.contentFillAvailableHeight ? 16777215 : contentLayout.implicitHeight)
+                              : 0
         spacing: 0
         visible: root.expanded
         opacity: root.expanded ? 1 : 0

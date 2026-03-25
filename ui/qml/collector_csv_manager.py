@@ -3,6 +3,9 @@
 import csv
 from pathlib import Path
 
+CSV_WRITE_ENCODING = "utf-8"
+CSV_READ_ENCODING = "utf-8-sig"
+
 
 class CollectorCsvManager:
     """Writes collector values to a single per-node CSV file."""
@@ -30,7 +33,7 @@ class CollectorCsvManager:
 
     @staticmethod
     def _init_csv(csv_path: Path, header: tuple[str, ...]):
-        with csv_path.open("w", newline="", encoding="utf-8") as file:
+        with csv_path.open("w", newline="", encoding=CSV_WRITE_ENCODING) as file:
             csv.writer(file, delimiter=";").writerow(header)
 
     @staticmethod
@@ -43,7 +46,7 @@ class CollectorCsvManager:
 
     @staticmethod
     def _append(csv_path: Path, row: tuple[str, ...]):
-        with csv_path.open("a", newline="", encoding="utf-8") as file:
+        with csv_path.open("a", newline="", encoding=CSV_WRITE_ENCODING) as file:
             csv.writer(file, delimiter=";").writerow(row)
 
     def _metadata_rows(self) -> list[list[str]]:
@@ -68,7 +71,7 @@ class CollectorCsvManager:
     def _read_data_rows(self) -> list[list[str]]:
         if not self._csv_path.exists():
             return []
-        with self._csv_path.open("r", newline="", encoding="utf-8-sig") as file:
+        with self._csv_path.open("r", newline="", encoding=CSV_READ_ENCODING) as file:
             rows = list(csv.reader(file, delimiter=";"))
         data_rows: list[list[str]] = []
         for row in rows:
@@ -82,7 +85,7 @@ class CollectorCsvManager:
 
     def _rewrite_with_metadata(self):
         data_rows = self._read_data_rows()
-        with self._csv_path.open("w", newline="", encoding="utf-8") as file:
+        with self._csv_path.open("w", newline="", encoding=CSV_WRITE_ENCODING) as file:
             writer = csv.writer(file, delimiter=";")
             for meta_row in self._metadata_rows():
                 writer.writerow(meta_row)
@@ -244,7 +247,7 @@ class CollectorCombinedCsvManager:
         if not self._csv_path.exists():
             return []
 
-        with self._csv_path.open("r", newline="", encoding="utf-8-sig") as file:
+        with self._csv_path.open("r", newline="", encoding=CSV_READ_ENCODING) as file:
             rows = list(csv.reader(file, delimiter=";"))
 
         if len(rows) == 0:
@@ -274,7 +277,7 @@ class CollectorCombinedCsvManager:
         return data_rows
 
     def _write_full_file(self, rows: list[dict[str, str]]):
-        with self._csv_path.open("w", newline="", encoding="utf-8") as file:
+        with self._csv_path.open("w", newline="", encoding=CSV_WRITE_ENCODING) as file:
             writer = csv.writer(file, delimiter=";")
             writer.writerow(self._group_header_row())
             writer.writerow(self._calibration_row())
@@ -372,6 +375,6 @@ class CollectorCombinedCsvManager:
             row[temperature_column] = self._format_value(self._as_float(metrics.get("temperature", 0.0)))
             row[fuel_period_x10_column] = self._format_value(self._resolve_fuel_period_percent(metrics))
 
-        with self._csv_path.open("a", newline="", encoding="utf-8") as file:
+        with self._csv_path.open("a", newline="", encoding=CSV_WRITE_ENCODING) as file:
             writer = csv.DictWriter(file, fieldnames=self._header, delimiter=";")
             writer.writerow(row)

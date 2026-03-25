@@ -1,4 +1,4 @@
-import QtQuick 2.15
+﻿import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 import QtQuick.Dialogs
@@ -16,14 +16,17 @@ Item {
     property color inputBorder: "#c8d9ea"
     property color inputFocus: "#0ea5e9"
     readonly property int contentPadding: 10
-    readonly property int advancedParamColumnWidth: 250
-    readonly property int advancedRecommendedColumnWidth: 260
-    readonly property int advancedReadButtonWidth: 76
-    readonly property int advancedWriteButtonWidth: 88
+    readonly property int tempCompScrollBarWidth: 16
+    readonly property int advancedParamColumnWidth: 232
+    readonly property int advancedRecommendedColumnWidth: 220
+    readonly property int advancedReadButtonWidth: 72
+    readonly property int advancedWriteButtonWidth: 82
     property bool tempCompShowRawSeries: true
     property bool tempCompShowCurrentSeries: true
     property bool tempCompShowRecommendedSeries: true
     property var tempCompFilteredSeries: []
+    property int tempCompLastChartRevision: -1
+    property string tempCompLastFilterMask: ""
 
     function applyCapturedToField(targetField, targetSwitch) {
         if (!root.appController) {
@@ -62,9 +65,22 @@ Item {
     }
 
     // Цель функции в стабилизации набора серий для графика, затем она обновляет кэш только при смене данных или фильтров.
-    function rebuildFilteredTempCompSeries() {
+    function rebuildFilteredTempCompSeries(forceUpdate) {
         if (!root.appController) {
             root.tempCompFilteredSeries = []
+            root.tempCompLastChartRevision = -1
+            root.tempCompLastFilterMask = ""
+            return
+        }
+        var force = (forceUpdate === true)
+        var revision = Number(root.appController.calibrationTempCompChartRevision)
+        if (!isFinite(revision)) {
+            revision = -1
+        }
+        var filterMask = (root.tempCompShowRawSeries ? "1" : "0")
+            + (root.tempCompShowCurrentSeries ? "1" : "0")
+            + (root.tempCompShowRecommendedSeries ? "1" : "0")
+        if (!force && root.tempCompLastChartRevision === revision && root.tempCompLastFilterMask === filterMask) {
             return
         }
         var source = root.appController.calibrationTempCompTrendSeries
@@ -75,6 +91,8 @@ Item {
             }
         }
         root.tempCompFilteredSeries = filtered
+        root.tempCompLastChartRevision = revision
+        root.tempCompLastFilterMask = filterMask
     }
 
     // Цель функции в извлечении signed-числа из текстовой метки, затем она возвращает только пригодное для ввода значение.
@@ -143,7 +161,7 @@ Item {
         applyLinearPreviewFromFields()
     }
 
-    onAppControllerChanged: rebuildFilteredTempCompSeries()
+    onAppControllerChanged: rebuildFilteredTempCompSeries(true)
 
     Layout.fillWidth: true
     implicitHeight: contentColumn.implicitHeight + (root.contentPadding * 2)
@@ -272,375 +290,391 @@ Item {
             }
         }
 
-        Rectangle {
+        SpoilerSection {
+            id: levelCalibrationSpoiler
             Layout.fillWidth: true
             Layout.fillHeight: false
             Layout.preferredHeight: implicitHeight
             Layout.maximumHeight: implicitHeight
-            radius: 10
-            color: "#f4f8fd"
-            border.color: "#d6e2ef"
-            implicitHeight: currentLevelRow.implicitHeight + 14
+            title: "Калибровка уровней 0% и 100%"
+            hintText: "Чтение и запись калибровочных точек уровня"
+            cardColor: root.cardColor
+            cardBorder: root.cardBorder
+            textMain: root.textMain
+            textSoft: root.textSoft
+            accentColor: "#0284c7"
+            expanded: false
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: false
+                Layout.preferredHeight: implicitHeight
+                Layout.maximumHeight: implicitHeight
+                radius: 10
+                color: "#f4f8fd"
+                border.color: "#d6e2ef"
+                implicitHeight: currentLevelRow.implicitHeight + 14
+
+                RowLayout {
+                    id: currentLevelRow
+                    anchors.fill: parent
+                    anchors.margins: 7
+                    spacing: 8
+
+                    Rectangle {
+                        radius: 8
+                        color: "#eef5ff"
+                        border.color: "#d6e2ef"
+                        implicitHeight: 34
+                        implicitWidth: currentValueRow.implicitWidth + 16
+
+                        RowLayout {
+                            id: currentValueRow
+                            anchors.centerIn: parent
+                            spacing: 6
+
+                            Text {
+                                text: "Текущий"
+                                color: root.textSoft
+                                font.pixelSize: 11
+                                font.family: "Bahnschrift"
+                            }
+
+                            Text {
+                                text: root.appController ? root.appController.calibrationCurrentLevelText : "-"
+                                color: root.textMain
+                                font.pixelSize: 18
+                                font.bold: true
+                                font.family: "Bahnschrift"
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        width: 1
+                        Layout.preferredHeight: 22
+                        color: "#d6e2ef"
+                    }
+
+                    Rectangle {
+                        radius: 8
+                        color: "#ecfdf5"
+                        border.color: "#bfe8d2"
+                        implicitHeight: 34
+                        implicitWidth: capturedValueRow.implicitWidth + 16
+
+                        RowLayout {
+                            id: capturedValueRow
+                            anchors.centerIn: parent
+                            spacing: 6
+
+                            Text {
+                                text: "Захват"
+                                color: root.textSoft
+                                font.pixelSize: 11
+                                font.family: "Bahnschrift"
+                            }
+
+                            Text {
+                                text: root.appController ? root.appController.calibrationCapturedLevelText : "-"
+                                color: "#0f766e"
+                                font.pixelSize: 14
+                                font.bold: true
+                                font.family: "Bahnschrift"
+                            }
+                        }
+                    }
+
+                    Item { Layout.fillWidth: true }
+
+                    FancyButton {
+                        Layout.preferredWidth: 90
+                        Layout.preferredHeight: 30
+                        text: "-> 0%"
+                        tone: "#0284c7"
+                        toneHover: "#0369a1"
+                        tonePressed: "#075985"
+                        enabled: root.appController && root.appController.calibrationCapturedLevelText !== "-"
+                        onClicked: root.applyCapturedToField(custom0Field, custom0Switch)
+                    }
+
+                    FancyButton {
+                        Layout.preferredWidth: 96
+                        Layout.preferredHeight: 30
+                        text: "-> 100%"
+                        tone: "#0284c7"
+                        toneHover: "#0369a1"
+                        tonePressed: "#075985"
+                        enabled: root.appController && root.appController.calibrationCapturedLevelText !== "-"
+                        onClicked: root.applyCapturedToField(custom100Field, custom100Switch)
+                    }
+                }
+            }
 
             RowLayout {
-                id: currentLevelRow
-                anchors.fill: parent
-                anchors.margins: 7
+                Layout.fillWidth: true
+                Layout.fillHeight: false
+                Layout.preferredHeight: Math.max(level0Layout.implicitHeight, level100Layout.implicitHeight) + 14
+                Layout.maximumHeight: Layout.preferredHeight
                 spacing: 8
 
                 Rectangle {
-                    radius: 8
-                    color: "#eef5ff"
-                    border.color: "#d6e2ef"
-                    implicitHeight: 34
-                    implicitWidth: currentValueRow.implicitWidth + 16
-
-                    RowLayout {
-                        id: currentValueRow
-                        anchors.centerIn: parent
-                        spacing: 6
-
-                        Text {
-                            text: "Текущий"
-                            color: root.textSoft
-                            font.pixelSize: 11
-                            font.family: "Bahnschrift"
-                        }
-
-                        Text {
-                            text: root.appController ? root.appController.calibrationCurrentLevelText : "-"
-                            color: root.textMain
-                            font.pixelSize: 18
-                            font.bold: true
-                            font.family: "Bahnschrift"
-                        }
-                    }
-                }
-
-                Rectangle {
-                    width: 1
-                    Layout.preferredHeight: 22
-                    color: "#d6e2ef"
-                }
-
-                Rectangle {
-                    radius: 8
-                    color: "#ecfdf5"
-                    border.color: "#bfe8d2"
-                    implicitHeight: 34
-                    implicitWidth: capturedValueRow.implicitWidth + 16
-
-                    RowLayout {
-                        id: capturedValueRow
-                        anchors.centerIn: parent
-                        spacing: 6
-
-                        Text {
-                            text: "Захват"
-                            color: root.textSoft
-                            font.pixelSize: 11
-                            font.family: "Bahnschrift"
-                        }
-
-                        Text {
-                            text: root.appController ? root.appController.calibrationCapturedLevelText : "-"
-                            color: "#0f766e"
-                            font.pixelSize: 14
-                            font.bold: true
-                            font.family: "Bahnschrift"
-                        }
-                    }
-                }
-
-                Item { Layout.fillWidth: true }
-
-                FancyButton {
-                    Layout.preferredWidth: 90
-                    Layout.preferredHeight: 30
-                    text: "-> 0%"
-                    tone: "#0284c7"
-                    toneHover: "#0369a1"
-                    tonePressed: "#075985"
-                    enabled: root.appController && root.appController.calibrationCapturedLevelText !== "-"
-                    onClicked: root.applyCapturedToField(custom0Field, custom0Switch)
-                }
-
-                FancyButton {
-                    Layout.preferredWidth: 96
-                    Layout.preferredHeight: 30
-                    text: "-> 100%"
-                    tone: "#0284c7"
-                    toneHover: "#0369a1"
-                    tonePressed: "#075985"
-                    enabled: root.appController && root.appController.calibrationCapturedLevelText !== "-"
-                    onClicked: root.applyCapturedToField(custom100Field, custom100Switch)
-                }
-            }
-        }
-
-        RowLayout {
-            Layout.fillWidth: true
-            Layout.fillHeight: false
-            Layout.preferredHeight: Math.max(level0Layout.implicitHeight, level100Layout.implicitHeight) + 14
-            Layout.maximumHeight: Layout.preferredHeight
-            spacing: 8
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: implicitHeight
-                Layout.maximumHeight: implicitHeight
-                radius: 10
-                color: "#f8fbff"
-                border.color: "#d6e2ef"
-                implicitHeight: level0Layout.implicitHeight + 14
-
-                ColumnLayout {
-                    id: level0Layout
-                    anchors.fill: parent
-                    anchors.margins: 7
-                    spacing: 6
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 6
-
-                        Text {
-                            text: "0%"
-                            color: root.textMain
-                            font.pixelSize: 15
-                            font.bold: true
-                            font.family: "Bahnschrift"
-                        }
-
-                        Rectangle {
-                            radius: 7
-                            color: root.appController && root.appController.calibrationWizardStage >= 2 ? "#dcfce7" : "#e2e8f0"
-                            border.color: root.appController && root.appController.calibrationWizardStage >= 2 ? "#86efac" : "#cbd5e1"
-                            implicitWidth: status0Text.implicitWidth + 12
-                            implicitHeight: 22
-
-                            Text {
-                                id: status0Text
-                                anchors.centerIn: parent
-                                text: root.appController && root.appController.calibrationWizardStage >= 4 ? "ОК" :
-                                      (root.appController && root.appController.calibrationWizardStage >= 2 ? "Записан" : "Ожидание")
-                                color: root.appController && root.appController.calibrationWizardStage >= 2 ? "#166534" : "#475569"
-                                font.pixelSize: 10
-                                font.bold: true
-                                font.family: "Bahnschrift"
-                            }
-                        }
-
-                        Item { Layout.fillWidth: true }
-
-                        FancyButton {
-                            Layout.preferredWidth: 100
-                            Layout.preferredHeight: 30
-                            text: "Прочитать"
-                            tone: "#0f766e"
-                            toneHover: "#115e59"
-                            tonePressed: "#134e4a"
-                            enabled: root.appController !== null
-                            onClicked: if (root.appController) root.appController.readCalibrationLevel0()
-                        }
-                    }
-
-                    Text {
-                        text: "Сохранено: " + (root.appController ? root.appController.calibrationLevel0Text : "-")
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 6
-
-                        FancySwitch {
-                            id: custom0Switch
-                            trackWidth: 40
-                            trackHeight: 22
-                        }
-
-                        FancyTextField {
-                            id: custom0Field
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 30
-                            enabled: custom0Switch.checked
-                            text: ""
-                            placeholderText: "Текущее / вручную"
-                            textColor: root.textMain
-                            bgColor: root.inputBg
-                            borderColor: root.inputBorder
-                            focusBorderColor: root.inputFocus
-                        }
-
-                        FancyButton {
-                            Layout.preferredWidth: 98
-                            Layout.preferredHeight: 30
-                            text: "Сохранить"
-                            tone: "#0284c7"
-                            toneHover: "#0369a1"
-                            tonePressed: "#075985"
-                            enabled: root.appController !== null
-                            onClicked: if (root.appController) root.appController.saveCalibrationLevel0(custom0Switch.checked ? custom0Field.text : "")
-                        }
-                    }
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: implicitHeight
-                Layout.maximumHeight: implicitHeight
-                radius: 10
-                color: "#f8fbff"
-                border.color: "#d6e2ef"
-                implicitHeight: level100Layout.implicitHeight + 14
-
-                ColumnLayout {
-                    id: level100Layout
-                    anchors.fill: parent
-                    anchors.margins: 7
-                    spacing: 6
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 6
-
-                        Text {
-                            text: "100%"
-                            color: root.textMain
-                            font.pixelSize: 15
-                            font.bold: true
-                            font.family: "Bahnschrift"
-                        }
-
-                        Rectangle {
-                            radius: 7
-                            color: root.appController && root.appController.calibrationWizardStage >= 3 ? "#dcfce7" : "#e2e8f0"
-                            border.color: root.appController && root.appController.calibrationWizardStage >= 3 ? "#86efac" : "#cbd5e1"
-                            implicitWidth: status100Text.implicitWidth + 12
-                            implicitHeight: 22
-
-                            Text {
-                                id: status100Text
-                                anchors.centerIn: parent
-                                text: root.appController && root.appController.calibrationWizardStage >= 4 ? "ОК" :
-                                      (root.appController && root.appController.calibrationWizardStage >= 3 ? "Записан" : "Ожидание")
-                                color: root.appController && root.appController.calibrationWizardStage >= 3 ? "#166534" : "#475569"
-                                font.pixelSize: 10
-                                font.bold: true
-                                font.family: "Bahnschrift"
-                            }
-                        }
-
-                        Item { Layout.fillWidth: true }
-
-                        FancyButton {
-                            Layout.preferredWidth: 100
-                            Layout.preferredHeight: 30
-                            text: "Прочитать"
-                            tone: "#0f766e"
-                            toneHover: "#115e59"
-                            tonePressed: "#134e4a"
-                            enabled: root.appController !== null
-                            onClicked: if (root.appController) root.appController.readCalibrationLevel100()
-                        }
-                    }
-
-                    Text {
-                        text: "Сохранено: " + (root.appController ? root.appController.calibrationLevel100Text : "-")
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 6
-
-                        FancySwitch {
-                            id: custom100Switch
-                            trackWidth: 40
-                            trackHeight: 22
-                        }
-
-                        FancyTextField {
-                            id: custom100Field
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 30
-                            enabled: custom100Switch.checked
-                            text: ""
-                            placeholderText: "Текущее / вручную"
-                            textColor: root.textMain
-                            bgColor: root.inputBg
-                            borderColor: root.inputBorder
-                            focusBorderColor: root.inputFocus
-                        }
-
-                        FancyButton {
-                            Layout.preferredWidth: 98
-                            Layout.preferredHeight: 30
-                            text: "Сохранить"
-                            tone: "#0284c7"
-                            toneHover: "#0369a1"
-                            tonePressed: "#075985"
-                            enabled: root.appController !== null
-                            onClicked: if (root.appController) root.appController.saveCalibrationLevel100(custom100Switch.checked ? custom100Field.text : "")
-                        }
-                    }
-                }
-            }
-        }
-
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.fillHeight: false
-            Layout.preferredHeight: implicitHeight
-            Layout.maximumHeight: implicitHeight
-            radius: 10
-            color: "#f8fbff"
-            border.color: "#d6e2ef"
-            implicitHeight: backupRow.implicitHeight + 14
-
-            RowLayout {
-                id: backupRow
-                anchors.fill: parent
-                anchors.margins: 7
-                spacing: 6
-
-                Text {
                     Layout.fillWidth: true
-                    text: root.appController && root.appController.calibrationBackupAvailable
-                          ? ("Копия: 0%=" + root.appController.calibrationBackupLevel0Text + ", 100%=" + root.appController.calibrationBackupLevel100Text)
-                          : "Копия не создана"
-                    color: root.textSoft
-                    font.pixelSize: 11
-                    font.family: "Bahnschrift"
-                    elide: Text.ElideRight
+                    Layout.preferredHeight: implicitHeight
+                    Layout.maximumHeight: implicitHeight
+                    radius: 10
+                    color: "#f8fbff"
+                    border.color: "#d6e2ef"
+                    implicitHeight: level0Layout.implicitHeight + 14
+
+                    ColumnLayout {
+                        id: level0Layout
+                        anchors.fill: parent
+                        anchors.margins: 7
+                        spacing: 6
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            Text {
+                                text: "0%"
+                                color: root.textMain
+                                font.pixelSize: 15
+                                font.bold: true
+                                font.family: "Bahnschrift"
+                            }
+
+                            Rectangle {
+                                radius: 7
+                                color: root.appController && root.appController.calibrationWizardStage >= 2 ? "#dcfce7" : "#e2e8f0"
+                                border.color: root.appController && root.appController.calibrationWizardStage >= 2 ? "#86efac" : "#cbd5e1"
+                                implicitWidth: status0Text.implicitWidth + 12
+                                implicitHeight: 22
+
+                                Text {
+                                    id: status0Text
+                                    anchors.centerIn: parent
+                                    text: root.appController && root.appController.calibrationWizardStage >= 4 ? "ОК" :
+                                          (root.appController && root.appController.calibrationWizardStage >= 2 ? "Записан" : "Ожидание")
+                                    color: root.appController && root.appController.calibrationWizardStage >= 2 ? "#166534" : "#475569"
+                                    font.pixelSize: 10
+                                    font.bold: true
+                                    font.family: "Bahnschrift"
+                                }
+                            }
+
+                            Item { Layout.fillWidth: true }
+
+                            FancyButton {
+                                Layout.preferredWidth: 100
+                                Layout.preferredHeight: 30
+                                text: "Прочитать"
+                                tone: "#0f766e"
+                                toneHover: "#115e59"
+                                tonePressed: "#134e4a"
+                                enabled: root.appController !== null
+                                onClicked: if (root.appController) root.appController.readCalibrationLevel0()
+                            }
+                        }
+
+                        Text {
+                            text: "Сохранено: " + (root.appController ? root.appController.calibrationLevel0Text : "-")
+                            color: root.textSoft
+                            font.pixelSize: 11
+                            font.family: "Bahnschrift"
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            FancySwitch {
+                                id: custom0Switch
+                                trackWidth: 40
+                                trackHeight: 22
+                            }
+
+                            FancyTextField {
+                                id: custom0Field
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 30
+                                enabled: custom0Switch.checked
+                                text: ""
+                                placeholderText: "Текущее / вручную"
+                                textColor: root.textMain
+                                bgColor: root.inputBg
+                                borderColor: root.inputBorder
+                                focusBorderColor: root.inputFocus
+                            }
+
+                            FancyButton {
+                                Layout.preferredWidth: 98
+                                Layout.preferredHeight: 30
+                                text: "Сохранить"
+                                tone: "#0284c7"
+                                toneHover: "#0369a1"
+                                tonePressed: "#075985"
+                                enabled: root.appController !== null
+                                onClicked: if (root.appController) root.appController.saveCalibrationLevel0(custom0Switch.checked ? custom0Field.text : "")
+                            }
+                        }
+                    }
                 }
 
-                FancyButton {
-                    Layout.preferredWidth: 172
-                    Layout.preferredHeight: 30
-                    text: "Создать копию"
-                    tone: "#0f766e"
-                    toneHover: "#115e59"
-                    tonePressed: "#134e4a"
-                    enabled: root.appController !== null
-                    onClicked: if (root.appController) root.appController.createCalibrationBackup()
-                }
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: implicitHeight
+                    Layout.maximumHeight: implicitHeight
+                    radius: 10
+                    color: "#f8fbff"
+                    border.color: "#d6e2ef"
+                    implicitHeight: level100Layout.implicitHeight + 14
 
-                FancyButton {
-                    Layout.preferredWidth: 182
-                    Layout.preferredHeight: 30
-                    text: "Восстановить"
-                    tone: "#7c3aed"
-                    toneHover: "#6d28d9"
-                    tonePressed: "#5b21b6"
-                    enabled: root.appController && root.appController.calibrationBackupAvailable
-                    onClicked: if (root.appController) root.appController.restoreCalibrationBackup()
+                    ColumnLayout {
+                        id: level100Layout
+                        anchors.fill: parent
+                        anchors.margins: 7
+                        spacing: 6
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            Text {
+                                text: "100%"
+                                color: root.textMain
+                                font.pixelSize: 15
+                                font.bold: true
+                                font.family: "Bahnschrift"
+                            }
+
+                            Rectangle {
+                                radius: 7
+                                color: root.appController && root.appController.calibrationWizardStage >= 3 ? "#dcfce7" : "#e2e8f0"
+                                border.color: root.appController && root.appController.calibrationWizardStage >= 3 ? "#86efac" : "#cbd5e1"
+                                implicitWidth: status100Text.implicitWidth + 12
+                                implicitHeight: 22
+
+                                Text {
+                                    id: status100Text
+                                    anchors.centerIn: parent
+                                    text: root.appController && root.appController.calibrationWizardStage >= 4 ? "ОК" :
+                                          (root.appController && root.appController.calibrationWizardStage >= 3 ? "Записан" : "Ожидание")
+                                    color: root.appController && root.appController.calibrationWizardStage >= 3 ? "#166534" : "#475569"
+                                    font.pixelSize: 10
+                                    font.bold: true
+                                    font.family: "Bahnschrift"
+                                }
+                            }
+
+                            Item { Layout.fillWidth: true }
+
+                            FancyButton {
+                                Layout.preferredWidth: 100
+                                Layout.preferredHeight: 30
+                                text: "Прочитать"
+                                tone: "#0f766e"
+                                toneHover: "#115e59"
+                                tonePressed: "#134e4a"
+                                enabled: root.appController !== null
+                                onClicked: if (root.appController) root.appController.readCalibrationLevel100()
+                            }
+                        }
+
+                        Text {
+                            text: "Сохранено: " + (root.appController ? root.appController.calibrationLevel100Text : "-")
+                            color: root.textSoft
+                            font.pixelSize: 11
+                            font.family: "Bahnschrift"
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            FancySwitch {
+                                id: custom100Switch
+                                trackWidth: 40
+                                trackHeight: 22
+                            }
+
+                            FancyTextField {
+                                id: custom100Field
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 30
+                                enabled: custom100Switch.checked
+                                text: ""
+                                placeholderText: "Текущее / вручную"
+                                textColor: root.textMain
+                                bgColor: root.inputBg
+                                borderColor: root.inputBorder
+                                focusBorderColor: root.inputFocus
+                            }
+
+                            FancyButton {
+                                Layout.preferredWidth: 98
+                                Layout.preferredHeight: 30
+                                text: "Сохранить"
+                                tone: "#0284c7"
+                                toneHover: "#0369a1"
+                                tonePressed: "#075985"
+                                enabled: root.appController !== null
+                                onClicked: if (root.appController) root.appController.saveCalibrationLevel100(custom100Switch.checked ? custom100Field.text : "")
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: false
+                Layout.preferredHeight: implicitHeight
+                Layout.maximumHeight: implicitHeight
+                radius: 10
+                color: "#f8fbff"
+                border.color: "#d6e2ef"
+                implicitHeight: backupRow.implicitHeight + 14
+
+                RowLayout {
+                    id: backupRow
+                    anchors.fill: parent
+                    anchors.margins: 7
+                    spacing: 6
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: root.appController && root.appController.calibrationBackupAvailable
+                              ? ("Копия: 0%=" + root.appController.calibrationBackupLevel0Text + ", 100%=" + root.appController.calibrationBackupLevel100Text)
+                              : "Копия не создана"
+                        color: root.textSoft
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                        elide: Text.ElideRight
+                    }
+
+                    FancyButton {
+                        Layout.preferredWidth: 172
+                        Layout.preferredHeight: 30
+                        text: "Создать копию"
+                        tone: "#0f766e"
+                        toneHover: "#115e59"
+                        tonePressed: "#134e4a"
+                        enabled: root.appController !== null
+                        onClicked: if (root.appController) root.appController.createCalibrationBackup()
+                    }
+
+                    FancyButton {
+                        Layout.preferredWidth: 182
+                        Layout.preferredHeight: 30
+                        text: "Восстановить"
+                        tone: "#475569"
+                        toneHover: "#334155"
+                        tonePressed: "#1e293b"
+                        enabled: root.appController && root.appController.calibrationBackupAvailable
+                        onClicked: if (root.appController) root.appController.restoreCalibrationBackup()
+                    }
                 }
             }
         }
@@ -650,8 +684,9 @@ Item {
             Layout.fillWidth: true
             Layout.fillHeight: expanded
             Layout.minimumHeight: 44
+            contentFillAvailableHeight: true
             title: "Температурная компенсация"
-            hintText: "Офлайн-анализ CSV и настройка K1/K0 + segmented heat/cool"
+            hintText: "Офлайн-анализ CSV/XLSX и настройка K1/K0 + segmented heat/cool"
             cardColor: root.cardColor
             cardBorder: root.cardBorder
             textMain: root.textMain
@@ -662,6 +697,9 @@ Item {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                Layout.minimumHeight: 320
+                Layout.preferredHeight: -1
+                Layout.maximumHeight: 16777215
                 clip: true
                 radius: 10
                 color: "#f8fbff"
@@ -676,7 +714,11 @@ Item {
                     contentHeight: tempCompLayout.implicitHeight + 14
 
                     ScrollBar.vertical: ScrollBar {
+                        id: tempCompVerticalScrollBar
                         policy: ScrollBar.AsNeeded
+                        width: root.tempCompScrollBarWidth
+                        implicitWidth: root.tempCompScrollBarWidth
+                        minimumSize: 0.12
                     }
 
                     ScrollBar.horizontal: ScrollBar {
@@ -687,8 +729,28 @@ Item {
                         id: tempCompLayout
                         x: 7
                         y: 7
-                        width: Math.max(0, tempCompFlick.width - 14)
+                        width: Math.max(0, tempCompFlick.width - (root.tempCompScrollBarWidth + 12))
                         spacing: 6
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        radius: 7
+                        color: "#eef2ff"
+                        border.color: "#c7d2fe"
+                        implicitHeight: 28
+
+                        Text {
+                            anchors.fill: parent
+                            anchors.leftMargin: 10
+                            anchors.rightMargin: 10
+                            verticalAlignment: Text.AlignVCenter
+                            text: "Этап 1. Источник данных и управление"
+                            color: "#3730a3"
+                            font.pixelSize: 11
+                            font.bold: true
+                            font.family: "Bahnschrift"
+                        }
+                    }
 
                     RowLayout {
                         Layout.fillWidth: true
@@ -749,10 +811,49 @@ Item {
                             anchors.margins: 4
                             spacing: 6
 
+                            Text {
+                                Layout.preferredWidth: 122
+                                text: "Набор CSV/XLSX:"
+                                color: root.textSoft
+                                font.pixelSize: 11
+                                font.family: "Bahnschrift"
+                                verticalAlignment: Text.AlignVCenter
+                            }
+
+                            FancyComboBox {
+                                id: tempCompDatasetSelector
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 30
+                                model: root.appController ? root.appController.calibrationTempCompDatasetOptions : []
+                                currentIndex: root.appController ? root.appController.selectedCalibrationTempCompDatasetIndex : -1
+                                enabled: root.appController && model && model.length > 0
+                                textColor: root.textMain
+                                bgColor: root.inputBg
+                                borderColor: root.inputBorder
+                                focusBorderColor: root.inputFocus
+                                onActivated: if (root.appController && index >= 0) {
+                                    root.appController.setSelectedCalibrationTempCompDatasetIndex(index)
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        radius: 7
+                        color: "#eef6ff"
+                        border.color: "#c7d9ee"
+                        implicitHeight: 44
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.margins: 4
+                            spacing: 6
+
                             FancyButton {
                                 Layout.preferredWidth: 138
                                 Layout.preferredHeight: 28
-                                text: "Загрузить CSV"
+                                text: "Загрузить CSV/XLSX"
                                 tone: "#0284c7"
                                 toneHover: "#0369a1"
                                 tonePressed: "#075985"
@@ -772,17 +873,15 @@ Item {
                             }
 
                             FancyButton {
-                                Layout.preferredWidth: 170
+                                Layout.preferredWidth: 186
                                 Layout.preferredHeight: 28
-                                text: "Прочитать из МК"
+                                text: "Чтение из текущего режима"
                                 tone: "#0f766e"
                                 toneHover: "#115e59"
                                 tonePressed: "#134e4a"
                                 enabled: root.appController !== null
                                 onClicked: if (root.appController) {
-                                    root.appController.readCalibrationTempCompK1()
-                                    root.appController.readCalibrationTempCompK0()
-                                    root.appController.readCalibrationTempCompAdvanced()
+                                    root.appController.readCalibrationTempCompFromMcu()
                                 }
                             }
 
@@ -798,6 +897,17 @@ Item {
                                     || root.appController.calibrationTempCompCanApplyNextK0
                                 )
                                 onClicked: if (root.appController) root.appController.applyCalibrationTempCompRecommendations()
+                            }
+
+                            FancyButton {
+                                Layout.preferredWidth: 254
+                                Layout.preferredHeight: 28
+                                text: "Подогнать K0 к 0% (текущая T)"
+                                tone: "#b45309"
+                                toneHover: "#92400e"
+                                tonePressed: "#78350f"
+                                enabled: root.appController !== null
+                                onClicked: if (root.appController) root.appController.autoAdjustCalibrationTempCompK0ForCurrentPoint()
                             }
 
                             Item { Layout.fillWidth: true }
@@ -872,11 +982,31 @@ Item {
 
                     Text {
                         Layout.fillWidth: true
-                        text: "Базовый поток: загрузить CSV -> проверить график -> записать рекомендации. Ручные DID доступны в расширенном блоке."
+                        text: "Базовый поток: загрузить CSV/XLSX -> проверить график -> записать рекомендации. Ручные DID доступны в расширенном блоке."
                         color: root.textSoft
                         font.pixelSize: 10
                         font.family: "Bahnschrift"
                         wrapMode: Text.WordWrap
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        radius: 7
+                        color: "#eff6ff"
+                        border.color: "#bfdbfe"
+                        implicitHeight: 28
+
+                        Text {
+                            anchors.fill: parent
+                            anchors.leftMargin: 10
+                            anchors.rightMargin: 10
+                            verticalAlignment: Text.AlignVCenter
+                            text: "Этап 2. Результат офлайн-анализа"
+                            color: "#1e3a8a"
+                            font.pixelSize: 11
+                            font.bold: true
+                            font.family: "Bahnschrift"
+                        }
                     }
 
                     SpoilerSection {
@@ -885,8 +1015,8 @@ Item {
                         Layout.fillHeight: false
                         title: "Итог офлайн-анализа"
                         hintText: "Подробный статус и рекомендуемые параметры для записи в МК"
-                        cardColor: "#f4f8fd"
-                        cardBorder: "#d6e2ef"
+                        cardColor: "#f0f7ff"
+                        cardBorder: "#bfdbfe"
                         textMain: root.textMain
                         textSoft: root.textSoft
                         accentColor: "#0284c7"
@@ -910,17 +1040,73 @@ Item {
                                     radius: 7
                                     color: "#f8fbff"
                                     border.color: "#d6e2ef"
-                                    implicitHeight: summaryStatusText.implicitHeight + 14
+                                    implicitHeight: summaryFactsGrid.implicitHeight + 10
 
-                                    Text {
-                                        id: summaryStatusText
+                                    GridLayout {
+                                        id: summaryFactsGrid
                                         anchors.fill: parent
-                                        anchors.margins: 7
-                                        text: root.appController ? root.appController.calibrationTempCompStatusText : "Ожидание CSV."
-                                        color: root.textMain
-                                        font.pixelSize: 11
-                                        font.family: "Bahnschrift"
-                                        wrapMode: Text.WordWrap
+                                        anchors.margins: 5
+                                        columns: 2
+                                        columnSpacing: 8
+                                        rowSpacing: 3
+
+                                        LabelValue {
+                                            Layout.fillWidth: true
+                                            labelText: "Набор"
+                                            valueText: root.appController ? root.appController.calibrationTempCompSelectedDatasetText : "не выбран"
+                                            labelColor: root.textSoft
+                                            valueColor: root.textMain
+                                            fontFamily: "Bahnschrift"
+                                        }
+
+                                        LabelValue {
+                                            Layout.fillWidth: true
+                                            labelText: "Точек"
+                                            valueText: root.appController ? String(root.appController.calibrationTempCompSampleCount) : "0"
+                                            labelColor: root.textSoft
+                                            valueColor: root.textMain
+                                            fontFamily: "Bahnschrift"
+                                        }
+
+                                        LabelValue {
+                                            Layout.fillWidth: true
+                                            labelText: "Температура"
+                                            valueText: root.appController ? root.appController.calibrationTempCompTemperatureRangeText : "нет данных"
+                                            labelColor: root.textSoft
+                                            valueColor: root.textMain
+                                            fontFamily: "Bahnschrift"
+                                        }
+
+                                        LabelValue {
+                                            Layout.fillWidth: true
+                                            labelText: "Период"
+                                            valueText: root.appController ? root.appController.calibrationTempCompPeriodRangeText : "нет данных"
+                                            labelColor: root.textSoft
+                                            valueColor: root.textMain
+                                            fontFamily: "Bahnschrift"
+                                        }
+
+                                        LabelValue {
+                                            Layout.fillWidth: true
+                                            labelText: "Уровень"
+                                            valueText: root.appController ? root.appController.calibrationTempCompLevelRangeText : "нет данных"
+                                            labelColor: root.textSoft
+                                            valueColor: root.textMain
+                                            fontFamily: "Bahnschrift"
+                                        }
+
+                                        LabelValue {
+                                            Layout.fillWidth: true
+                                            labelText: "Рекомендации"
+                                            valueText: root.appController && (root.appController.calibrationTempCompCanApplyNext || root.appController.calibrationTempCompCanApplyNextK0)
+                                                ? "готовы"
+                                                : "нет"
+                                            labelColor: root.textSoft
+                                            valueColor: root.appController && (root.appController.calibrationTempCompCanApplyNext || root.appController.calibrationTempCompCanApplyNextK0)
+                                                ? "#166534"
+                                                : "#475569"
+                                            fontFamily: "Bahnschrift"
+                                        }
                                     }
                                 }
 
@@ -1049,17 +1235,27 @@ Item {
                                     }
                                 }
 
-                                Text {
-                                    Layout.fillWidth: true
-                                    text: root.appController && (root.appController.calibrationTempCompCanApplyNext || root.appController.calibrationTempCompCanApplyNextK0)
-                                        ? "Рекомендации готовы к записи. Кнопка «Записать рекомендации» записывает все доступные рассчитанные параметры по очереди."
-                                        : "Рекомендации еще не готовы. Загрузите CSV и дождитесь расчета."
-                                    color: root.textSoft
-                                    font.pixelSize: 10
-                                    font.family: "Bahnschrift"
-                                    wrapMode: Text.WordWrap
-                                }
                             }
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        radius: 7
+                        color: "#ecfdf5"
+                        border.color: "#bbf7d0"
+                        implicitHeight: 28
+
+                        Text {
+                            anchors.fill: parent
+                            anchors.leftMargin: 10
+                            anchors.rightMargin: 10
+                            verticalAlignment: Text.AlignVCenter
+                            text: "Этап 3. Расширенные параметры (DID)"
+                            color: "#14532d"
+                            font.pixelSize: 11
+                            font.bold: true
+                            font.family: "Bahnschrift"
                         }
                     }
 
@@ -1069,8 +1265,8 @@ Item {
                         Layout.fillHeight: false
                         title: "Расширенные настройки (DID 0x001D..0x002C)"
                         hintText: "Ручной ввод K1/K0 и детальные DID по сегментной компенсации"
-                        cardColor: "#f4f8fd"
-                        cardBorder: "#d6e2ef"
+                        cardColor: "#f0fdf4"
+                        cardBorder: "#bbf7d0"
                         textMain: root.textMain
                         textSoft: root.textSoft
                         accentColor: "#0f766e"
@@ -1089,24 +1285,32 @@ Item {
                                 anchors.margins: 6
                                 spacing: 4
 
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: "Линейные коэффициенты"
+                                    color: root.textSoft
+                                    font.pixelSize: 11
+                                    font.bold: true
+                                    font.family: "Bahnschrift"
+                                }
+
                                 RowLayout {
                                     Layout.fillWidth: true
                                     spacing: 6
 
                                     Text {
                                         Layout.preferredWidth: 140
-                                        text: "K1 / K0"
+                                        text: "K1 (DID 0x001B)"
                                         color: root.textSoft
                                         font.pixelSize: 11
-                                        font.bold: true
                                         font.family: "Bahnschrift"
                                     }
 
                                     FancyTextField {
                                         id: tempCompK1Field
-                                        Layout.preferredWidth: 180
+                                        Layout.fillWidth: true
                                         Layout.preferredHeight: 34
-                                        placeholderText: "K1 (signed dec / 0xHEX)"
+                                        placeholderText: "signed dec / 0xHEX"
                                         textColor: root.textMain
                                         bgColor: root.inputBg
                                         borderColor: root.inputBorder
@@ -1115,21 +1319,45 @@ Item {
                                     }
 
                                     FancyButton {
-                                        Layout.preferredWidth: 106
+                                        Layout.preferredWidth: 92
                                         Layout.preferredHeight: 32
-                                        text: "Записать K1"
+                                        text: "Читать"
+                                        tone: "#0f766e"
+                                        toneHover: "#115e59"
+                                        tonePressed: "#134e4a"
+                                        enabled: root.appController !== null
+                                        onClicked: if (root.appController) root.appController.readCalibrationTempCompK1()
+                                    }
+
+                                    FancyButton {
+                                        Layout.preferredWidth: 96
+                                        Layout.preferredHeight: 32
+                                        text: "Записать"
                                         tone: "#0284c7"
                                         toneHover: "#0369a1"
                                         tonePressed: "#075985"
                                         enabled: root.appController !== null
                                         onClicked: if (root.appController) root.appController.writeCalibrationTempCompK1(tempCompK1Field.text)
                                     }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Text {
+                                        Layout.preferredWidth: 140
+                                        text: "K0 (DID 0x001C)"
+                                        color: root.textSoft
+                                        font.pixelSize: 11
+                                        font.family: "Bahnschrift"
+                                    }
 
                                     FancyTextField {
                                         id: tempCompK0Field
-                                        Layout.preferredWidth: 180
+                                        Layout.fillWidth: true
                                         Layout.preferredHeight: 34
-                                        placeholderText: "K0 (signed dec / 0xHEX)"
+                                        placeholderText: "signed dec / 0xHEX"
                                         textColor: root.textMain
                                         bgColor: root.inputBg
                                         borderColor: root.inputBorder
@@ -1138,17 +1366,26 @@ Item {
                                     }
 
                                     FancyButton {
-                                        Layout.preferredWidth: 106
+                                        Layout.preferredWidth: 92
                                         Layout.preferredHeight: 32
-                                        text: "Записать K0"
+                                        text: "Читать"
+                                        tone: "#0f766e"
+                                        toneHover: "#115e59"
+                                        tonePressed: "#134e4a"
+                                        enabled: root.appController !== null
+                                        onClicked: if (root.appController) root.appController.readCalibrationTempCompK0()
+                                    }
+
+                                    FancyButton {
+                                        Layout.preferredWidth: 96
+                                        Layout.preferredHeight: 32
+                                        text: "Записать"
                                         tone: "#0284c7"
                                         toneHover: "#0369a1"
                                         tonePressed: "#075985"
                                         enabled: root.appController !== null
                                         onClicked: if (root.appController) root.appController.writeCalibrationTempCompK0(tempCompK0Field.text)
                                     }
-
-                                    Item { Layout.fillWidth: true }
                                 }
 
                                 RowLayout {
@@ -1157,7 +1394,7 @@ Item {
 
                                     Text {
                                         Layout.fillWidth: true
-                                        text: "Каждая строка: чтение/запись DID. При загрузке CSV автоматически рассчитываются рекомендации по 0x001D..0x002C. Режим (0x001D) выбирается из списка. Гистерезис (0x001E): единицы 0.1 °C, пример 5 = 0.5 °C."
+                                        text: "Каждая строка: чтение/запись DID. При загрузке CSV/XLSX автоматически рассчитываются рекомендации по 0x001D..0x002C. Режим (0x001D) выбирается из списка. Гистерезис (0x001E): единицы 0.1 °C, пример 5 = 0.5 °C."
                                         color: root.textSoft
                                         font.pixelSize: 10
                                         font.family: "Bahnschrift"
@@ -1231,7 +1468,7 @@ Item {
                                         radius: 7
                                         color: index % 2 === 0 ? "#f8fafc" : "#f1f5f9"
                                         border.color: "#dbe3ec"
-                                        implicitHeight: advancedRowLayout.implicitHeight + 8
+                                        implicitHeight: advancedRowLayout.implicitHeight + 6
 
                                         RowLayout {
                                             id: advancedRowLayout
@@ -1256,7 +1493,7 @@ Item {
 
                                             Text {
                                                 Layout.preferredWidth: root.advancedParamColumnWidth
-                                                Layout.preferredHeight: 32
+                                                Layout.preferredHeight: 30
                                                 text: {
                                                     var title = String(root.seriesField(modelData, "label", "Параметр"))
                                                     var did = String(root.seriesField(modelData, "did", "0x----"))
@@ -1271,7 +1508,7 @@ Item {
 
                                             Text {
                                                 Layout.preferredWidth: root.advancedRecommendedColumnWidth
-                                                Layout.preferredHeight: 32
+                                                Layout.preferredHeight: 30
                                                 text: String(root.seriesField(modelData, "recommendedText", "не рассчитан"))
                                                 color: root.seriesField(modelData, "hasRecommended", false) ? "#0f766e" : "#94a3b8"
                                                 font.pixelSize: 10
@@ -1284,7 +1521,7 @@ Item {
                                                 Layout.fillWidth: true
                                                 Layout.minimumWidth: 130
                                                 Layout.preferredWidth: 180
-                                                Layout.preferredHeight: 34
+                                                Layout.preferredHeight: 30
 
                                                 FancyTextField {
                                                     id: advancedValueField
@@ -1342,7 +1579,7 @@ Item {
 
                                             FancyButton {
                                                 Layout.preferredWidth: root.advancedReadButtonWidth
-                                                Layout.preferredHeight: 32
+                                                Layout.preferredHeight: 30
                                                 text: "Читать"
                                                 tone: "#0284c7"
                                                 toneHover: "#0369a1"
@@ -1357,7 +1594,7 @@ Item {
 
                                             FancyButton {
                                                 Layout.preferredWidth: root.advancedWriteButtonWidth
-                                                Layout.preferredHeight: 32
+                                                Layout.preferredHeight: 30
                                                 text: "Записать"
                                                 tone: "#16a34a"
                                                 toneHover: "#15803d"
@@ -1393,7 +1630,7 @@ Item {
                                 anchors.leftMargin: 10
                                 anchors.rightMargin: 10
                                 verticalAlignment: Text.AlignVCenter
-                                text: "Этап 1. CSV"
+                                text: "Этап 1. CSV/XLSX"
                                 color: "#1e3a8a"
                                 font.pixelSize: 11
                                 font.bold: true
@@ -1536,110 +1773,143 @@ Item {
 
                         Rectangle {
                             Layout.fillWidth: true
-                            radius: 8
-                            color: "#eef3f9"
-                            border.color: "#c9d6e8"
-                            implicitHeight: linearPreviewPanelLayout.implicitHeight + 10
+                            radius: 7
+                            color: "#fffbeb"
+                            border.color: "#fde68a"
+                            implicitHeight: 28
 
-                            ColumnLayout {
-                                id: linearPreviewPanelLayout
+                            Text {
                                 anchors.fill: parent
-                                anchors.margins: 5
-                                spacing: 5
+                                anchors.leftMargin: 10
+                                anchors.rightMargin: 10
+                                verticalAlignment: Text.AlignVCenter
+                                text: "Этап 4. Быстрое локальное превью"
+                                color: "#92400e"
+                                font.pixelSize: 11
+                                font.bold: true
+                                font.family: "Bahnschrift"
+                            }
+                        }
 
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 6
+                        SpoilerSection {
+                            id: tempCompPreviewSpoiler
+                            Layout.fillWidth: true
+                            Layout.fillHeight: false
+                            title: "Быстрое превью линейного режима"
+                            hintText: "Локальный пересчет графиков без записи в МК"
+                            cardColor: "#fffbeb"
+                            cardBorder: "#fde68a"
+                            textMain: root.textMain
+                            textSoft: root.textSoft
+                            accentColor: "#0f766e"
+                            expanded: false
 
-                                    Text {
-                                        text: "Быстрое превью линейного режима"
-                                        color: "#1f3a56"
-                                        font.pixelSize: 11
-                                        font.bold: true
-                                        font.family: "Bahnschrift"
-                                    }
+                            Rectangle {
+                                Layout.fillWidth: true
+                                radius: 8
+                                color: "#eef3f9"
+                                border.color: "#c9d6e8"
+                                implicitHeight: linearPreviewPanelLayout.implicitHeight + 10
 
-                                    Item { Layout.fillWidth: true }
+                                ColumnLayout {
+                                    id: linearPreviewPanelLayout
+                                    anchors.fill: parent
+                                    anchors.margins: 5
+                                    spacing: 5
 
-                                    Rectangle {
-                                        radius: 5
-                                        color: root.appController && root.appController.calibrationTempCompLinearPreviewEnabled ? "#dcfce7" : "#e2e8f0"
-                                        border.color: root.appController && root.appController.calibrationTempCompLinearPreviewEnabled ? "#86efac" : "#cbd5e1"
-                                        implicitWidth: 98
-                                        implicitHeight: 20
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 6
 
                                         Text {
-                                            anchors.centerIn: parent
-                                            text: root.appController && root.appController.calibrationTempCompLinearPreviewEnabled ? "Превью: вкл" : "Превью: выкл"
-                                            color: root.appController && root.appController.calibrationTempCompLinearPreviewEnabled ? "#166534" : "#475569"
-                                            font.pixelSize: 9
+                                            text: "Параметры превью"
+                                            color: "#1f3a56"
+                                            font.pixelSize: 11
+                                            font.bold: true
                                             font.family: "Bahnschrift"
                                         }
+
+                                        Item { Layout.fillWidth: true }
+
+                                        Rectangle {
+                                            radius: 5
+                                            color: root.appController && root.appController.calibrationTempCompLinearPreviewEnabled ? "#dcfce7" : "#e2e8f0"
+                                            border.color: root.appController && root.appController.calibrationTempCompLinearPreviewEnabled ? "#86efac" : "#cbd5e1"
+                                            implicitWidth: 98
+                                            implicitHeight: 20
+
+                                            Text {
+                                                anchors.centerIn: parent
+                                                text: root.appController && root.appController.calibrationTempCompLinearPreviewEnabled ? "Превью: вкл" : "Превью: выкл"
+                                                color: root.appController && root.appController.calibrationTempCompLinearPreviewEnabled ? "#166534" : "#475569"
+                                                font.pixelSize: 9
+                                                font.family: "Bahnschrift"
+                                            }
+                                        }
                                     }
-                                }
 
-                                GridLayout {
-                                    Layout.fillWidth: true
-                                    columns: 4
-                                    rowSpacing: 4
-                                    columnSpacing: 6
-
-                                    Text {
-                                        Layout.alignment: Qt.AlignVCenter
-                                        text: "K1"
-                                        color: "#334155"
-                                        font.pixelSize: 10
-                                        font.family: "Bahnschrift"
-                                    }
-
-                                    FancyTextField {
-                                        id: tempCompPreviewK1Field
+                                    GridLayout {
                                         Layout.fillWidth: true
-                                        Layout.preferredHeight: 28
-                                        placeholderText: "signed dec/hex"
-                                        textColor: root.textMain
-                                        bgColor: root.inputBg
-                                        borderColor: root.inputBorder
-                                        focusBorderColor: root.inputFocus
-                                        onAccepted: root.applyLinearPreviewFromFields()
+                                        columns: 4
+                                        rowSpacing: 4
+                                        columnSpacing: 6
+
+                                        Text {
+                                            Layout.alignment: Qt.AlignVCenter
+                                            text: "K1"
+                                            color: "#334155"
+                                            font.pixelSize: 10
+                                            font.family: "Bahnschrift"
+                                        }
+
+                                        FancyTextField {
+                                            id: tempCompPreviewK1Field
+                                            Layout.fillWidth: true
+                                            Layout.preferredHeight: 34
+                                            placeholderText: "signed dec/hex"
+                                            textColor: root.textMain
+                                            bgColor: root.inputBg
+                                            borderColor: root.inputBorder
+                                            focusBorderColor: root.inputFocus
+                                            onAccepted: root.applyLinearPreviewFromFields()
+                                        }
+
+                                        Text {
+                                            Layout.alignment: Qt.AlignVCenter
+                                            text: "K0"
+                                            color: "#334155"
+                                            font.pixelSize: 10
+                                            font.family: "Bahnschrift"
+                                        }
+
+                                        FancyTextField {
+                                            id: tempCompPreviewK0Field
+                                            Layout.fillWidth: true
+                                            Layout.preferredHeight: 34
+                                            placeholderText: "signed dec/hex"
+                                            textColor: root.textMain
+                                            bgColor: root.inputBg
+                                            borderColor: root.inputBorder
+                                            focusBorderColor: root.inputFocus
+                                            onAccepted: root.applyLinearPreviewFromFields()
+                                        }
                                     }
 
-                                    Text {
-                                        Layout.alignment: Qt.AlignVCenter
-                                        text: "K0"
-                                        color: "#334155"
-                                        font.pixelSize: 10
-                                        font.family: "Bahnschrift"
-                                    }
-
-                                    FancyTextField {
-                                        id: tempCompPreviewK0Field
+                                    Flow {
                                         Layout.fillWidth: true
-                                        Layout.preferredHeight: 28
-                                        placeholderText: "signed dec/hex"
-                                        textColor: root.textMain
-                                        bgColor: root.inputBg
-                                        borderColor: root.inputBorder
-                                        focusBorderColor: root.inputFocus
-                                        onAccepted: root.applyLinearPreviewFromFields()
-                                    }
-                                }
+                                        spacing: 6
 
-                                Flow {
-                                    Layout.fillWidth: true
-                                    spacing: 6
-
-                                    FancyButton {
-                                        implicitWidth: 124
-                                        height: 26
-                                        text: "Применить превью"
-                                        fontPixelSize: 12
-                                        tone: "#0284c7"
-                                        toneHover: "#0369a1"
-                                        tonePressed: "#075985"
-                                        enabled: root.appController !== null
-                                        onClicked: root.applyLinearPreviewFromFields()
-                                    }
+                                        FancyButton {
+                                            implicitWidth: 124
+                                            height: 26
+                                            text: "Применить превью"
+                                            fontPixelSize: 12
+                                            tone: "#0284c7"
+                                            toneHover: "#0369a1"
+                                            tonePressed: "#075985"
+                                            enabled: root.appController !== null
+                                            onClicked: root.applyLinearPreviewFromFields()
+                                        }
 
                                     FancyButton {
                                         implicitWidth: 108
@@ -1734,13 +2004,14 @@ Item {
                                     }
                                 }
 
-                                Text {
-                                    Layout.fillWidth: true
-                                    text: "Режим только для предпросмотра: значения в МК не записываются."
-                                    color: "#64748b"
-                                    font.pixelSize: 9
-                                    font.family: "Bahnschrift"
-                                    elide: Text.ElideRight
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: "Режим только для предпросмотра: значения в МК не записываются."
+                                        color: "#64748b"
+                                        font.pixelSize: 9
+                                        font.family: "Bahnschrift"
+                                        elide: Text.ElideRight
+                                    }
                                 }
                             }
                         }
@@ -1757,7 +2028,7 @@ Item {
                                 anchors.leftMargin: 10
                                 anchors.rightMargin: 10
                                 verticalAlignment: Text.AlignVCenter
-                                text: "Этап 3. Ошибка и дрейф"
+                                text: "Этап 3. Метрики"
                                 color: "#9a3412"
                                 font.pixelSize: 11
                                 font.bold: true
@@ -1767,13 +2038,13 @@ Item {
 
                         GridLayout {
                             Layout.fillWidth: true
-                            columns: 3
-                            rowSpacing: 4
+                            columns: 2
+                            rowSpacing: 3
                             columnSpacing: 6
 
                             LabelValue {
                                 Layout.fillWidth: true
-                                labelText: "Ошибка min..max, %"
+                                labelText: "Ошибк. min..max, %"
                                 valueText: root.appController ? (root.appController.calibrationTempCompErrorRangeBeforeText + " -> " + root.appController.calibrationTempCompErrorRangeAfterText) : "-"
                                 labelColor: root.textSoft
                                 valueColor: root.textMain
@@ -1782,7 +2053,7 @@ Item {
 
                             LabelValue {
                                 Layout.fillWidth: true
-                                labelText: "Max |ошибка|, %"
+                                labelText: "Max|ошибк.|, %"
                                 valueText: root.appController ? (root.appController.calibrationTempCompErrorMaxBeforeText + " -> " + root.appController.calibrationTempCompErrorMaxAfterText) : "-"
                                 labelColor: root.textSoft
                                 valueColor: root.textMain
@@ -1809,7 +2080,7 @@ Item {
 
                             LabelValue {
                                 Layout.fillWidth: true
-                                labelText: "Дрейф пер., count/°C"
+                                labelText: "Дрейф пер., cnt/°C"
                                 valueText: root.appController ? (root.appController.calibrationTempCompSlopeBeforePeriodText + " -> " + root.appController.calibrationTempCompSlopeAfterPeriodText) : "-"
                                 labelColor: root.textSoft
                                 valueColor: root.textMain
@@ -1826,25 +2097,16 @@ Item {
                             }
                         }
 
-                        Text {
-                            Layout.fillWidth: true
-                            color: root.textSoft
-                            font.pixelSize: 10
-                            font.family: "Bahnschrift"
-                            text: "Формат метрик: текущее -> после рекомендаций. Цвета: красная/синяя/зеленая."
-                            elide: Text.ElideRight
-                        }
-
                         RowLayout {
                             Layout.fillWidth: true
-                            spacing: 12
+                            spacing: 8
 
                             CheckBox {
                                 text: "Сырой"
                                 checked: root.tempCompShowRawSeries
                                 onToggled: {
                                     root.tempCompShowRawSeries = checked
-                                    root.rebuildFilteredTempCompSeries()
+                                    root.rebuildFilteredTempCompSeries(true)
                                 }
                             }
 
@@ -1853,7 +2115,7 @@ Item {
                                 checked: root.tempCompShowCurrentSeries
                                 onToggled: {
                                     root.tempCompShowCurrentSeries = checked
-                                    root.rebuildFilteredTempCompSeries()
+                                    root.rebuildFilteredTempCompSeries(true)
                                 }
                             }
 
@@ -1862,7 +2124,7 @@ Item {
                                 checked: root.tempCompShowRecommendedSeries
                                 onToggled: {
                                     root.tempCompShowRecommendedSeries = checked
-                                    root.rebuildFilteredTempCompSeries()
+                                    root.rebuildFilteredTempCompSeries(true)
                                 }
                             }
 
@@ -1917,20 +2179,20 @@ Item {
                     TrendCanvas {
                         Layout.fillWidth: true
                         Layout.fillHeight: false
-                        Layout.preferredHeight: Math.max(360, tempCompFlick.height * 0.58)
-                        Layout.minimumHeight: 80
+                        Layout.preferredHeight: 460
+                        Layout.minimumHeight: 320
                         overlayMode: true
                         resetViewportOnDataChange: false
                         xMajorTicks: 12
                         yMajorTicks: 12
                         adaptiveRenderFactor: 1
-                        maxMarkerPoints: 0
+                        maxMarkerPoints: 1600
                         secondaryYAxisEnabled: root.appController ? root.appController.calibrationLevelBoundsKnown : false
                         secondaryYAxisTitle: "Уровень, %"
                         secondaryYAxisEmptyPeriod: root.appController ? root.appController.calibrationLevel0Value : NaN
                         secondaryYAxisFullPeriod: root.appController ? root.appController.calibrationLevel100Value : NaN
                         series: root.tempCompFilteredSeries
-                        emptyText: "Загрузите CSV из Коллектора для построения графика."
+                        emptyText: "Загрузите CSV/XLSX из Коллектора для построения графика."
                         customXAxisTitle: "Температура, °C"
                         customYAxisTitle: "Период, count"
                         showPointLabels: false
@@ -1950,9 +2212,9 @@ Item {
 
             FileDialog {
                 id: tempCompCsvFileDialog
-                title: "Выберите CSV файл(ы) Коллектора"
+                title: "Выберите CSV/XLSX файл(ы) Коллектора"
                 fileMode: FileDialog.OpenFiles
-                nameFilters: ["CSV файлы (*.csv)", "Все файлы (*)"]
+                nameFilters: ["Табличные файлы (*.csv *.xlsx)", "CSV файлы (*.csv)", "XLSX файлы (*.xlsx)", "Все файлы (*)"]
 
                 onAccepted: {
                     if (!root.appController) {
@@ -1984,8 +2246,7 @@ Item {
             Layout.fillWidth: true
             Layout.fillHeight: !tempCompSpoiler.expanded
             Layout.minimumHeight: 0
-            Layout.preferredHeight: 0
-            Layout.maximumHeight: tempCompSpoiler.expanded ? 0 : 16777215
+            Layout.preferredHeight: tempCompSpoiler.expanded ? 0 : 1
             opacity: 0
             enabled: false
         }
@@ -2013,6 +2274,9 @@ Item {
             if (!root.appController) {
                 return
             }
+            if (tempCompDatasetSelector.currentIndex !== root.appController.selectedCalibrationTempCompDatasetIndex) {
+                tempCompDatasetSelector.currentIndex = root.appController.selectedCalibrationTempCompDatasetIndex
+            }
             if (!tempCompK1Field.activeFocus) {
                 var currentK1 = root.appController.calibrationTempCompCurrentK1Text
                 tempCompK1Field.text = (currentK1 && currentK1 !== "-") ? currentK1 : ""
@@ -2029,12 +2293,14 @@ Item {
     Component.onCompleted: {
         if (root.appController) {
             nodeSelector.currentIndex = root.appController.selectedCalibrationNodeIndex
+            tempCompDatasetSelector.currentIndex = root.appController.selectedCalibrationTempCompDatasetIndex
             var currentK1 = root.appController.calibrationTempCompCurrentK1Text
             tempCompK1Field.text = (currentK1 && currentK1 !== "-") ? currentK1 : ""
             var currentK0 = root.appController.calibrationTempCompCurrentK0Text
             tempCompK0Field.text = (currentK0 && currentK0 !== "-") ? currentK0 : ""
             root.syncLinearPreviewFields()
-            root.rebuildFilteredTempCompSeries()
+            root.rebuildFilteredTempCompSeries(true)
         }
     }
 }
+

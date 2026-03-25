@@ -61,6 +61,7 @@ Rectangle {
     property real _baseXMax: 1
     property real _baseYMin: 0
     property real _baseYMax: 1
+    property bool _repaintQueued: false
 
     radius: 12
     color: root.panelBg
@@ -223,7 +224,10 @@ Rectangle {
     }
 
     function requestRepaint() {
-        canvas.requestPaint()
+        if (root._repaintQueued)
+            return
+        root._repaintQueued = true
+        repaintTimer.start()
     }
 
     function handleDataSourceChanged() {
@@ -382,9 +386,9 @@ Rectangle {
         renderStrategy: Canvas.Threaded
         z: 1
 
-        Component.onCompleted: requestPaint()
-        onWidthChanged: requestPaint()
-        onHeightChanged: requestPaint()
+        Component.onCompleted: root.requestRepaint()
+        onWidthChanged: root.requestRepaint()
+        onHeightChanged: root.requestRepaint()
 
         function drawGrid(ctx, l, t, pw, ph) {
             ctx.fillStyle = "#ffffff"
@@ -811,6 +815,16 @@ Rectangle {
             }
             ctx.restore()
             ctx.globalAlpha = 1.0
+        }
+    }
+
+    Timer {
+        id: repaintTimer
+        interval: 0
+        repeat: false
+        onTriggered: {
+            root._repaintQueued = false
+            canvas.requestPaint()
         }
     }
 

@@ -80,7 +80,9 @@ class AppControllerContract:
     _calibration_level_100_known: Any
     _calibration_node_options: Any
     _calibration_node_values: Any
-    _calibration_csv_node_candidates: Any
+    _calibration_temp_comp_dataset_options: Any
+    _calibration_temp_comp_dataset_values: Any
+    _selected_calibration_temp_comp_dataset_index: Any
     _calibration_poll_interval_ms: Any
     _calibration_poll_timer: Any
     _calibration_read_service: Any
@@ -122,11 +124,21 @@ class AppControllerContract:
     _calibration_temp_comp_adv_read_inflight_key: Any
     _calibration_temp_comp_adv_read_total_count: Any
     _calibration_temp_comp_adv_read_success_count: Any
+    _calibration_temp_comp_adv_read_mode_aware: Any
+    _calibration_temp_comp_adv_read_expected_mode: Any
+    _calibration_temp_comp_adv_read_recompute_pending: Any
     _calibration_temp_comp_adv_read_timeout_ms: Any
     _calibration_temp_comp_adv_read_delay_ms: Any
     _calibration_temp_comp_adv_read_timeout_timer: Any
     _calibration_temp_comp_adv_read_delay_timer: Any
     _calibration_temp_comp_recommendation_apply_queue: Any
+    _calibration_temp_comp_k0_air_zero_adjust_active: Any
+    _calibration_temp_comp_k0_air_zero_adjust_empty_period: Any
+    _calibration_temp_comp_k0_air_zero_adjust_full_period: Any
+    _calibration_temp_comp_k0_air_zero_adjust_level_x10: Any
+    _calibration_temp_comp_k0_air_zero_adjust_current_k0: Any
+    _calibration_temp_comp_k0_air_zero_adjust_timeout_ms: Any
+    _calibration_temp_comp_k0_air_zero_adjust_timeout_timer: Any
     _calibration_temp_comp_period_slope_before: Any
     _calibration_temp_comp_period_slope_after: Any
     _calibration_temp_comp_level_slope_before: Any
@@ -134,6 +146,7 @@ class AppControllerContract:
     _calibration_temp_comp_period_reduction_percent: Any
     _calibration_temp_comp_level_reduction_percent: Any
     _calibration_temp_comp_chart_series: Any
+    _calibration_temp_comp_chart_revision: Any
     _calibration_verify0_ok: Any
     _calibration_verify100_ok: Any
     _calibration_verify_tolerance: Any

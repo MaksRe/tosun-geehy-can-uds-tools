@@ -34,18 +34,12 @@ Item {
         radius: 10
         antialiasing: true
         border.width: 1
-        border.color: btn.interactiveEnabled ? "#3f83d9" : "#b9c9d9"
-
-        gradient: Gradient {
-            GradientStop {
-                position: 0.0
-                color: !btn.interactiveEnabled ? btn.toneDisabled : (hitArea.pressed ? btn.tonePressed : btn.tone)
-            }
-            GradientStop {
-                position: 1.0
-                color: !btn.interactiveEnabled ? "#c7d4e2" : (hitArea.pressed ? "#1e4fa0" : "#2f69c8")
-            }
-        }
+        color: !btn.interactiveEnabled
+            ? btn.toneDisabled
+            : (hitArea.pressed ? btn.tonePressed : (hitArea.containsMouse ? btn.toneHover : btn.tone))
+        border.color: btn.interactiveEnabled
+            ? Qt.darker(hitArea.pressed ? btn.tonePressed : (hitArea.containsMouse ? btn.toneHover : btn.tone), 1.12)
+            : "#b9c9d9"
     }
 
     Row {
