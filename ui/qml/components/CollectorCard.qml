@@ -378,7 +378,7 @@ Card {
                         z: 1
                         clip: true
                         spacing: 4
-                        readonly property real columnWidth: Math.max(52, Math.floor((width - 22) / 8))
+                        readonly property real columnWidth: Math.max(52, Math.floor((width - 22) / 9))
 
                         Text {
                             Layout.fillWidth: true
@@ -401,6 +401,11 @@ Card {
                                         "label": "Топливо",
                                         "infoTitle": "Колонка «Топливо»",
                                         "infoText": "Это значение приходит готовым с МК по DID 0x0018.\n\nКак считается на МК (простыми словами):\n1) Берется текущий период датчика.\n2) К периоду применяется алгоритм температурной компенсации (K1/K0 и выбранный режим компенсации).\n3) Результат ограничивается калибровочными границами empty/full.\n4) После этого период переводится в проценты топлива.\n\nФормат передачи: значение хранится в десятых долях процента.\nПример: 488 => 48.8%."
+                                    },
+                                    {
+                                        "label": "Топл.(J1939)",
+                                        "infoTitle": "Колонка «Топл.(J1939)»",
+                                        "infoText": "Это значение уровня топлива, которое МК передает в сеть по J1939 через SPN 96 (PGN 0xFEFC).\n\nФормат SPN 96:\n- байт 2,\n- масштаб 0.4%/bit,\n- значения 251..255 считаются недостоверными.\n\nЧастота обновления в таблице синхронизирована с общим циклом обновления строки узла, чтобы колонка обновлялась согласованно с соседними параметрами."
                                     },
                                     {
                                         "label": "Топл.(расч.)",
@@ -506,6 +511,7 @@ Card {
                                     Text { Layout.preferredWidth: tableArea.columnWidth; text: modelData.node; color: root.textMain; font.pixelSize: 11; font.family: "Bahnschrift"; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
                                     Text { Layout.preferredWidth: tableArea.columnWidth; text: modelData.period; color: root.textMain; font.pixelSize: 11; font.family: "Bahnschrift"; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
                                     Text { Layout.preferredWidth: tableArea.columnWidth; text: modelData.fuelLevel; color: root.textMain; font.pixelSize: 11; font.family: "Bahnschrift"; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
+                                    Text { Layout.preferredWidth: tableArea.columnWidth; text: modelData.fuelJ1939; color: root.textMain; font.pixelSize: 11; font.family: "Bahnschrift"; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
                                     Text { Layout.preferredWidth: tableArea.columnWidth; text: modelData.fuelFromPeriod; color: root.textMain; font.pixelSize: 11; font.family: "Bahnschrift"; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
                                     Text { Layout.preferredWidth: tableArea.columnWidth; text: modelData.temperature; color: root.textMain; font.pixelSize: 11; font.family: "Bahnschrift"; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
                                     Text { Layout.preferredWidth: tableArea.columnWidth; text: modelData.fuelCount; color: root.textMain; font.pixelSize: 11; font.family: "Bahnschrift"; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }

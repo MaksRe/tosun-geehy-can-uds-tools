@@ -266,6 +266,8 @@ class AppControllerCollectorMixin(AppControllerContract):
                 "period": 0,
                 "fuelLevel": 0.0,
                 "fuelLevelX10": 0,
+                "fuelJ1939": 0.0,
+                "fuelJ1939Known": False,
                 "emptyPeriod": 0,
                 "fullPeriod": 0,
                 "emptyKnown": False,
@@ -758,6 +760,11 @@ class AppControllerCollectorMixin(AppControllerContract):
                     "node": f"0x{int(node_sa) & 0xFF:02X}",
                     "period": str(int(node.get("period", 0))),
                     "fuelLevel": f"{float(node.get('fuelLevel', 0.0)):.1f}",
+                    "fuelJ1939": (
+                        f"{float(node.get('fuelJ1939', 0.0)):.1f}"
+                        if bool(node.get("fuelJ1939Known", False))
+                        else "-"
+                    ),
                     "fuelFromPeriod": f"{fuel_from_period:+.1f}",
                     "temperature": f"{float(node.get('temperature', 0.0)):.1f}",
                     "fuelCount": str(int(node.get("fuelCount", 0))),
@@ -840,6 +847,21 @@ class AppControllerCollectorMixin(AppControllerContract):
             nodes_changed = True
 
         pgn = int(parsed_id.pgn) & 0x3FFFF
+        if pgn == 0xFEFC and len(payload) > 1:
+            raw_spn96 = int(payload[1]) & 0xFF
+            if raw_spn96 >= 251:
+                if bool(node.get("fuelJ1939Known", False)):
+                    node["fuelJ1939Known"] = False
+                    nodes_changed = True
+            else:
+                fuel_j1939 = float(raw_spn96) * 0.4
+                previous_value = float(node.get("fuelJ1939", 0.0))
+                previous_known = bool(node.get("fuelJ1939Known", False))
+                if (not previous_known) or abs(previous_value - fuel_j1939) >= 0.05:
+                    node["fuelJ1939"] = fuel_j1939
+                    node["fuelJ1939Known"] = True
+                    nodes_changed = True
+
         if pgn != (int(UdsIdentifiers.rx.pgn) & 0x3FFFF):
             if nodes_changed:
                 self._schedule_collector_views_update(nodes=True, trend=was_new_node)
