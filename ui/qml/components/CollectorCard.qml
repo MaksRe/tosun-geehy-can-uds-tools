@@ -14,7 +14,6 @@ Card {
     property color inputFocus: "#0ea5e9"
     readonly property int contentPadding: 10
     readonly property bool collectorEnabled: root.appController ? root.appController.collectorEnabled : false
-    readonly property bool collectorTrendEnabled: root.appController ? root.appController.collectorTrendEnabled : false
     property string collectorInfoTitle: ""
     property string collectorInfoText: ""
 
@@ -78,23 +77,6 @@ Card {
                 toneHover: "#1e40af"
                 tonePressed: "#1e3a8a"
                 onClicked: root.openTrendWindowRequested()
-            }
-
-            Text {
-                text: root.collectorTrendEnabled ? "Графики: ВКЛ" : "Графики: ВЫКЛ"
-                color: root.collectorTrendEnabled ? "#0ea5a4" : root.textSoft
-                font.pixelSize: 11
-                font.bold: true
-                font.family: "Bahnschrift"
-                Layout.alignment: Qt.AlignVCenter
-            }
-
-            FancySwitch {
-                Layout.alignment: Qt.AlignVCenter
-                trackWidth: 42
-                trackHeight: 22
-                checked: root.collectorTrendEnabled
-                onToggled: if (root.appController) root.appController.setCollectorTrendEnabled(checked)
             }
 
             Text {

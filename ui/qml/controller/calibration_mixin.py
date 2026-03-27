@@ -3887,7 +3887,20 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 )
                 self._recompute_calibration_wizard_state()
 
-            if self._calibration_backup_pending and did in (int(UdsData.empty_fuel_tank.pid), int(UdsData.full_fuel_tank.pid)):
+            if bool(self._calibration_backup_all_nodes_active):
+                required_dids = self._calibration_backup_all_nodes_required_dids()
+                if did in required_dids:
+                    current_sa = self._calibration_backup_all_nodes_current_sa
+                    if current_sa is not None:
+                        node_key = int(current_sa) & 0xFF
+                        node_values = self._calibration_backup_all_nodes_values_by_sa.setdefault(node_key, {})
+                        node_values[int(did)] = int(value)
+                        if all((required_did in node_values) for required_did in required_dids):
+                            if self._calibration_backup_all_nodes_step_timer.isActive():
+                                self._calibration_backup_all_nodes_step_timer.stop()
+                            self._request_next_calibration_backup_all_nodes_node()
+
+            if (not bool(self._calibration_backup_all_nodes_active)) and self._calibration_backup_pending and did in (int(UdsData.empty_fuel_tank.pid), int(UdsData.full_fuel_tank.pid)):
                 self._calibration_backup_values_pending[did] = value
                 if (
                     int(UdsData.empty_fuel_tank.pid) in self._calibration_backup_values_pending

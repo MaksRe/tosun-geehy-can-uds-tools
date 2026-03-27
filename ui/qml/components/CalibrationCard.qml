@@ -161,6 +161,22 @@ Item {
         applyLinearPreviewFromFields()
     }
 
+    // Цель функции в показе активного mode рядом с графиком, затем она читает значение mode из списка расширенных DID.
+    function tempCompModeSummaryText() {
+        if (!root.appController) {
+            return "mode: нет данных"
+        }
+        var rows = root.appController.calibrationTempCompAdvancedRows
+        for (var i = 0; i < rows.length; i += 1) {
+            var row = rows[i]
+            if (String(root.seriesField(row, "key", "")) === "mode") {
+                var valueText = String(root.seriesField(row, "valueText", "не считан"))
+                return "mode: " + valueText
+            }
+        }
+        return "mode: не считан"
+    }
+
     onAppControllerChanged: rebuildFilteredTempCompSeries(true)
 
     Layout.fillWidth: true
@@ -285,6 +301,71 @@ Item {
                         font.pixelSize: 11
                         font.family: "Bahnschrift"
                         elide: Text.ElideRight
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.fillHeight: false
+            Layout.preferredHeight: implicitHeight
+            Layout.maximumHeight: implicitHeight
+            radius: 10
+            color: "#f8fbff"
+            border.color: "#d6e2ef"
+            implicitHeight: backupTopLayout.implicitHeight + 14
+
+            ColumnLayout {
+                id: backupTopLayout
+                anchors.fill: parent
+                anchors.margins: 7
+                spacing: 6
+
+                Text {
+                    Layout.fillWidth: true
+                    text: "Резервные копии калибровки"
+                    color: root.textMain
+                    font.pixelSize: 12
+                    font.bold: true
+                    font.family: "Bahnschrift"
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 6
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: root.appController && root.appController.calibrationBackupAvailable
+                              ? ("Текущая копия узла: 0%=" + root.appController.calibrationBackupLevel0Text + ", 100%=" + root.appController.calibrationBackupLevel100Text)
+                              : "Локальная копия текущего узла не создана"
+                        color: root.textSoft
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                        elide: Text.ElideRight
+                    }
+
+                    FancyButton {
+                        Layout.preferredWidth: 188
+                        Layout.preferredHeight: 30
+                        text: "Создать копию (все узлы)"
+                        tone: "#0f766e"
+                        toneHover: "#115e59"
+                        tonePressed: "#134e4a"
+                        enabled: root.appController !== null
+                        onClicked: if (root.appController) root.appController.createCalibrationBackup()
+                    }
+
+                    FancyButton {
+                        Layout.preferredWidth: 182
+                        Layout.preferredHeight: 30
+                        text: "Восстановить"
+                        tone: "#475569"
+                        toneHover: "#334155"
+                        tonePressed: "#1e293b"
+                        enabled: root.appController && root.appController.calibrationBackupAvailable
+                        onClicked: if (root.appController) root.appController.restoreCalibrationBackup()
                     }
                 }
             }
@@ -627,56 +708,6 @@ Item {
                 }
             }
 
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.fillHeight: false
-                Layout.preferredHeight: implicitHeight
-                Layout.maximumHeight: implicitHeight
-                radius: 10
-                color: "#f8fbff"
-                border.color: "#d6e2ef"
-                implicitHeight: backupRow.implicitHeight + 14
-
-                RowLayout {
-                    id: backupRow
-                    anchors.fill: parent
-                    anchors.margins: 7
-                    spacing: 6
-
-                    Text {
-                        Layout.fillWidth: true
-                        text: root.appController && root.appController.calibrationBackupAvailable
-                              ? ("Копия: 0%=" + root.appController.calibrationBackupLevel0Text + ", 100%=" + root.appController.calibrationBackupLevel100Text)
-                              : "Копия не создана"
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                        elide: Text.ElideRight
-                    }
-
-                    FancyButton {
-                        Layout.preferredWidth: 172
-                        Layout.preferredHeight: 30
-                        text: "Создать копию"
-                        tone: "#0f766e"
-                        toneHover: "#115e59"
-                        tonePressed: "#134e4a"
-                        enabled: root.appController !== null
-                        onClicked: if (root.appController) root.appController.createCalibrationBackup()
-                    }
-
-                    FancyButton {
-                        Layout.preferredWidth: 182
-                        Layout.preferredHeight: 30
-                        text: "Восстановить"
-                        tone: "#475569"
-                        toneHover: "#334155"
-                        tonePressed: "#1e293b"
-                        enabled: root.appController && root.appController.calibrationBackupAvailable
-                        onClicked: if (root.appController) root.appController.restoreCalibrationBackup()
-                    }
-                }
-            }
         }
 
         SpoilerSection {
@@ -732,25 +763,6 @@ Item {
                         width: Math.max(0, tempCompFlick.width - (root.tempCompScrollBarWidth + 12))
                         spacing: 6
 
-                    Rectangle {
-                        Layout.fillWidth: true
-                        radius: 7
-                        color: "#eef2ff"
-                        border.color: "#c7d2fe"
-                        implicitHeight: 28
-
-                        Text {
-                            anchors.fill: parent
-                            anchors.leftMargin: 10
-                            anchors.rightMargin: 10
-                            verticalAlignment: Text.AlignVCenter
-                            text: "Этап 1. Источник данных и управление"
-                            color: "#3730a3"
-                            font.pixelSize: 11
-                            font.bold: true
-                            font.family: "Bahnschrift"
-                        }
-                    }
 
                     RowLayout {
                         Layout.fillWidth: true
@@ -989,25 +1001,6 @@ Item {
                         wrapMode: Text.WordWrap
                     }
 
-                    Rectangle {
-                        Layout.fillWidth: true
-                        radius: 7
-                        color: "#eff6ff"
-                        border.color: "#bfdbfe"
-                        implicitHeight: 28
-
-                        Text {
-                            anchors.fill: parent
-                            anchors.leftMargin: 10
-                            anchors.rightMargin: 10
-                            verticalAlignment: Text.AlignVCenter
-                            text: "Этап 2. Результат офлайн-анализа"
-                            color: "#1e3a8a"
-                            font.pixelSize: 11
-                            font.bold: true
-                            font.family: "Bahnschrift"
-                        }
-                    }
 
                     SpoilerSection {
                         id: tempCompSummarySpoiler
@@ -1239,25 +1232,6 @@ Item {
                         }
                     }
 
-                    Rectangle {
-                        Layout.fillWidth: true
-                        radius: 7
-                        color: "#ecfdf5"
-                        border.color: "#bbf7d0"
-                        implicitHeight: 28
-
-                        Text {
-                            anchors.fill: parent
-                            anchors.leftMargin: 10
-                            anchors.rightMargin: 10
-                            verticalAlignment: Text.AlignVCenter
-                            text: "Этап 3. Расширенные параметры (DID)"
-                            color: "#14532d"
-                            font.pixelSize: 11
-                            font.bold: true
-                            font.family: "Bahnschrift"
-                        }
-                    }
 
                     SpoilerSection {
                         id: tempCompAdvancedSpoiler
@@ -1618,25 +1592,6 @@ Item {
                         Layout.fillWidth: true
                         spacing: 6
 
-                        Rectangle {
-                            Layout.fillWidth: true
-                            radius: 7
-                            color: "#eff6ff"
-                            border.color: "#bfdbfe"
-                            implicitHeight: 28
-
-                            Text {
-                                anchors.fill: parent
-                                anchors.leftMargin: 10
-                                anchors.rightMargin: 10
-                                verticalAlignment: Text.AlignVCenter
-                                text: "Этап 1. CSV/XLSX"
-                                color: "#1e3a8a"
-                                font.pixelSize: 11
-                                font.bold: true
-                                font.family: "Bahnschrift"
-                            }
-                        }
 
                         GridLayout {
                             Layout.fillWidth: true
@@ -1672,25 +1627,6 @@ Item {
                             }
                         }
 
-                        Rectangle {
-                            Layout.fillWidth: true
-                            radius: 7
-                            color: "#f0fdf4"
-                            border.color: "#bbf7d0"
-                            implicitHeight: 28
-
-                            Text {
-                                anchors.fill: parent
-                                anchors.leftMargin: 10
-                                anchors.rightMargin: 10
-                                verticalAlignment: Text.AlignVCenter
-                                text: "Этап 2. K1/K0"
-                                color: "#14532d"
-                                font.pixelSize: 11
-                                font.bold: true
-                                font.family: "Bahnschrift"
-                            }
-                        }
 
                         GridLayout {
                             Layout.fillWidth: true
@@ -1771,25 +1707,6 @@ Item {
                             }
                         }
 
-                        Rectangle {
-                            Layout.fillWidth: true
-                            radius: 7
-                            color: "#fffbeb"
-                            border.color: "#fde68a"
-                            implicitHeight: 28
-
-                            Text {
-                                anchors.fill: parent
-                                anchors.leftMargin: 10
-                                anchors.rightMargin: 10
-                                verticalAlignment: Text.AlignVCenter
-                                text: "Этап 4. Быстрое локальное превью"
-                                color: "#92400e"
-                                font.pixelSize: 11
-                                font.bold: true
-                                font.family: "Bahnschrift"
-                            }
-                        }
 
                         SpoilerSection {
                             id: tempCompPreviewSpoiler
@@ -2016,31 +1933,13 @@ Item {
                             }
                         }
 
-                        Rectangle {
-                            Layout.fillWidth: true
-                            radius: 7
-                            color: "#fff7ed"
-                            border.color: "#fed7aa"
-                            implicitHeight: 28
-
-                            Text {
-                                anchors.fill: parent
-                                anchors.leftMargin: 10
-                                anchors.rightMargin: 10
-                                verticalAlignment: Text.AlignVCenter
-                                text: "Этап 3. Метрики"
-                                color: "#9a3412"
-                                font.pixelSize: 11
-                                font.bold: true
-                                font.family: "Bahnschrift"
-                            }
-                        }
 
                         GridLayout {
                             Layout.fillWidth: true
                             columns: 2
                             rowSpacing: 3
                             columnSpacing: 6
+                            z: 2
 
                             LabelValue {
                                 Layout.fillWidth: true
@@ -2100,6 +1999,7 @@ Item {
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 8
+                            z: 2
 
                             CheckBox {
                                 text: "Сырой"
@@ -2135,6 +2035,7 @@ Item {
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 3
+                        z: 2
 
                         Repeater {
                             model: root.tempCompFilteredSeries
@@ -2176,11 +2077,58 @@ Item {
                         }
                     }
 
+                    Rectangle {
+                        Layout.fillWidth: true
+                        radius: 7
+                        color: "#f8fafc"
+                        border.color: "#d6e2ef"
+                        implicitHeight: graphSummaryLayout.implicitHeight + 10
+                        z: 2
+
+                        RowLayout {
+                            id: graphSummaryLayout
+                            anchors.fill: parent
+                            anchors.margins: 5
+                            spacing: 8
+
+                            Text {
+                                text: "Источник: " + (root.appController ? root.appController.calibrationTempCompSelectedDatasetText : "не выбран")
+                                color: "#334155"
+                                font.pixelSize: 10
+                                font.family: "Bahnschrift"
+                                elide: Text.ElideRight
+                                Layout.preferredWidth: 280
+                            }
+
+                            Text {
+                                text: root.tempCompModeSummaryText()
+                                color: "#334155"
+                                font.pixelSize: 10
+                                font.family: "Bahnschrift"
+                                elide: Text.ElideRight
+                                Layout.preferredWidth: 180
+                            }
+
+                            Text {
+                                text: "текущие K1/K0: "
+                                    + (root.appController ? root.appController.calibrationTempCompCurrentK1Text : "-")
+                                    + " / "
+                                    + (root.appController ? root.appController.calibrationTempCompCurrentK0Text : "-")
+                                color: "#334155"
+                                font.pixelSize: 10
+                                font.family: "Bahnschrift"
+                                elide: Text.ElideRight
+                                Layout.fillWidth: true
+                            }
+                        }
+                    }
+
                     TrendCanvas {
                         Layout.fillWidth: true
                         Layout.fillHeight: false
                         Layout.preferredHeight: 460
                         Layout.minimumHeight: 320
+                        z: 0
                         overlayMode: true
                         resetViewportOnDataChange: false
                         xMajorTicks: 12

@@ -200,6 +200,14 @@ class AppController(
         self._calibration_backup_level_100 = 0
         self._calibration_backup_pending = False
         self._calibration_backup_values_pending: dict[int, int] = {}
+        self._calibration_backup_all_nodes_active = False
+        self._calibration_backup_all_nodes_queue: list[int] = []
+        self._calibration_backup_all_nodes_current_sa: int | None = None
+        self._calibration_backup_all_nodes_values_by_sa: dict[int, dict[int, int]] = {}
+        self._calibration_backup_all_nodes_original_target_sa: int | None = None
+        self._calibration_backup_all_nodes_reference_sa: int | None = None
+        self._calibration_backup_all_nodes_file_path = ""
+        self._calibration_backup_all_nodes_step_timeout_ms = 1200
         self._calibration_restore_active = False
         self._calibration_restore_queue: list[tuple[int, int]] = []
         self._calibration_restore_current_did: int | None = None
@@ -394,6 +402,12 @@ class AppController(
         )
         self._calibration_temp_comp_k0_air_zero_adjust_timeout_timer.timeout.connect(
             self._on_calibration_temp_comp_k0_air_zero_adjust_timeout
+        )
+        self._calibration_backup_all_nodes_step_timer = QTimer(self)
+        self._calibration_backup_all_nodes_step_timer.setSingleShot(True)
+        self._calibration_backup_all_nodes_step_timer.setInterval(self._calibration_backup_all_nodes_step_timeout_ms)
+        self._calibration_backup_all_nodes_step_timer.timeout.connect(
+            self._on_calibration_backup_all_nodes_step_timeout
         )
 
         self._collector_poll_timer = QTimer(self)

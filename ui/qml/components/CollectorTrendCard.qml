@@ -22,6 +22,7 @@ Card {
     property int rangeStartIndex: 0
     property int rangeEndIndex: -1
     readonly property bool collectorEnabled: root.appController ? root.appController.collectorEnabled : false
+    readonly property bool collectorTrendEnabled: root.appController ? root.appController.collectorTrendEnabled : false
 
     readonly property var nodePalette: ["#2563eb", "#10b981", "#f97316", "#8b5cf6", "#ef4444", "#14b8a6", "#0ea5e9", "#a855f7"]
 
@@ -428,6 +429,23 @@ Card {
                         toneHover: "#1e40af"
                         tonePressed: "#1e3a8a"
                         onClicked: root.showAdvancedControls = !root.showAdvancedControls
+                    }
+
+                    Text {
+                        text: root.collectorTrendEnabled ? "Онлайн: ВКЛ" : "Онлайн: ВЫКЛ"
+                        color: root.collectorTrendEnabled ? "#0ea5a4" : root.textSoft
+                        font.pixelSize: 10
+                        font.bold: true
+                        font.family: "Bahnschrift"
+                        Layout.alignment: Qt.AlignVCenter
+                    }
+
+                    FancySwitch {
+                        Layout.alignment: Qt.AlignVCenter
+                        trackWidth: 42
+                        trackHeight: 22
+                        checked: root.collectorTrendEnabled
+                        onToggled: if (root.appController) root.appController.setCollectorTrendEnabled(checked)
                     }
 
                     Item { Layout.fillWidth: true }

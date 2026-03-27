@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import csv
 from datetime import datetime
 import logging
 from pathlib import Path
@@ -20,6 +21,158 @@ from .workers import UdsOptionProxy
 LOGGER = logging.getLogger(__name__)
 
 class AppControllerPublicSlotsMixin(AppControllerContract):
+    @staticmethod
+    def _calibration_backup_all_nodes_required_dids() -> tuple[int, int, int, int]:
+        """Цель функции в фиксации состава резервной копии, затем она возвращает DID 0%/100%/K1/K0 для опроса."""
+        return (
+            int(UdsData.empty_fuel_tank.pid),
+            int(UdsData.full_fuel_tank.pid),
+            int(UdsData.fuel_temp_comp_k1_x100.pid),
+            int(UdsData.fuel_temp_comp_k0_count.pid),
+        )
+
+    def _resolve_calibration_backup_all_nodes_targets(self) -> list[int]:
+        """Цель функции в сборе узлов для резервной копии, затем она возвращает уникальный список SA без авто-элементов."""
+        targets: list[int] = []
+        seen: set[int] = set()
+
+        for value in list(self._calibration_node_values):
+            if value is None:
+                continue
+            try:
+                normalized = int(value) & 0xFF
+            except (TypeError, ValueError):
+                continue
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            targets.append(normalized)
+
+        fallback_sa = int(self._resolve_calibration_target_sa()) & 0xFF
+        if fallback_sa not in seen:
+            targets.append(fallback_sa)
+
+        return targets
+
+    def _resolve_calibration_backup_all_nodes_directory(self) -> Path:
+        """Цель функции в выборе каталога резервной копии, затем она возвращает рабочий путь для CSV-файла."""
+        try:
+            output_dir = Path(str(self._collector_output_directory)).expanduser().resolve()
+            output_dir.mkdir(parents=True, exist_ok=True)
+            return output_dir
+        except Exception:
+            fallback_dir = Path(self._project_root_directory) / "logs"
+            fallback_dir.mkdir(parents=True, exist_ok=True)
+            return fallback_dir
+
+    def _write_calibration_backup_all_nodes_csv(self, values_by_sa: dict[int, dict[int, int]]) -> str:
+        """Цель функции в сохранении резервной копии по всем узлам, затем она пишет отдельный UTF-8 CSV с 0%/100%/K1/K0."""
+        output_dir = self._resolve_calibration_backup_all_nodes_directory()
+        file_name = f"calibration_backup_all_nodes_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        csv_path = output_dir / file_name
+
+        did0, did100, didk1, didk0 = self._calibration_backup_all_nodes_required_dids()
+        with csv_path.open("w", newline="", encoding="utf-8") as file:
+            writer = csv.writer(file, delimiter=";")
+            writer.writerow(("Время", "Узел", "0% (DID 0x0012)", "100% (DID 0x0013)", "K1 (DID 0x001B)", "K0 (DID 0x001C)"))
+            timestamp_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            for node_sa in sorted(values_by_sa.keys()):
+                node_values = values_by_sa.get(int(node_sa) & 0xFF, {})
+                level0 = node_values.get(did0, "")
+                level100 = node_values.get(did100, "")
+                k1_value = node_values.get(didk1, "")
+                k0_value = node_values.get(didk0, "")
+                writer.writerow((timestamp_text, f"0x{int(node_sa) & 0xFF:02X}", level0, level100, k1_value, k0_value))
+
+        return str(csv_path)
+
+    def _finish_calibration_backup_all_nodes(self):
+        """Цель функции в штатном завершении копирования, затем она восстанавливает целевой SA и пишет итоговый CSV."""
+        if self._calibration_backup_all_nodes_step_timer.isActive():
+            self._calibration_backup_all_nodes_step_timer.stop()
+
+        original_target = self._calibration_backup_all_nodes_original_target_sa
+        if original_target is None:
+            self._calibration_target_node_sa = None
+        else:
+            self._calibration_target_node_sa = int(original_target) & 0xFF
+
+        values_by_sa = dict(self._calibration_backup_all_nodes_values_by_sa)
+        reference_sa = self._calibration_backup_all_nodes_reference_sa
+        self._calibration_backup_all_nodes_active = False
+        self._calibration_backup_all_nodes_queue = []
+        self._calibration_backup_all_nodes_current_sa = None
+        self._calibration_backup_all_nodes_original_target_sa = None
+        self._calibration_backup_all_nodes_reference_sa = None
+
+        if len(values_by_sa) <= 0:
+            self._append_log("Калибровка: резервная копия не сохранена, данные по узлам не получены.", RowColor.red)
+            self.infoMessage.emit("Калибровка", "Не удалось получить данные для резервной копии.")
+            return
+
+        try:
+            csv_path = self._write_calibration_backup_all_nodes_csv(values_by_sa)
+        except Exception as exc:
+            self._append_log(f"Калибровка: ошибка записи CSV резервной копии: {str(exc)}", RowColor.red)
+            self.infoMessage.emit("Калибровка", f"Не удалось сохранить CSV резервной копии: {str(exc)}")
+            return
+
+        if reference_sa is not None:
+            ref_values = values_by_sa.get(int(reference_sa) & 0xFF, {})
+            did0, did100, _, _ = self._calibration_backup_all_nodes_required_dids()
+            if did0 in ref_values and did100 in ref_values:
+                self._calibration_backup_level_0 = int(ref_values[did0])
+                self._calibration_backup_level_100 = int(ref_values[did100])
+                self._calibration_backup_available = True
+                self.calibrationBackupChanged.emit()
+
+        self._calibration_backup_all_nodes_file_path = str(csv_path)
+        self._append_log(f"Калибровка: резервная копия всех узлов сохранена в {csv_path}.", RowColor.green)
+        self.infoMessage.emit("Калибровка", f"CSV копий сохранен: {csv_path}")
+
+    def _request_next_calibration_backup_all_nodes_node(self):
+        """Цель функции в пошаговом опросе узлов, затем она отправляет чтение DID 0x0012/0x0013/0x001B/0x001C для очередного SA."""
+        if not bool(self._calibration_backup_all_nodes_active):
+            return
+
+        if len(self._calibration_backup_all_nodes_queue) <= 0:
+            self._finish_calibration_backup_all_nodes()
+            return
+
+        next_sa = int(self._calibration_backup_all_nodes_queue.pop(0)) & 0xFF
+        self._calibration_backup_all_nodes_current_sa = next_sa
+        self._calibration_target_node_sa = next_sa
+        self._calibration_backup_all_nodes_values_by_sa.setdefault(next_sa, {})
+        self._calibration_backup_pending = False
+        self._calibration_backup_values_pending = {}
+
+        tx_identifier = self._build_calibration_tx_identifier()
+        requested_dids = self._calibration_backup_all_nodes_required_dids()
+        for did in requested_dids:
+            target_var = UdsData.get_var_by_pid(did)
+            if target_var is None:
+                continue
+            self._calibration_read_service.read_data_by_identifier(tx_identifier, target_var)
+
+        self._append_log(
+            f"Калибровка: чтение копии для узла 0x{next_sa:02X} (0%/100%/K1/K0).",
+            RowColor.blue,
+        )
+        self._calibration_backup_all_nodes_step_timer.start()
+
+    def _on_calibration_backup_all_nodes_step_timeout(self):
+        """Цель функции в защите от зависания шага копирования, затем она переходит к следующему узлу при таймауте ответа."""
+        if not bool(self._calibration_backup_all_nodes_active):
+            return
+        current_sa = self._calibration_backup_all_nodes_current_sa
+        if current_sa is None:
+            return
+        self._append_log(
+            f"Калибровка: таймаут чтения копии для узла 0x{int(current_sa) & 0xFF:02X}, переход к следующему.",
+            RowColor.yellow,
+        )
+        self._request_next_calibration_backup_all_nodes_node()
+
     @staticmethod
     def _service_session_value_for_index(index: int) -> int:
         if int(index) == 1:
@@ -1426,16 +1579,33 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot()
     def createCalibrationBackup(self):
-        """Цель функции в создании резервной копии калибровки, затем она считывает текущие значения 0% и 100%."""
+        """Цель функции в создании CSV-копии по всем узлам, затем она считывает из МК 0%/100%/K1/K0 для каждого SA."""
         if not self._can.is_connect:
             self.infoMessage.emit("Калибровка", "Сначала подключите CAN-адаптер.")
             return
 
-        self._calibration_backup_pending = True
+        if bool(self._calibration_backup_all_nodes_active):
+            self.infoMessage.emit("Калибровка", "Создание копии уже выполняется.")
+            return
+
+        target_nodes = self._resolve_calibration_backup_all_nodes_targets()
+        if len(target_nodes) <= 0:
+            self.infoMessage.emit("Калибровка", "Не найдено узлов для создания копии.")
+            return
+
+        self._calibration_backup_all_nodes_active = True
+        self._calibration_backup_all_nodes_queue = [int(value) & 0xFF for value in target_nodes]
+        self._calibration_backup_all_nodes_values_by_sa = {}
+        self._calibration_backup_all_nodes_original_target_sa = self._calibration_target_node_sa
+        self._calibration_backup_all_nodes_reference_sa = int(self._resolve_calibration_target_sa()) & 0xFF
+        self._calibration_backup_all_nodes_current_sa = None
+        self._calibration_backup_pending = False
         self._calibration_backup_values_pending = {}
-        self._calibration_read_service.read_data_by_identifier(self._build_calibration_tx_identifier(), UdsData.empty_fuel_tank)
-        self._calibration_read_service.read_data_by_identifier(self._build_calibration_tx_identifier(), UdsData.full_fuel_tank)
-        self._append_log("Калибровка: чтение значений для резервной копии.", RowColor.blue)
+        self._append_log(
+            f"Калибровка: запуск создания CSV-копии по узлам ({len(target_nodes)} шт.).",
+            RowColor.blue,
+        )
+        self._request_next_calibration_backup_all_nodes_node()
 
     @Slot()
     def restoreCalibrationBackup(self):
@@ -1909,6 +2079,14 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             self._calibration_restore_current_did = None
             self._calibration_backup_pending = False
             self._calibration_backup_values_pending = {}
+            self._calibration_backup_all_nodes_active = False
+            self._calibration_backup_all_nodes_queue = []
+            self._calibration_backup_all_nodes_current_sa = None
+            self._calibration_backup_all_nodes_values_by_sa = {}
+            self._calibration_backup_all_nodes_original_target_sa = None
+            self._calibration_backup_all_nodes_reference_sa = None
+            if self._calibration_backup_all_nodes_step_timer.isActive():
+                self._calibration_backup_all_nodes_step_timer.stop()
             self._calibration_restore_active = False
             self._calibration_restore_queue = []
             self._reset_calibration_temp_comp_state(

@@ -18,6 +18,10 @@ class CollectorCsvManager:
         self._full_ticks = -1
         self._empty_known = False
         self._full_known = False
+        self._k1_x100 = 0
+        self._k0_count = 0
+        self._k1_known = False
+        self._k0_known = False
 
         self._init_csv(
             self._csv_path,
@@ -26,6 +30,7 @@ class CollectorCsvManager:
                 "Период",
                 "Температура (°C)",
                 "Топливо (%)",
+                "Топл.(J1939)",
                 "Топливо из периода (%)",
             ),
         )
@@ -53,9 +58,11 @@ class CollectorCsvManager:
         formula = "Топливо из периода (%)=((Период-empty)*100)/(full-empty)"
         empty_text = str(int(self._empty_ticks)) if self._empty_known else "не получено"
         full_text = str(int(self._full_ticks)) if self._full_known else "не получено"
+        k1_text = str(int(self._k1_x100)) if self._k1_known else "не получено"
+        k0_text = str(int(self._k0_count)) if self._k0_known else "не получено"
         return [
-            [f"Узел {self._node_hex}", "", "", "", ""],
-            [f"Калибровка: empty={empty_text}; full={full_text}", "", formula, "", ""],
+            [f"Узел {self._node_hex}", "", "", "", "", ""],
+            [f"Калибровка: empty={empty_text}; full={full_text}; k1={k1_text}; k0={k0_text}", "", "", "", formula, ""],
         ]
 
     @staticmethod
@@ -78,9 +85,9 @@ class CollectorCsvManager:
             normalized = [str(cell) for cell in row]
             if self._looks_like_header_or_meta(normalized):
                 continue
-            if len(normalized) < 5:
-                normalized.extend([""] * (5 - len(normalized)))
-            data_rows.append(normalized[:5])
+            if len(normalized) < 6:
+                normalized.extend([""] * (6 - len(normalized)))
+            data_rows.append(normalized[:6])
         return data_rows
 
     def _rewrite_with_metadata(self):
@@ -89,7 +96,7 @@ class CollectorCsvManager:
             writer = csv.writer(file, delimiter=";")
             for meta_row in self._metadata_rows():
                 writer.writerow(meta_row)
-            writer.writerow(("Время", "Период", "Температура (°C)", "Топливо (%)", "Топливо из периода (%)"))
+            writer.writerow(("Время", "Период", "Температура (°C)", "Топливо (%)", "Топл.(J1939)", "Топливо из периода (%)"))
             for row in data_rows:
                 writer.writerow(row)
 
@@ -112,19 +119,44 @@ class CollectorCsvManager:
         self._full_known = normalized_full_known
         self._rewrite_with_metadata()
 
+    def _update_temp_comp_if_needed(self, k1_x100: int, k0_count: int, *, k1_known: bool, k0_known: bool):
+        normalized_k1 = int(k1_x100)
+        normalized_k0 = int(k0_count)
+        normalized_k1_known = bool(k1_known)
+        normalized_k0_known = bool(k0_known)
+        if (
+            normalized_k1 == self._k1_x100
+            and normalized_k0 == self._k0_count
+            and normalized_k1_known == self._k1_known
+            and normalized_k0_known == self._k0_known
+            and self._csv_path.exists()
+        ):
+            return
+        self._k1_x100 = normalized_k1
+        self._k0_count = normalized_k0
+        self._k1_known = normalized_k1_known
+        self._k0_known = normalized_k0_known
+        self._rewrite_with_metadata()
+
     def append_metric(
         self,
         measurement_time: str,
         period_ticks: int,
         temperature_c: float,
         fuel_percent: float,
+        fuel_j1939_percent: float | None = None,
         fuel_from_period_x10: int | None = None,
         empty_ticks: int = 0,
         full_ticks: int = 0,
         empty_known: bool = False,
         full_known: bool = False,
+        k1_x100: int = 0,
+        k0_count: int = 0,
+        k1_known: bool = False,
+        k0_known: bool = False,
     ):
         self._update_metadata_if_needed(empty_ticks, full_ticks, empty_known=empty_known, full_known=full_known)
+        self._update_temp_comp_if_needed(k1_x100, k0_count, k1_known=k1_known, k0_known=k0_known)
         if fuel_from_period_x10 is None:
             fuel_from_period_x10 = int(round(float(fuel_percent) * 10.0))
         fuel_from_period_percent = float(fuel_from_period_x10) / 10.0
@@ -133,6 +165,7 @@ class CollectorCsvManager:
             self._format_value(int(period_ticks)),
             self._format_value(float(temperature_c)),
             self._format_value(float(fuel_percent)),
+            self._format_value(float(fuel_j1939_percent)) if fuel_j1939_percent is not None else "",
             self._format_value(float(fuel_from_period_percent)),
         )
         self._append(self._csv_path, row)
@@ -141,9 +174,10 @@ class CollectorCsvManager:
 class CollectorCombinedCsvManager:
     """Writes one combined CSV with shared time column and per-node metrics."""
 
-    _NODE_METRIC_LABELS: tuple[str, str, str, str] = (
+    _NODE_METRIC_LABELS: tuple[str, str, str, str, str] = (
         "Период",
         "Топливо (%)",
+        "Топл.(J1939)",
         "Температура (°C)",
         "Топливо из периода (%)",
     )
@@ -152,8 +186,8 @@ class CollectorCombinedCsvManager:
         session_dir.mkdir(parents=True, exist_ok=True)
         self._csv_path = session_dir / str(file_name)
         self._header: list[str] = ["Время"]
-        self._node_columns: dict[str, tuple[str, str, str, str]] = {}
-        self._node_calibration: dict[str, tuple[int, int, bool, bool]] = {}
+        self._node_columns: dict[str, tuple[str, str, str, str, str]] = {}
+        self._node_calibration: dict[str, tuple[int, int, bool, bool, int, int, bool, bool]] = {}
         self._ordered_nodes: list[str] = []
         self._init_csv()
 
@@ -173,11 +207,12 @@ class CollectorCombinedCsvManager:
         return str(value)
 
     @staticmethod
-    def _column_names_for_node(node_hex: str) -> tuple[str, str, str, str]:
+    def _column_names_for_node(node_hex: str) -> tuple[str, str, str, str, str]:
         normalized = CollectorCombinedCsvManager._normalize_node_hex(node_hex)
         return (
             f"{normalized} Период",
             f"{normalized} Топливо (%)",
+            f"{normalized} Топл.(J1939)",
             f"{normalized} Температура (°C)",
             f"{normalized} Топливо из периода (%)",
         )
@@ -224,17 +259,21 @@ class CollectorCombinedCsvManager:
     def _group_header_row(self) -> list[str]:
         row: list[str] = ["Время"]
         for node_hex in self._ordered_nodes:
-            row.extend([f"Узел {node_hex}", "", "", ""])
+            row.extend([f"Узел {node_hex}", "", "", "", ""])
         return row
 
     def _calibration_row(self) -> list[str]:
         row: list[str] = [""]
         formula = "Топливо из периода (%)=((Период-empty)*100)/(full-empty)"
         for node_hex in self._ordered_nodes:
-            empty_ticks, full_ticks, empty_known, full_known = self._node_calibration.get(node_hex, (0, 0, False, False))
+            empty_ticks, full_ticks, empty_known, full_known, k1_x100, k0_count, k1_known, k0_known = self._node_calibration.get(
+                node_hex, (0, 0, False, False, 0, 0, False, False)
+            )
             empty_text = str(int(empty_ticks)) if empty_known else "не получено"
             full_text = str(int(full_ticks)) if full_known else "не получено"
-            row.extend([f"empty={empty_text}", f"full={full_text}", formula, ""])
+            k1_text = str(int(k1_x100)) if k1_known else "не получено"
+            k0_text = str(int(k0_count)) if k0_known else "не получено"
+            row.extend([f"empty={empty_text}", f"full={full_text}", f"k1={k1_text}", f"k0={k0_text}", formula])
         return row
 
     def _columns_header_row(self) -> list[str]:
@@ -303,8 +342,12 @@ class CollectorCombinedCsvManager:
             full_ticks = self._as_int(metrics.get("fullPeriod", 0))
             empty_known = self._as_bool(metrics.get("emptyKnown", False))
             full_known = self._as_bool(metrics.get("fullKnown", False))
-            previous = self._node_calibration.get(node_hex, (0, 0, False, False))
-            current = (empty_ticks, full_ticks, empty_known, full_known)
+            k1_x100 = self._as_int(metrics.get("k1X100", 0))
+            k0_count = self._as_int(metrics.get("k0Count", 0))
+            k1_known = self._as_bool(metrics.get("k1Known", False))
+            k0_known = self._as_bool(metrics.get("k0Known", False))
+            previous = self._node_calibration.get(node_hex, (0, 0, False, False, 0, 0, False, False))
+            current = (empty_ticks, full_ticks, empty_known, full_known, k1_x100, k0_count, k1_known, k0_known)
             if previous != current:
                 self._node_calibration[node_hex] = current
                 changed = True
@@ -322,7 +365,7 @@ class CollectorCombinedCsvManager:
                 continue
             columns = self._column_names_for_node(normalized)
             self._node_columns[normalized] = columns
-            self._node_calibration.setdefault(normalized, (0, 0, False, False))
+            self._node_calibration.setdefault(normalized, (0, 0, False, False, 0, 0, False, False))
             self._ordered_nodes.append(normalized)
             new_columns.extend(columns)
 
@@ -369,9 +412,13 @@ class CollectorCombinedCsvManager:
             metrics = normalized_snapshot.get(node_hex)
             if metrics is None:
                 continue
-            period_column, fuel_column, temperature_column, fuel_period_x10_column = self._node_columns[node_hex]
+            period_column, fuel_column, fuel_j1939_column, temperature_column, fuel_period_x10_column = self._node_columns[node_hex]
             row[period_column] = self._format_value(self._as_int(metrics.get("period", 0)))
             row[fuel_column] = self._format_value(self._as_float(metrics.get("fuel", 0.0)))
+            if self._as_bool(metrics.get("fuelJ1939Known", False)):
+                row[fuel_j1939_column] = self._format_value(self._as_float(metrics.get("fuelJ1939", 0.0)))
+            else:
+                row[fuel_j1939_column] = ""
             row[temperature_column] = self._format_value(self._as_float(metrics.get("temperature", 0.0)))
             row[fuel_period_x10_column] = self._format_value(self._resolve_fuel_period_percent(metrics))
 
