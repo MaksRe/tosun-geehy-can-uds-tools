@@ -21,6 +21,87 @@ from .workers import UdsOptionProxy
 LOGGER = logging.getLogger(__name__)
 
 class AppControllerPublicSlotsMixin(AppControllerContract):
+    @Slot(bool)
+    def setCollectorSftpEnabled(self, enabled):
+        """Цель функции в переключении SFTP-выгрузки, затем она обновляет конфиг uploader и уведомляет UI."""
+        value = bool(enabled)
+        if value == bool(self._collector_sftp_enabled):
+            return
+        self._collector_sftp_enabled = value
+        self._collector_refresh_sftp_uploader_config()
+        if value:
+            self._collector_sftp_status_text = "SFTP: включен, ожидает выгрузки."
+        else:
+            self._collector_sftp_status_text = "SFTP: выключен."
+            self._collector_sftp_busy = False
+        self.collectorSftpChanged.emit()
+
+    @Slot(str)
+    def setCollectorSftpHost(self, host_text):
+        """Цель функции в сохранении SFTP-хоста, затем она синхронизирует runtime-конфиг выгрузки."""
+        value = str(host_text or "").strip()
+        if value == str(self._collector_sftp_host):
+            return
+        self._collector_sftp_host = value
+        self._collector_refresh_sftp_uploader_config()
+        self.collectorSftpChanged.emit()
+
+    @Slot(str)
+    def setCollectorSftpPort(self, port_text):
+        """Цель функции в сохранении SFTP-порта, затем она валидирует диапазон и обновляет конфиг uploader."""
+        try:
+            parsed = int(str(port_text).strip())
+        except (TypeError, ValueError):
+            self.infoMessage.emit("SFTP", "Порт SFTP должен быть целым числом.")
+            return
+        bounded = max(1, min(65535, parsed))
+        if bounded == int(self._collector_sftp_port):
+            return
+        self._collector_sftp_port = bounded
+        self._collector_refresh_sftp_uploader_config()
+        self.collectorSftpChanged.emit()
+
+    @Slot(str)
+    def setCollectorSftpUsername(self, username_text):
+        """Цель функции в сохранении имени пользователя SFTP, затем она применяет изменения к uploader."""
+        value = str(username_text or "").strip()
+        if value == str(self._collector_sftp_username):
+            return
+        self._collector_sftp_username = value
+        self._collector_refresh_sftp_uploader_config()
+        self.collectorSftpChanged.emit()
+
+    @Slot(str)
+    def setCollectorSftpPassword(self, password_text):
+        """Цель функции в сохранении пароля SFTP, затем она применяет его в runtime-конфиге выгрузки."""
+        value = str(password_text or "")
+        if value == str(self._collector_sftp_password):
+            return
+        self._collector_sftp_password = value
+        self._collector_refresh_sftp_uploader_config()
+        self.collectorSftpChanged.emit()
+
+    @Slot(str)
+    def setCollectorSftpRemoteDir(self, remote_dir_text):
+        """Цель функции в сохранении удаленного каталога SFTP, затем она синхронизирует путь выгрузки."""
+        value = str(remote_dir_text or "").strip()
+        if not value:
+            value = "/incoming/csv"
+        if value == str(self._collector_sftp_remote_dir):
+            return
+        self._collector_sftp_remote_dir = value
+        self._collector_refresh_sftp_uploader_config()
+        self.collectorSftpChanged.emit()
+
+    @Slot()
+    def uploadCollectorCurrentSessionToSftp(self):
+        """Цель функции в ручном запуске выгрузки текущей сессии, затем она ставит каталог в очередь uploader."""
+        if self._collector_session_dir is None:
+            self.infoMessage.emit("SFTP", "Нет активной сессии коллектора для выгрузки.")
+            return
+        self._collector_schedule_sftp_upload(Path(self._collector_session_dir))
+        self.infoMessage.emit("SFTP", "Текущая сессия поставлена в очередь выгрузки.")
+
     @staticmethod
     def _calibration_backup_all_nodes_required_dids() -> tuple[int, int, int, int]:
         """Цель функции в фиксации состава резервной копии, затем она возвращает DID 0%/100%/K1/K0 для опроса."""
@@ -2374,6 +2455,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
     def stopCollectorRecording(self):
         if self._collector_state == "stopped":
             return
+        session_dir_for_upload = self._collector_session_dir
         self._collector_state = "stopped"
         self.collectorStateChanged.emit()
         self._set_programming_active(False)
@@ -2381,6 +2463,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._collector_csv_managers = {}
         self._collector_combined_csv_manager = None
         self._append_log("Запись CSV остановлена.", RowColor.blue)
+        self._collector_schedule_sftp_upload(session_dir_for_upload)
 
     @Slot()
     def clearCollectorNodes(self):

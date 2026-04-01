@@ -28,6 +28,7 @@ class AppControllerContract:
     collectorStateChanged: Any
     collectorTrendEnabledChanged: Any
     collectorTrendChanged: Any
+    collectorSftpChanged: Any
     canFilterOptionsChanged: Any
     canJournalEnabledChanged: Any
     canTrafficLogsChanged: Any
@@ -200,6 +201,15 @@ class AppControllerContract:
     _collector_trend_nodes_view: Any
     _collector_trend_points: Any
     _collector_trend_points_by_node: Any
+    _collector_sftp_enabled: Any
+    _collector_sftp_host: Any
+    _collector_sftp_port: Any
+    _collector_sftp_username: Any
+    _collector_sftp_password: Any
+    _collector_sftp_remote_dir: Any
+    _collector_sftp_busy: Any
+    _collector_sftp_status_text: Any
+    _collector_sftp_uploader: Any
     _collector_view_update_pending_nodes: Any
     _collector_view_update_pending_trend: Any
     _collector_view_update_timer: Any

@@ -50,6 +50,7 @@ class AppControllerPropertiesMixin(AppControllerContract):
     collectorStateChanged = Signal()
     collectorTrendEnabledChanged = Signal()
     collectorTrendChanged = Signal()
+    collectorSftpChanged = Signal()
     optionSelectionChanged = Signal()
     optionValueChanged = Signal()
     optionOperationChanged = Signal()
@@ -361,6 +362,38 @@ class AppControllerPropertiesMixin(AppControllerContract):
     @Property("QVariantList", notify=collectorTrendChanged)
     def collectorTrendCsvSeries(self):
         return self._collector_trend_csv_series
+
+    @Property(bool, notify=collectorSftpChanged)
+    def collectorSftpEnabled(self):
+        return bool(self._collector_sftp_enabled)
+
+    @Property(str, notify=collectorSftpChanged)
+    def collectorSftpHost(self):
+        return str(self._collector_sftp_host)
+
+    @Property(int, notify=collectorSftpChanged)
+    def collectorSftpPort(self):
+        return int(self._collector_sftp_port)
+
+    @Property(str, notify=collectorSftpChanged)
+    def collectorSftpUsername(self):
+        return str(self._collector_sftp_username)
+
+    @Property(str, notify=collectorSftpChanged)
+    def collectorSftpPassword(self):
+        return str(self._collector_sftp_password)
+
+    @Property(str, notify=collectorSftpChanged)
+    def collectorSftpRemoteDir(self):
+        return str(self._collector_sftp_remote_dir)
+
+    @Property(bool, notify=collectorSftpChanged)
+    def collectorSftpBusy(self):
+        return bool(self._collector_sftp_busy)
+
+    @Property(str, notify=collectorSftpChanged)
+    def collectorSftpStatusText(self):
+        return str(self._collector_sftp_status_text)
 
     @Property("QStringList", notify=optionSelectionChanged)
     def optionsParameterItems(self):

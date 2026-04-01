@@ -8,11 +8,15 @@ import math
 from pathlib import Path
 import time
 
+from PySide6.QtCore import QTimer
+
+from colors import RowColor
 from j1939.j1939_can_identifier import J1939CanIdentifier
 from uds.data_identifiers import UdsData
 from uds.services.read_data_by_id import ServiceReadDataById
 from uds.uds_identifiers import UdsIdentifiers
 from ui.qml.collector_csv_manager import CollectorCombinedCsvManager, CollectorCsvManager
+from ui.qml.collector_sftp_uploader import CollectorSftpConfig
 
 from .contract import AppControllerContract
 
@@ -21,6 +25,49 @@ LOGGER = logging.getLogger(__name__)
 
 
 class AppControllerCollectorMixin(AppControllerContract):
+    def _collector_make_sftp_config(self) -> CollectorSftpConfig:
+        """Цель функции в сборе актуальной SFTP-конфигурации, затем она возвращает параметры для фонового uploader."""
+        return CollectorSftpConfig(
+            enabled=bool(self._collector_sftp_enabled),
+            host=str(self._collector_sftp_host),
+            port=int(self._collector_sftp_port),
+            username=str(self._collector_sftp_username),
+            password=str(self._collector_sftp_password),
+            remote_dir=str(self._collector_sftp_remote_dir),
+        )
+
+    def _collector_refresh_sftp_uploader_config(self):
+        """Цель функции в применении SFTP-настроек к uploader, затем она синхронизирует runtime-конфиг без перезапуска GUI."""
+        if self._collector_sftp_uploader is None:
+            return
+        self._collector_sftp_uploader.update_config(self._collector_make_sftp_config())
+
+    def _on_collector_sftp_uploader_status(self, text: str, busy: bool):
+        """Цель функции в приеме статуса фоновой выгрузки, затем она безопасно обновляет UI из главного потока Qt."""
+
+        def _apply():
+            self._collector_sftp_status_text = str(text)
+            self._collector_sftp_busy = bool(busy)
+            self.collectorSftpChanged.emit()
+            if not bool(busy):
+                if str(text).lower().startswith("sftp: ошибка"):
+                    self._append_log(str(text), RowColor.red)
+                elif "пропущена" in str(text).lower():
+                    self._append_log(str(text), RowColor.yellow)
+                else:
+                    self._append_log(str(text), RowColor.green)
+
+        QTimer.singleShot(0, _apply)
+
+    def _collector_schedule_sftp_upload(self, session_dir: Path | None):
+        """Цель функции в постановке выгрузки CSV после завершения записи, затем она отправляет сессию в фоновую очередь."""
+        if session_dir is None:
+            return
+        if self._collector_sftp_uploader is None:
+            return
+        self._collector_refresh_sftp_uploader_config()
+        self._collector_sftp_uploader.enqueue_session_directory(Path(session_dir))
+
     def _set_collector_enabled_state(self, enabled: bool, *, emit_signal: bool = True):
         value = bool(enabled)
         if bool(self._collector_enabled) == value:

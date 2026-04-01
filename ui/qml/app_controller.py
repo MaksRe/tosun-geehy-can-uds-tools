@@ -16,6 +16,7 @@ from uds.services.session import ServiceSession
 from uds.services.write_data_by_id import ServiceWriteDataById
 from uds.uds_identifiers import UdsIdentifiers
 from ui.qml.collector_csv_manager import CollectorCombinedCsvManager, CollectorCsvManager
+from ui.qml.collector_sftp_uploader import CollectorSftpConfig, CollectorSftpUploader
 
 from .controller import (
     AppControllerCalibrationMixin,
@@ -282,6 +283,25 @@ class AppController(
             "temperatureStd": 0.0,
         }
         self._collector_trend_csv_series: list[dict[str, object]] = []
+        self._collector_sftp_enabled = False
+        self._collector_sftp_host = ""
+        self._collector_sftp_port = 22
+        self._collector_sftp_username = ""
+        self._collector_sftp_password = ""
+        self._collector_sftp_remote_dir = "/incoming/csv"
+        self._collector_sftp_busy = False
+        self._collector_sftp_status_text = "SFTP: не настроен."
+        self._collector_sftp_uploader = CollectorSftpUploader(self._on_collector_sftp_uploader_status)
+        self._collector_sftp_uploader.update_config(
+            CollectorSftpConfig(
+                enabled=self._collector_sftp_enabled,
+                host=self._collector_sftp_host,
+                port=self._collector_sftp_port,
+                username=self._collector_sftp_username,
+                password=self._collector_sftp_password,
+                remote_dir=self._collector_sftp_remote_dir,
+            )
+        )
 
         self._options_parameters: list[UdsOptionParameter] = list(UDS_OPTIONS)
         self._options_items: list[str] = [f"0x{int(p.did) & 0xFFFF:04X} | {p.name} | {p.access.value}" for p in self._options_parameters]

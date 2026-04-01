@@ -79,6 +79,17 @@ Card {
                 onClicked: root.openTrendWindowRequested()
             }
 
+            FancyButton {
+                Layout.preferredWidth: 146
+                Layout.preferredHeight: 30
+                fontPixelSize: 11
+                text: "SFTP (резерв)"
+                tone: "#64748b"
+                toneHover: "#55657a"
+                tonePressed: "#465669"
+                onClicked: sftpSettingsPopup.open()
+            }
+
             Text {
                 text: root.collectorEnabled ? "Сценарий: ВКЛ" : "Сценарий: ВЫКЛ"
                 color: root.collectorEnabled ? "#059669" : root.textSoft
@@ -632,6 +643,17 @@ Card {
         }
     }
 
+    CollectorSftpDialog {
+        id: sftpSettingsPopup
+        parent: root
+        appController: root.appController
+        textMain: root.textMain
+        textSoft: root.textSoft
+        inputBg: root.inputBg
+        inputBorder: root.inputBorder
+        inputFocus: root.inputFocus
+    }
+
     Connections {
         target: root.appController
 
@@ -646,6 +668,7 @@ Card {
                 cyclePauseField.text = String(root.appController.collectorCyclePauseMs)
             }
         }
+
     }
 
     Popup {
