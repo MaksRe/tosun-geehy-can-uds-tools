@@ -1237,8 +1237,8 @@ Item {
                         id: tempCompAdvancedSpoiler
                         Layout.fillWidth: true
                         Layout.fillHeight: false
-                        title: "Расширенные настройки (DID 0x001D..0x002C)"
-                        hintText: "Ручной ввод K1/K0 и детальные DID по сегментной компенсации"
+                        title: "Расширенные настройки (DID 0x001D..0x002D)"
+                        hintText: "Ручной ввод K1/K0/zero trim и детальные DID по сегментной компенсации"
                         cardColor: "#f0fdf4"
                         cardBorder: "#bbf7d0"
                         textMain: root.textMain
@@ -1359,6 +1359,139 @@ Item {
                                         tonePressed: "#075985"
                                         enabled: root.appController !== null
                                         onClicked: if (root.appController) root.appController.writeCalibrationTempCompK0(tempCompK0Field.text)
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Text {
+                                        Layout.preferredWidth: 140
+                                        text: "Zero trim (0x002D)"
+                                        color: root.textSoft
+                                        font.pixelSize: 11
+                                        font.family: "Bahnschrift"
+                                    }
+
+                                    FancyTextField {
+                                        id: tempCompZeroTrimField
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 34
+                                        placeholderText: "signed dec / 0xHEX"
+                                        textColor: root.textMain
+                                        bgColor: root.inputBg
+                                        borderColor: root.inputBorder
+                                        focusBorderColor: root.inputFocus
+                                        onAccepted: if (root.appController) root.appController.writeCalibrationTempCompZeroTrim(text)
+                                    }
+
+                                    FancyButton {
+                                        Layout.preferredWidth: 92
+                                        Layout.preferredHeight: 32
+                                        text: "Читать"
+                                        tone: "#0f766e"
+                                        toneHover: "#115e59"
+                                        tonePressed: "#134e4a"
+                                        enabled: root.appController !== null
+                                        onClicked: if (root.appController) root.appController.readCalibrationTempCompZeroTrim()
+                                    }
+
+                                    FancyButton {
+                                        Layout.preferredWidth: 96
+                                        Layout.preferredHeight: 32
+                                        text: "Записать"
+                                        tone: "#0284c7"
+                                        toneHover: "#0369a1"
+                                        tonePressed: "#075985"
+                                        enabled: root.appController !== null
+                                        onClicked: if (root.appController) root.appController.writeCalibrationTempCompZeroTrim(tempCompZeroTrimField.text)
+                                    }
+
+                                    FancyButton {
+                                        Layout.preferredWidth: 84
+                                        Layout.preferredHeight: 32
+                                        text: "Сброс"
+                                        tone: "#475569"
+                                        toneHover: "#334155"
+                                        tonePressed: "#1e293b"
+                                        enabled: root.appController !== null
+                                        onClicked: if (root.appController) root.appController.resetCalibrationTempCompZeroTrim()
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+
+                                    LabelValue {
+                                        Layout.fillWidth: true
+                                        labelText: "Текущее trim"
+                                        valueText: root.appController ? root.appController.calibrationTempCompCurrentZeroTrimText : "-"
+                                        labelColor: root.textSoft
+                                        valueColor: root.textMain
+                                        fontFamily: "Bahnschrift"
+                                    }
+
+                                    LabelValue {
+                                        Layout.fillWidth: true
+                                        labelText: "Рекоменд."
+                                        valueText: root.appController ? root.appController.calibrationTempCompRecommendedZeroTrimText : "-"
+                                        labelColor: root.textSoft
+                                        valueColor: "#0f766e"
+                                        fontFamily: "Bahnschrift"
+                                    }
+
+                                    LabelValue {
+                                        Layout.fillWidth: true
+                                        labelText: "Изменение"
+                                        valueText: root.appController ? root.appController.calibrationTempCompDeltaZeroTrimText : "-"
+                                        labelColor: root.textSoft
+                                        valueColor: root.textMain
+                                        fontFamily: "Bahnschrift"
+                                    }
+
+                                    LabelValue {
+                                        Layout.fillWidth: true
+                                        labelText: "К записи"
+                                        valueText: root.appController ? root.appController.calibrationTempCompNextZeroTrimText : "-"
+                                        labelColor: root.textSoft
+                                        valueColor: "#166534"
+                                        fontFamily: "Bahnschrift"
+                                    }
+                                }
+
+                                LabelValue {
+                                    Layout.fillWidth: true
+                                    labelText: "Остаток после подгонки"
+                                    valueText: root.appController ? root.appController.calibrationTempCompResidualZeroTrimText : "-"
+                                    labelColor: root.textSoft
+                                    valueColor: "#334155"
+                                    fontFamily: "Bahnschrift"
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: "Автоподстройка zero trim меняет только DID 0x002D и не затрагивает K0/K1."
+                                        color: root.textSoft
+                                        font.pixelSize: 10
+                                        font.family: "Bahnschrift"
+                                        wrapMode: Text.WordWrap
+                                    }
+
+                                    FancyButton {
+                                        Layout.preferredWidth: 206
+                                        Layout.preferredHeight: 32
+                                        text: "Подогнать zero trim к 0%"
+                                        tone: "#0f766e"
+                                        toneHover: "#115e59"
+                                        tonePressed: "#134e4a"
+                                        enabled: root.appController !== null
+                                        onClicked: if (root.appController) root.appController.autoAdjustCalibrationTempCompZeroTrimForCurrentPoint()
                                     }
                                 }
 
@@ -2233,6 +2366,10 @@ Item {
                 var currentK0 = root.appController.calibrationTempCompCurrentK0Text
                 tempCompK0Field.text = (currentK0 && currentK0 !== "-") ? currentK0 : ""
             }
+            if (!tempCompZeroTrimField.activeFocus) {
+                var currentZeroTrim = root.appController.calibrationTempCompCurrentZeroTrimText
+                tempCompZeroTrimField.text = (currentZeroTrim && currentZeroTrim !== "-") ? currentZeroTrim : ""
+            }
             root.syncLinearPreviewFields()
             root.rebuildFilteredTempCompSeries()
         }
@@ -2246,6 +2383,8 @@ Item {
             tempCompK1Field.text = (currentK1 && currentK1 !== "-") ? currentK1 : ""
             var currentK0 = root.appController.calibrationTempCompCurrentK0Text
             tempCompK0Field.text = (currentK0 && currentK0 !== "-") ? currentK0 : ""
+            var currentZeroTrim = root.appController.calibrationTempCompCurrentZeroTrimText
+            tempCompZeroTrimField.text = (currentZeroTrim && currentZeroTrim !== "-") ? currentZeroTrim : ""
             root.syncLinearPreviewFields()
             root.rebuildFilteredTempCompSeries(true)
         }

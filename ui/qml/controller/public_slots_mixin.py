@@ -725,6 +725,29 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._append_log("Калибровка: чтение коэффициента K0 (DID 0x001C).", RowColor.blue)
 
     @Slot()
+    def readCalibrationTempCompZeroTrim(self):
+        """Цель функции в чтении коррекции zero trim, затем она отправляет запрос DID 0x002D."""
+        if not self._can.is_connect:
+            self.infoMessage.emit("Калибровка", "Сначала подключите CAN-адаптер.")
+            return
+        if not self._can.is_trace:
+            self.infoMessage.emit("Калибровка", "Сначала включите трассировку CAN.")
+            return
+
+        if self._calibration_temp_comp_adv_read_active:
+            self._stop_calibration_temp_comp_advanced_read_sequence()
+            self._append_log(
+                "Калибровка: последовательное чтение расширенных DID остановлено для чтения zero trim.",
+                RowColor.yellow,
+            )
+
+        if not self._request_calibration_temp_comp_zero_trim_read():
+            self.infoMessage.emit("Калибровка", "Не удалось отправить чтение DID 0x002D.")
+            return
+
+        self._append_log("Калибровка: чтение коррекции zero trim (DID 0x002D).", RowColor.blue)
+
+    @Slot()
     def autoAdjustCalibrationTempCompK0ForCurrentPoint(self):
         """Цель функции в автоподстройке K0 по фактическому выходу МК, затем она читает 0x0012/0x0013/0x0018/0x001C и записывает рассчитанный DID 0x001C."""
         if not self._ensure_calibration_write_ready("автоподстройка K0 к 0%"):
@@ -741,6 +764,12 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             self.infoMessage.emit(
                 "Калибровка",
                 "Дождитесь завершения текущей автопроверки DID перед автоподстройкой K0.",
+            )
+            return
+        if bool(self._calibration_temp_comp_zero_trim_air_zero_adjust_active):
+            self.infoMessage.emit(
+                "Калибровка",
+                "Сначала дождитесь завершения автоподстройки zero trim.",
             )
             return
 
@@ -776,8 +805,66 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         )
 
     @Slot()
+    def autoAdjustCalibrationTempCompZeroTrimForCurrentPoint(self):
+        """Цель функции в автоподстройке zero trim по фактическому выходу МК, затем она читает 0x0012/0x0013/0x0018/0x002D и записывает рассчитанный DID 0x002D."""
+        if not self._ensure_calibration_write_ready("автоподстройка zero trim к 0%"):
+            return
+
+        if self._calibration_temp_comp_adv_read_active:
+            self._stop_calibration_temp_comp_advanced_read_sequence()
+            self._append_log(
+                "Калибровка: последовательное чтение расширенных DID остановлено для автоподстройки zero trim.",
+                RowColor.yellow,
+            )
+
+        if len(self._calibration_write_verify_pending) > 0:
+            self.infoMessage.emit(
+                "Калибровка",
+                "Дождитесь завершения текущей автопроверки DID перед автоподстройкой zero trim.",
+            )
+            return
+        if bool(self._calibration_temp_comp_k0_air_zero_adjust_active):
+            self.infoMessage.emit(
+                "Калибровка",
+                "Сначала дождитесь завершения автоподстройки K0.",
+            )
+            return
+
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_active = True
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_empty_period = None
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_full_period = None
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_level_x10 = None
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_level_samples = []
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_current_zero_trim = None
+
+        if not self._request_next_calibration_temp_comp_zero_trim_air_zero_adjust_did():
+            self._reset_calibration_temp_comp_zero_trim_air_zero_adjust_state()
+            self._set_calibration_temp_comp_operation_status(
+                "Автоподстройка zero trim не запущена: не удалось отправить первый DID-запрос.",
+                busy=False,
+                progress_percent=100,
+                determinate=True,
+            )
+            self.infoMessage.emit(
+                "Калибровка",
+                "Не удалось отправить первый DID-запрос для автоподстройки zero trim.",
+            )
+            return
+
+        self._set_calibration_temp_comp_operation_status(
+            "Автоподстройка zero trim: последовательное чтение DID 0x0012 -> 0x0013 -> 0x0018 -> 0x002D...",
+            busy=True,
+            progress_percent=0,
+            determinate=False,
+        )
+        self._append_log(
+            "Калибровка: запуск автоподстройки zero trim по фактическому выходу МК (DID 0x0012/0x0013/0x0018/0x002D).",
+            RowColor.blue,
+        )
+
+    @Slot()
     def readCalibrationTempCompFromMcu(self):
-        """Цель функции в чтении параметров компенсации из МК, затем она запрашивает K1/K0 и только DID текущего режима mode."""
+        """Цель функции в чтении параметров компенсации из МК, затем она запрашивает K1/K0/zero trim и только DID текущего режима mode."""
         if not self._can.is_connect:
             self.infoMessage.emit("Калибровка", "Сначала подключите CAN-адаптер.")
             self._set_calibration_temp_comp_operation_status(
@@ -810,15 +897,18 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
         k1_sent = self._request_calibration_temp_comp_k1_read()
         k0_sent = self._request_calibration_temp_comp_k0_read()
+        zero_trim_sent = self._request_calibration_temp_comp_zero_trim_read()
         queued_count, total_count = self._request_calibration_temp_comp_advanced_read_for_mode(mode_value)
 
         if not k1_sent:
             self._append_log("Калибровка: не удалось отправить чтение DID 0x001B (K1).", RowColor.red)
         if not k0_sent:
             self._append_log("Калибровка: не удалось отправить чтение DID 0x001C (K0).", RowColor.red)
+        if not zero_trim_sent:
+            self._append_log("Калибровка: не удалось отправить чтение DID 0x002D (zero trim).", RowColor.red)
 
         if total_count <= 0 or queued_count <= 0:
-            if not k1_sent and not k0_sent:
+            if not k1_sent and not k0_sent and not zero_trim_sent:
                 self.infoMessage.emit("Калибровка", "Не удалось отправить чтение параметров температурной компенсации.")
                 self._set_calibration_temp_comp_operation_status(
                     "Чтение параметров из МК не запущено: очередь DID для режима не сформирована.",
@@ -828,13 +918,13 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
                 )
                 return
             self._set_calibration_temp_comp_operation_status(
-                "Чтение K1/K0 отправлено. Дополнительные DID режима не требуются.",
+                "Чтение K1/K0/zero trim отправлено. Дополнительные DID режима не требуются.",
                 busy=False,
                 progress_percent=100,
                 determinate=True,
             )
             self._append_log(
-                f"Калибровка: отправлено чтение K1/K0. Для режима {mode_text} дополнительные DID не требуются.",
+                f"Калибровка: отправлено чтение K1/K0/zero trim. Для режима {mode_text} дополнительные DID не требуются.",
                 RowColor.blue,
             )
             return
@@ -848,13 +938,13 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._append_log(
             (
                 "Калибровка: запущено чтение параметров температурной компенсации по режиму "
-                f"{mode_text} ({queued_count} DID), дополнительно отправлены K1/K0."
+                f"{mode_text} ({queued_count} DID), дополнительно отправлены K1/K0/zero trim."
             ),
             RowColor.blue,
         )
         self.infoMessage.emit(
             "Калибровка",
-            f"Запущено чтение K1/K0 и {queued_count} DID по режиму {mode_text}.",
+            f"Запущено чтение K1/K0/zero trim и {queued_count} DID по режиму {mode_text}.",
         )
 
     @Slot()
@@ -1516,6 +1606,55 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             return
 
         self.infoMessage.emit("Калибровка", "Не удалось отправить запись DID 0x001C.")
+
+    @Slot(str)
+    def writeCalibrationTempCompZeroTrim(self, value_text):
+        """Цель функции в записи коррекции zero trim, затем она валидирует ввод и отправляет UDS 0x2E по DID 0x002D."""
+        if not self._ensure_calibration_write_ready("запись коррекции zero trim"):
+            return
+
+        if self._calibration_temp_comp_adv_read_active:
+            self._stop_calibration_temp_comp_advanced_read_sequence()
+            self._append_log(
+                "Калибровка: последовательное чтение расширенных DID остановлено для записи zero trim.",
+                RowColor.yellow,
+            )
+
+        if len(self._calibration_write_verify_pending) > 0:
+            self.infoMessage.emit(
+                "Калибровка",
+                "Дождитесь завершения текущей автопроверки DID перед записью zero trim.",
+            )
+            return
+
+        try:
+            value = self._resolve_calibration_zero_trim_write_value(
+                value_text,
+                self._calibration_temp_comp_zero_trim_count_current,
+            )
+        except ValueError as exc:
+            self.infoMessage.emit("Калибровка", str(exc))
+            return
+
+        write_payload = int(value) & 0xFFFF
+        self._reset_calibration_temp_comp_zero_trim_verify_state()
+        self._calibration_temp_comp_zero_trim_residual_x10 = None
+        if self._calibration_write_service.write_data(
+            UdsData.fuel_zero_trim_count,
+            write_payload,
+            tx_identifier=self._build_calibration_tx_identifier(),
+        ):
+            self._calibration_write_verify_pending[int(UdsData.fuel_zero_trim_count.pid)] = int(value)
+            self.calibrationVerificationChanged.emit()
+            self._append_log(f"Калибровка: запись коррекции zero trim = {int(value)}.", RowColor.blue)
+            return
+
+        self.infoMessage.emit("Калибровка", "Не удалось отправить запись DID 0x002D.")
+
+    @Slot()
+    def resetCalibrationTempCompZeroTrim(self):
+        """Цель функции в сбросе коррекции zero trim, затем она отправляет запись 0 в DID 0x002D."""
+        self.writeCalibrationTempCompZeroTrim("0")
 
     @Slot()
     def applyCalibrationTempCompRecommendations(self):

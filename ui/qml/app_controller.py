@@ -177,10 +177,28 @@ class AppController(
         self._calibration_temp_comp_k0_air_zero_adjust_level_x10: int | None = None
         self._calibration_temp_comp_k0_air_zero_adjust_current_k0: int | None = None
         self._calibration_temp_comp_k0_air_zero_adjust_timeout_ms = 1500
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_active = False
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_empty_period: int | None = None
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_full_period: int | None = None
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_level_x10: int | None = None
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_level_samples: list[int] = []
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_required_samples = 6
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_stability_threshold_x10 = 3
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_current_zero_trim: int | None = None
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_timeout_ms = 1500
         self._calibration_temp_comp_k0_count_base: int | None = None
         self._calibration_temp_comp_k0_count_recommended: int | None = None
         self._calibration_temp_comp_k0_count_delta: int | None = None
         self._calibration_temp_comp_k0_count_next: int | None = None
+        self._calibration_temp_comp_zero_trim_count_current: int | None = None
+        self._calibration_temp_comp_zero_trim_count_recommended: int | None = None
+        self._calibration_temp_comp_zero_trim_count_delta: int | None = None
+        self._calibration_temp_comp_zero_trim_count_next: int | None = None
+        self._calibration_temp_comp_zero_trim_residual_x10: int | None = None
+        self._calibration_temp_comp_zero_trim_verify_pending = False
+        self._calibration_temp_comp_zero_trim_verify_timeout_ms = 1500
+        self._calibration_temp_comp_zero_trim_verify_tolerance_x10 = 10
+        self._calibration_temp_comp_zero_trim_verify_repeat_threshold_x10 = 25
         self._calibration_temp_comp_period_slope_before: float | None = None
         self._calibration_temp_comp_period_slope_after: float | None = None
         self._calibration_temp_comp_level_slope_before: float | None = None
@@ -422,6 +440,22 @@ class AppController(
         )
         self._calibration_temp_comp_k0_air_zero_adjust_timeout_timer.timeout.connect(
             self._on_calibration_temp_comp_k0_air_zero_adjust_timeout
+        )
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_timeout_timer = QTimer(self)
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_timeout_timer.setSingleShot(True)
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_timeout_timer.setInterval(
+            self._calibration_temp_comp_zero_trim_air_zero_adjust_timeout_ms
+        )
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_timeout_timer.timeout.connect(
+            self._on_calibration_temp_comp_zero_trim_air_zero_adjust_timeout
+        )
+        self._calibration_temp_comp_zero_trim_verify_timeout_timer = QTimer(self)
+        self._calibration_temp_comp_zero_trim_verify_timeout_timer.setSingleShot(True)
+        self._calibration_temp_comp_zero_trim_verify_timeout_timer.setInterval(
+            self._calibration_temp_comp_zero_trim_verify_timeout_ms
+        )
+        self._calibration_temp_comp_zero_trim_verify_timeout_timer.timeout.connect(
+            self._on_calibration_temp_comp_zero_trim_verify_timeout
         )
         self._calibration_backup_all_nodes_step_timer = QTimer(self)
         self._calibration_backup_all_nodes_step_timer.setSingleShot(True)

@@ -140,6 +140,26 @@ class AppControllerContract:
     _calibration_temp_comp_k0_air_zero_adjust_current_k0: Any
     _calibration_temp_comp_k0_air_zero_adjust_timeout_ms: Any
     _calibration_temp_comp_k0_air_zero_adjust_timeout_timer: Any
+    _calibration_temp_comp_zero_trim_air_zero_adjust_active: Any
+    _calibration_temp_comp_zero_trim_air_zero_adjust_empty_period: Any
+    _calibration_temp_comp_zero_trim_air_zero_adjust_full_period: Any
+    _calibration_temp_comp_zero_trim_air_zero_adjust_level_x10: Any
+    _calibration_temp_comp_zero_trim_air_zero_adjust_level_samples: Any
+    _calibration_temp_comp_zero_trim_air_zero_adjust_required_samples: Any
+    _calibration_temp_comp_zero_trim_air_zero_adjust_stability_threshold_x10: Any
+    _calibration_temp_comp_zero_trim_air_zero_adjust_current_zero_trim: Any
+    _calibration_temp_comp_zero_trim_air_zero_adjust_timeout_ms: Any
+    _calibration_temp_comp_zero_trim_air_zero_adjust_timeout_timer: Any
+    _calibration_temp_comp_zero_trim_count_current: Any
+    _calibration_temp_comp_zero_trim_count_recommended: Any
+    _calibration_temp_comp_zero_trim_count_delta: Any
+    _calibration_temp_comp_zero_trim_count_next: Any
+    _calibration_temp_comp_zero_trim_residual_x10: Any
+    _calibration_temp_comp_zero_trim_verify_pending: Any
+    _calibration_temp_comp_zero_trim_verify_timeout_ms: Any
+    _calibration_temp_comp_zero_trim_verify_tolerance_x10: Any
+    _calibration_temp_comp_zero_trim_verify_repeat_threshold_x10: Any
+    _calibration_temp_comp_zero_trim_verify_timeout_timer: Any
     _calibration_temp_comp_period_slope_before: Any
     _calibration_temp_comp_period_slope_after: Any
     _calibration_temp_comp_level_slope_before: Any

@@ -48,6 +48,7 @@ class UdsData:
         "fuel_temp_comp_k1_heat_seg3_x100": UdsVar(0x002A, 2, "K1 нагрева S3 x100"),
         "fuel_temp_comp_k1_heat_seg4_x100": UdsVar(0x002B, 2, "K1 нагрева S4 x100"),
         "fuel_temp_comp_k1_heat_seg5_x100": UdsVar(0x002C, 2, "K1 нагрева S5 x100"),
+        "fuel_zero_trim_count": UdsVar(0x002D, 2, "Эксплуатационная подгонка 0% (zero trim), count"),
 
         "vmecusndid"        : UdsVar(0xF188, 18, "Номер ПО ЭБУ изготовителя ТС"),
         "vmecusvndid"       : UdsVar(0xF189, 32, "Номер версии ПО ЭБУ изготовителя ТС"),
@@ -99,6 +100,7 @@ class UdsData:
     fuel_temp_comp_k1_heat_seg3_x100 = vars.get("fuel_temp_comp_k1_heat_seg3_x100")
     fuel_temp_comp_k1_heat_seg4_x100 = vars.get("fuel_temp_comp_k1_heat_seg4_x100")
     fuel_temp_comp_k1_heat_seg5_x100 = vars.get("fuel_temp_comp_k1_heat_seg5_x100")
+    fuel_zero_trim_count = vars.get("fuel_zero_trim_count")
 
     vmecusndid          = vars.get("vmecusndid")
     vmecusvndid         = vars.get("vmecusvndid")

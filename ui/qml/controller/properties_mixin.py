@@ -775,6 +775,41 @@ class AppControllerPropertiesMixin(AppControllerContract):
             return "не считан (DID 0x001C)"
         return str(int(value))
 
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompCurrentZeroTrimText(self):
+        value = self._calibration_temp_comp_zero_trim_count_current
+        if value is None:
+            return "не считан (DID 0x002D)"
+        return str(int(value))
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompRecommendedZeroTrimText(self):
+        value = self._calibration_temp_comp_zero_trim_count_recommended
+        if value is None:
+            return "не рассчитан"
+        return str(int(value))
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompDeltaZeroTrimText(self):
+        value = self._calibration_temp_comp_zero_trim_count_delta
+        if value is None:
+            return "не рассчитан"
+        return f"{int(value):+d}"
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompNextZeroTrimText(self):
+        value = self._calibration_temp_comp_zero_trim_count_next
+        if value is None:
+            return "не рассчитан"
+        return str(int(value))
+
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompResidualZeroTrimText(self):
+        value = self._calibration_temp_comp_zero_trim_residual_x10
+        if value is None:
+            return "не рассчитан"
+        return f"{float(value) / 10.0:+.1f} %"
+
     @Property(bool, notify=calibrationTempCompChanged)
     def calibrationTempCompLinearPreviewEnabled(self):
         return bool(self._calibration_temp_comp_linear_preview_enabled)

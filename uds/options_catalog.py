@@ -62,6 +62,7 @@ UDS_OPTIONS: list[UdsOptionParameter] = [
     UdsOptionParameter(0x002A, 2, "K1 нагрева S3 x100", AccessMode.READ_WRITE),
     UdsOptionParameter(0x002B, 2, "K1 нагрева S4 x100", AccessMode.READ_WRITE),
     UdsOptionParameter(0x002C, 2, "K1 нагрева S5 x100", AccessMode.READ_WRITE),
+    UdsOptionParameter(0x002D, 2, "Эксплуатационная подгонка 0% (zero trim), count", AccessMode.READ_WRITE),
     UdsOptionParameter(0xF188, 18, "Номер ПО ЭБУ", AccessMode.READ_WRITE),
     UdsOptionParameter(0xF189, 32, "Версия ПО ЭБУ", AccessMode.READ_WRITE),
     UdsOptionParameter(0xF18A, 32, "Поставщик системы и адрес", AccessMode.READ_WRITE),

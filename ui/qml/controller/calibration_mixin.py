@@ -395,6 +395,8 @@ class AppControllerCalibrationMixin(AppControllerContract):
             return "коэффициента K1"
         if int(did) == int(UdsData.fuel_temp_comp_k0_count.pid):
             return "коэффициента K0"
+        if int(did) == int(UdsData.fuel_zero_trim_count.pid):
+            return "коррекции zero trim"
         field = AppControllerCalibrationMixin._temp_comp_advanced_field_by_did(int(did))
         if field is not None:
             return AppControllerCalibrationMixin._temp_comp_field_display_name(field)
@@ -409,6 +411,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
             int(UdsData.full_fuel_tank.pid),
             int(UdsData.fuel_temp_comp_k1_x100.pid),
             int(UdsData.fuel_temp_comp_k0_count.pid),
+            int(UdsData.fuel_zero_trim_count.pid),
         ]
         for field in self._temp_comp_advanced_fields():
             field_var = field.get("var")
@@ -2749,6 +2752,11 @@ class AppControllerCalibrationMixin(AppControllerContract):
         if clear_coefficients:
             self._calibration_temp_comp_k1_x100_current = None
             self._calibration_temp_comp_k0_count_current = None
+            self._calibration_temp_comp_zero_trim_count_current = None
+            self._calibration_temp_comp_zero_trim_count_recommended = None
+            self._calibration_temp_comp_zero_trim_count_delta = None
+            self._calibration_temp_comp_zero_trim_count_next = None
+            self._calibration_temp_comp_zero_trim_residual_x10 = None
             self._calibration_temp_comp_advanced_values = {}
             self._calibration_temp_comp_advanced_recommended_values = {}
 
@@ -2873,6 +2881,11 @@ class AppControllerCalibrationMixin(AppControllerContract):
         if clear_coefficients:
             self._calibration_temp_comp_k1_x100_current = None
             self._calibration_temp_comp_k0_count_current = None
+            self._calibration_temp_comp_zero_trim_count_current = None
+            self._calibration_temp_comp_zero_trim_count_recommended = None
+            self._calibration_temp_comp_zero_trim_count_delta = None
+            self._calibration_temp_comp_zero_trim_count_next = None
+            self._calibration_temp_comp_zero_trim_residual_x10 = None
             self._calibration_temp_comp_advanced_values = {}
             self._calibration_temp_comp_advanced_recommended_values = {}
         self._calibration_temp_comp_linear_preview_enabled = False
@@ -2890,10 +2903,16 @@ class AppControllerCalibrationMixin(AppControllerContract):
         self._calibration_temp_comp_k1_x100_delta = None
         self._calibration_temp_comp_k1_x100_next = None
         self._reset_calibration_temp_comp_k0_air_zero_adjust_state()
+        self._reset_calibration_temp_comp_zero_trim_air_zero_adjust_state()
+        self._reset_calibration_temp_comp_zero_trim_verify_state()
         self._calibration_temp_comp_k0_count_base = None
         self._calibration_temp_comp_k0_count_recommended = None
         self._calibration_temp_comp_k0_count_delta = None
         self._calibration_temp_comp_k0_count_next = None
+        self._calibration_temp_comp_zero_trim_count_recommended = None
+        self._calibration_temp_comp_zero_trim_count_delta = None
+        self._calibration_temp_comp_zero_trim_count_next = None
+        self._calibration_temp_comp_zero_trim_residual_x10 = None
         self._calibration_temp_comp_period_slope_before = None
         self._calibration_temp_comp_period_slope_after = None
         self._calibration_temp_comp_level_slope_before = None
@@ -2927,6 +2946,23 @@ class AppControllerCalibrationMixin(AppControllerContract):
         self._calibration_temp_comp_k0_air_zero_adjust_full_period = None
         self._calibration_temp_comp_k0_air_zero_adjust_level_x10 = None
         self._calibration_temp_comp_k0_air_zero_adjust_current_k0 = None
+
+    def _reset_calibration_temp_comp_zero_trim_air_zero_adjust_state(self):
+        """Цель функции в сбросе автоподстройки zero trim, затем она очищает временные значения DID 0x0012/0x0013/0x0018/0x002D."""
+        if self._calibration_temp_comp_zero_trim_air_zero_adjust_timeout_timer.isActive():
+            self._calibration_temp_comp_zero_trim_air_zero_adjust_timeout_timer.stop()
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_active = False
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_empty_period = None
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_full_period = None
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_level_x10 = None
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_level_samples = []
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_current_zero_trim = None
+
+    def _reset_calibration_temp_comp_zero_trim_verify_state(self):
+        """Цель функции в безопасном завершении автопроверки zero trim, затем она сбрасывает флаг и таймер ожидания DID 0x0018."""
+        if self._calibration_temp_comp_zero_trim_verify_timeout_timer.isActive():
+            self._calibration_temp_comp_zero_trim_verify_timeout_timer.stop()
+        self._calibration_temp_comp_zero_trim_verify_pending = False
 
     def _request_next_calibration_temp_comp_k0_air_zero_adjust_did(self) -> bool:
         """Цель функции в пошаговом чтении DID для автоподстройки K0, затем она отправляет только следующий необходимый запрос."""
@@ -2987,6 +3023,186 @@ class AppControllerCalibrationMixin(AppControllerContract):
             return
 
         self._try_apply_calibration_temp_comp_k0_air_zero_adjust()
+
+    def _request_next_calibration_temp_comp_zero_trim_air_zero_adjust_did(self) -> bool:
+        """Цель функции в пошаговом чтении DID для автоподстройки zero trim, затем она отправляет только следующий необходимый запрос."""
+        if not bool(self._calibration_temp_comp_zero_trim_air_zero_adjust_active):
+            return False
+
+        next_var = None
+        required_samples = max(1, int(self._calibration_temp_comp_zero_trim_air_zero_adjust_required_samples))
+        level_samples = list(self._calibration_temp_comp_zero_trim_air_zero_adjust_level_samples)
+        if self._calibration_temp_comp_zero_trim_air_zero_adjust_empty_period is None:
+            next_var = UdsData.empty_fuel_tank
+        elif self._calibration_temp_comp_zero_trim_air_zero_adjust_full_period is None:
+            next_var = UdsData.full_fuel_tank
+        elif len(level_samples) < required_samples:
+            next_var = UdsData.raw_fuel_level
+        elif self._calibration_temp_comp_zero_trim_air_zero_adjust_current_zero_trim is None:
+            next_var = UdsData.fuel_zero_trim_count
+        else:
+            return False
+
+        self._configure_calibration_uds_services()
+        sent = bool(
+            self._calibration_read_service.read_data_by_identifier(
+                self._build_calibration_tx_identifier(),
+                next_var,
+            )
+        )
+        if not sent:
+            return False
+
+        self._calibration_temp_comp_zero_trim_air_zero_adjust_timeout_timer.start(
+            max(300, int(self._calibration_temp_comp_zero_trim_air_zero_adjust_timeout_ms))
+        )
+        return True
+
+    def _continue_calibration_temp_comp_zero_trim_air_zero_adjust(self):
+        """Цель функции в продолжении автоподстройки zero trim после ответа DID, затем она запрашивает следующий DID или завершает расчет."""
+        if not bool(self._calibration_temp_comp_zero_trim_air_zero_adjust_active):
+            return
+
+        if self._calibration_temp_comp_zero_trim_air_zero_adjust_timeout_timer.isActive():
+            self._calibration_temp_comp_zero_trim_air_zero_adjust_timeout_timer.stop()
+
+        required_samples = max(1, int(self._calibration_temp_comp_zero_trim_air_zero_adjust_required_samples))
+        sample_count = len(self._calibration_temp_comp_zero_trim_air_zero_adjust_level_samples)
+        missing_data = (
+            self._calibration_temp_comp_zero_trim_air_zero_adjust_empty_period is None
+            or self._calibration_temp_comp_zero_trim_air_zero_adjust_full_period is None
+            or sample_count < required_samples
+            or self._calibration_temp_comp_zero_trim_air_zero_adjust_current_zero_trim is None
+        )
+        if missing_data:
+            if self._request_next_calibration_temp_comp_zero_trim_air_zero_adjust_did():
+                return
+            self._reset_calibration_temp_comp_zero_trim_air_zero_adjust_state()
+            self._set_calibration_temp_comp_operation_status(
+                "Автоподстройка zero trim остановлена: не удалось отправить следующий DID-запрос.",
+                busy=False,
+                progress_percent=100,
+                determinate=True,
+            )
+            return
+
+        self._try_apply_calibration_temp_comp_zero_trim_air_zero_adjust()
+
+    def _on_calibration_temp_comp_zero_trim_air_zero_adjust_timeout(self):
+        """Цель функции в защите от зависания автоподстройки zero trim, затем она завершает операцию по таймауту шага чтения DID."""
+        if not bool(self._calibration_temp_comp_zero_trim_air_zero_adjust_active):
+            return
+        self._reset_calibration_temp_comp_zero_trim_air_zero_adjust_state()
+        self._set_calibration_temp_comp_operation_status(
+            "Автоподстройка zero trim остановлена по таймауту чтения DID. Повторите операцию.",
+            busy=False,
+            progress_percent=100,
+            determinate=True,
+        )
+        self._append_log(
+            "Калибровка: автоподстройка zero trim остановлена по таймауту (ожидание DID 0x0012/0x0013/0x0018/0x002D).",
+            RowColor.red,
+        )
+
+    def _try_apply_calibration_temp_comp_zero_trim_air_zero_adjust(self):
+        """Цель функции в завершении автоподстройки zero trim, затем она вычисляет значение по фактическому уровню DID 0x0018 и отправляет DID 0x002D."""
+        if not bool(self._calibration_temp_comp_zero_trim_air_zero_adjust_active):
+            return
+
+        empty_period = self._calibration_temp_comp_zero_trim_air_zero_adjust_empty_period
+        full_period = self._calibration_temp_comp_zero_trim_air_zero_adjust_full_period
+        level_samples = list(self._calibration_temp_comp_zero_trim_air_zero_adjust_level_samples)
+        current_zero_trim = self._calibration_temp_comp_zero_trim_air_zero_adjust_current_zero_trim
+        if (
+            empty_period is None
+            or full_period is None
+            or len(level_samples) <= 0
+            or current_zero_trim is None
+        ):
+            return
+
+        current_level_x10 = int(round(sum(level_samples) / float(len(level_samples))))
+        sample_spread_x10 = int(max(level_samples) - min(level_samples))
+        stability_threshold_x10 = max(0, int(self._calibration_temp_comp_zero_trim_air_zero_adjust_stability_threshold_x10))
+        if sample_spread_x10 > stability_threshold_x10:
+            self._reset_calibration_temp_comp_zero_trim_air_zero_adjust_state()
+            self._set_calibration_temp_comp_operation_status(
+                (
+                    "Автоподстройка zero trim остановлена: сигнал уровня нестабилен, "
+                    f"разброс {float(sample_spread_x10) / 10.0:.1f}% выше порога {float(stability_threshold_x10) / 10.0:.1f}%."
+                ),
+                busy=False,
+                progress_percent=100,
+                determinate=True,
+            )
+            self._append_log(
+                (
+                    "Калибровка: автоподстройка zero trim прервана из-за нестабильного уровня "
+                    f"(n={len(level_samples)}, разброс={float(sample_spread_x10) / 10.0:.1f}%)."
+                ),
+                RowColor.yellow,
+            )
+            return
+
+        span = int(full_period) - int(empty_period)
+        if span <= 0:
+            self._reset_calibration_temp_comp_zero_trim_air_zero_adjust_state()
+            self._set_calibration_temp_comp_operation_status(
+                "Автоподстройка zero trim остановлена: некорректные границы 0%/100% (DID 0x0012/0x0013).",
+                busy=False,
+                progress_percent=100,
+                determinate=True,
+            )
+            return
+
+        current_zero_trim_int = int(current_zero_trim)
+        normalized_level_x10 = max(-1000, min(1000, int(current_level_x10)))
+        delta_zero_trim = self._c_trunc_div((-int(normalized_level_x10)) * int(span), 1000)
+        target_zero_trim = self._saturate_int16(current_zero_trim_int + int(delta_zero_trim))
+        residual_x10 = int(normalized_level_x10) + self._c_trunc_div(int(delta_zero_trim) * 1000, int(span))
+        self._calibration_temp_comp_zero_trim_count_recommended = int(target_zero_trim)
+        self._calibration_temp_comp_zero_trim_count_delta = int(delta_zero_trim)
+        self._calibration_temp_comp_zero_trim_count_next = int(target_zero_trim)
+        self._calibration_temp_comp_zero_trim_residual_x10 = int(residual_x10)
+        self._reset_calibration_temp_comp_zero_trim_air_zero_adjust_state()
+        self._append_log(
+            (
+                "Калибровка: автоподстройка zero trim по фактическому уровню МК: "
+                f"level={int(normalized_level_x10) / 10.0:.1f}%, span={int(span)} count, "
+                f"dTrim={int(delta_zero_trim):+d}, TrimNew={int(current_zero_trim_int)}+{int(delta_zero_trim):+d}={int(target_zero_trim)}, "
+                f"остаток={float(residual_x10) / 10.0:+.1f}%, n={len(level_samples)}, разброс={float(sample_spread_x10) / 10.0:.1f}%."
+            ),
+            RowColor.blue,
+        )
+
+        pending_key = int(UdsData.fuel_zero_trim_count.pid)
+        pending_before = pending_key in self._calibration_write_verify_pending
+        self.writeCalibrationTempCompZeroTrim(str(int(target_zero_trim)))
+        pending_after = pending_key in self._calibration_write_verify_pending
+
+        if (not pending_before) and pending_after:
+            self._calibration_temp_comp_zero_trim_verify_pending = True
+            self._calibration_temp_comp_zero_trim_verify_timeout_timer.start(
+                max(500, int(self._calibration_temp_comp_zero_trim_verify_timeout_ms))
+            )
+            self._set_calibration_temp_comp_operation_status(
+                (
+                    "Автоподстройка zero trim: рассчитано и отправлено значение "
+                    f"{int(target_zero_trim)} в DID 0x002D. Ожидается автопроверка."
+                ),
+                busy=False,
+                progress_percent=100,
+                determinate=True,
+            )
+            return
+
+        self._reset_calibration_temp_comp_zero_trim_verify_state()
+        self._set_calibration_temp_comp_operation_status(
+            "Автоподстройка zero trim завершена с ошибкой: запись DID 0x002D не подтверждена.",
+            busy=False,
+            progress_percent=100,
+            determinate=True,
+        )
 
     def _on_calibration_temp_comp_k0_air_zero_adjust_timeout(self):
         """Цель функции в защите от зависания автоподстройки K0, затем она завершает операцию по таймауту шага чтения DID."""
@@ -3091,6 +3307,46 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 self._build_calibration_tx_identifier(),
                 UdsData.fuel_temp_comp_k0_count,
             )
+        )
+
+    def _request_calibration_temp_comp_zero_trim_read(self) -> bool:
+        """Цель функции в чтении текущего zero trim через UDS, затем она отправляет запрос DID 0x002D в выбранный узел."""
+        if not self._can.is_connect or not self._can.is_trace:
+            return False
+        self._configure_calibration_uds_services()
+        return bool(
+            self._calibration_read_service.read_data_by_identifier(
+                self._build_calibration_tx_identifier(),
+                UdsData.fuel_zero_trim_count,
+            )
+        )
+
+    def _request_calibration_temp_comp_raw_level_read(self) -> bool:
+        """Цель функции в чтении текущего сырого уровня для автопроверки, затем она отправляет запрос DID 0x0018 в выбранный узел."""
+        if not self._can.is_connect or not self._can.is_trace:
+            return False
+        self._configure_calibration_uds_services()
+        return bool(
+            self._calibration_read_service.read_data_by_identifier(
+                self._build_calibration_tx_identifier(),
+                UdsData.raw_fuel_level,
+            )
+        )
+
+    def _on_calibration_temp_comp_zero_trim_verify_timeout(self):
+        """Цель функции в завершении автопроверки zero trim по таймауту, затем она сообщает оператору о необходимости повторить проверку."""
+        if not bool(self._calibration_temp_comp_zero_trim_verify_pending):
+            return
+        self._reset_calibration_temp_comp_zero_trim_verify_state()
+        self._set_calibration_temp_comp_operation_status(
+            "Автопроверка zero trim не завершена: не получен DID 0x0018. Повторите чтение уровня.",
+            busy=False,
+            progress_percent=100,
+            determinate=True,
+        )
+        self._append_log(
+            "Калибровка: автопроверка zero trim остановлена по таймауту ожидания DID 0x0018.",
+            RowColor.yellow,
         )
 
     def _request_calibration_temp_comp_advanced_read(self, field_key: str) -> bool:
@@ -3773,6 +4029,8 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 self._calibration_level_0_known = True
                 if bool(self._calibration_temp_comp_k0_air_zero_adjust_active):
                     self._calibration_temp_comp_k0_air_zero_adjust_empty_period = int(value)
+                if bool(self._calibration_temp_comp_zero_trim_air_zero_adjust_active):
+                    self._calibration_temp_comp_zero_trim_air_zero_adjust_empty_period = int(value)
                 changed = True
                 recompute_temp_comp = True
                 self._append_log(f"Калибровка: считан уровень 0% = {value}.", RowColor.green)
@@ -3781,6 +4039,8 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 self._calibration_level_100_known = True
                 if bool(self._calibration_temp_comp_k0_air_zero_adjust_active):
                     self._calibration_temp_comp_k0_air_zero_adjust_full_period = int(value)
+                if bool(self._calibration_temp_comp_zero_trim_air_zero_adjust_active):
+                    self._calibration_temp_comp_zero_trim_air_zero_adjust_full_period = int(value)
                 changed = True
                 recompute_temp_comp = True
                 self._append_log(f"Калибровка: считан уровень 100% = {value}.", RowColor.green)
@@ -3790,6 +4050,58 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 value = int(signed_level)
                 if bool(self._calibration_temp_comp_k0_air_zero_adjust_active):
                     self._calibration_temp_comp_k0_air_zero_adjust_level_x10 = int(signed_level)
+                if bool(self._calibration_temp_comp_zero_trim_air_zero_adjust_active):
+                    self._calibration_temp_comp_zero_trim_air_zero_adjust_level_x10 = int(signed_level)
+                    samples = list(self._calibration_temp_comp_zero_trim_air_zero_adjust_level_samples)
+                    samples.append(int(signed_level))
+                    max_samples = max(1, int(self._calibration_temp_comp_zero_trim_air_zero_adjust_required_samples))
+                    if len(samples) > max_samples:
+                        samples = samples[-max_samples:]
+                    self._calibration_temp_comp_zero_trim_air_zero_adjust_level_samples = list(samples)
+                if bool(self._calibration_temp_comp_zero_trim_verify_pending):
+                    self._reset_calibration_temp_comp_zero_trim_verify_state()
+                    self._calibration_temp_comp_zero_trim_residual_x10 = int(signed_level)
+                    abs_level_x10 = abs(int(signed_level))
+                    tolerance_x10 = max(0, int(self._calibration_temp_comp_zero_trim_verify_tolerance_x10))
+                    repeat_threshold_x10 = max(
+                        tolerance_x10,
+                        int(self._calibration_temp_comp_zero_trim_verify_repeat_threshold_x10),
+                    )
+                    residual_text = f"{float(int(signed_level)) / 10.0:+.1f}%"
+                    if abs_level_x10 <= tolerance_x10:
+                        self._set_calibration_temp_comp_operation_status(
+                            f"Автопроверка zero trim: успех, остаток {residual_text}.",
+                            busy=False,
+                            progress_percent=100,
+                            determinate=True,
+                        )
+                        self._append_log(
+                            f"Калибровка: автопроверка zero trim успешна, остаток уровня {residual_text}.",
+                            RowColor.green,
+                        )
+                    elif abs_level_x10 <= repeat_threshold_x10:
+                        self._set_calibration_temp_comp_operation_status(
+                            f"Автопроверка zero trim: остаток {residual_text} выше допуска, рекомендуется повторить подгонку.",
+                            busy=False,
+                            progress_percent=100,
+                            determinate=True,
+                        )
+                        self._append_log(
+                            f"Калибровка: автопроверка zero trim дала остаток {residual_text}, рекомендуется повторить подгонку.",
+                            RowColor.yellow,
+                        )
+                    else:
+                        self._set_calibration_temp_comp_operation_status(
+                            f"Автопроверка zero trim: остаток {residual_text} слишком большой, проверьте механику/датчик.",
+                            busy=False,
+                            progress_percent=100,
+                            determinate=True,
+                        )
+                        self._append_log(
+                            f"Калибровка: автопроверка zero trim выявила большой остаток {residual_text} — требуется проверка механики/датчика.",
+                            RowColor.red,
+                        )
+                    recompute_temp_comp = True
             elif did == int(UdsData.raw_temperature.pid):
                 bits = max(8, int(UdsData.raw_temperature.size) * 8)
                 signed_temperature = self._decode_signed_value(raw_value, bits)
@@ -3822,6 +4134,19 @@ class AppControllerCalibrationMixin(AppControllerContract):
                     self._calibration_temp_comp_adv_read_recompute_pending = True
                 else:
                     recompute_temp_comp = True
+            elif did == int(UdsData.fuel_zero_trim_count.pid):
+                bits = max(8, int(UdsData.fuel_zero_trim_count.size) * 8)
+                signed_zero_trim = self._decode_signed_value(raw_value, bits)
+                value = int(signed_zero_trim)
+                if self._calibration_temp_comp_zero_trim_count_current != signed_zero_trim:
+                    self._calibration_temp_comp_zero_trim_count_current = int(signed_zero_trim)
+                    self._append_log(
+                        f"Калибровка: считана коррекция zero trim = {int(signed_zero_trim)}.",
+                        RowColor.green,
+                    )
+                if bool(self._calibration_temp_comp_zero_trim_air_zero_adjust_active):
+                    self._calibration_temp_comp_zero_trim_air_zero_adjust_current_zero_trim = int(signed_zero_trim)
+                recompute_temp_comp = True
             else:
                 advanced_field = self._temp_comp_advanced_field_by_did(did)
                 if advanced_field is not None:
@@ -3940,8 +4265,23 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 self._recompute_calibration_wizard_state()
                 self._continue_calibration_temp_comp_recommendation_apply_queue()
 
-            if bool(self._calibration_temp_comp_k0_air_zero_adjust_active):
+            k0_air_zero_adjust_dids = {
+                int(UdsData.empty_fuel_tank.pid),
+                int(UdsData.full_fuel_tank.pid),
+                int(UdsData.raw_fuel_level.pid),
+                int(UdsData.fuel_temp_comp_k0_count.pid),
+            }
+            zero_trim_air_zero_adjust_dids = {
+                int(UdsData.empty_fuel_tank.pid),
+                int(UdsData.full_fuel_tank.pid),
+                int(UdsData.raw_fuel_level.pid),
+                int(UdsData.fuel_zero_trim_count.pid),
+            }
+
+            if bool(self._calibration_temp_comp_k0_air_zero_adjust_active) and did in k0_air_zero_adjust_dids:
                 self._continue_calibration_temp_comp_k0_air_zero_adjust()
+            if bool(self._calibration_temp_comp_zero_trim_air_zero_adjust_active) and did in zero_trim_air_zero_adjust_dids:
+                self._continue_calibration_temp_comp_zero_trim_air_zero_adjust()
 
             if changed:
                 self.calibrationValuesChanged.emit()
@@ -3956,15 +4296,39 @@ class AppControllerCalibrationMixin(AppControllerContract):
             if did == int(UdsData.empty_fuel_tank.pid):
                 self._append_log("Калибровка: уровень 0% успешно сохранен.", RowColor.green)
                 self.readCalibrationLevel0()
+                self._append_log(
+                    "Калибровка: после изменения 0% рекомендуется выполнить эксплуатационную подгонку zero trim.",
+                    RowColor.yellow,
+                )
             elif did == int(UdsData.full_fuel_tank.pid):
                 self._append_log("Калибровка: уровень 100% успешно сохранен.", RowColor.green)
                 self.readCalibrationLevel100()
+                self._append_log(
+                    "Калибровка: после изменения 100% рекомендуется выполнить эксплуатационную подгонку zero trim.",
+                    RowColor.yellow,
+                )
             elif did == int(UdsData.fuel_temp_comp_k1_x100.pid):
                 self._append_log("Калибровка: коэффициент K1 успешно сохранен.", RowColor.green)
                 self._request_calibration_temp_comp_k1_read()
             elif did == int(UdsData.fuel_temp_comp_k0_count.pid):
                 self._append_log("Калибровка: коэффициент K0 успешно сохранен.", RowColor.green)
                 self._request_calibration_temp_comp_k0_read()
+            elif did == int(UdsData.fuel_zero_trim_count.pid):
+                self._append_log("Калибровка: коррекция zero trim успешно сохранена.", RowColor.green)
+                self._request_calibration_temp_comp_zero_trim_read()
+                if bool(self._calibration_temp_comp_zero_trim_verify_pending):
+                    if not self._request_calibration_temp_comp_raw_level_read():
+                        self._reset_calibration_temp_comp_zero_trim_verify_state()
+                        self._set_calibration_temp_comp_operation_status(
+                            "Автопроверка zero trim не запущена: не удалось отправить DID 0x0018.",
+                            busy=False,
+                            progress_percent=100,
+                            determinate=True,
+                        )
+                        self._append_log(
+                            "Калибровка: после записи zero trim не удалось запросить DID 0x0018 для автопроверки.",
+                            RowColor.yellow,
+                        )
             else:
                 advanced_field = self._temp_comp_advanced_field_by_did(did)
                 if advanced_field is not None:
@@ -4175,6 +4539,11 @@ class AppControllerCalibrationMixin(AppControllerContract):
     def _resolve_calibration_k0_write_value(cls, text, fallback_value: int | None) -> int:
         """Цель функции в удобном вводе K0 из UI, затем она парсит dec/hex и приводит значение к int16."""
         return cls._resolve_calibration_signed_int16_value(text, fallback_value, "K0", "0x001C")
+
+    @classmethod
+    def _resolve_calibration_zero_trim_write_value(cls, text, fallback_value: int | None) -> int:
+        """Цель функции в удобном вводе zero trim из UI, затем она парсит dec/hex и приводит значение к int16."""
+        return cls._resolve_calibration_signed_int16_value(text, fallback_value, "zero trim", "0x002D")
 
     @classmethod
     def _resolve_calibration_temp_comp_advanced_write_value(
