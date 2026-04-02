@@ -196,10 +196,13 @@ class AppController(
         self._calibration_temp_comp_zero_trim_count_next: int | None = None
         self._calibration_temp_comp_zero_trim_residual_x10: int | None = None
         self._calibration_temp_comp_zero_trim_last_report = "Операции подгонки еще не выполнялись."
+        self._calibration_temp_comp_zero_trim_csv_log_path = ""
         self._calibration_temp_comp_zero_trim_verify_pending = False
         self._calibration_temp_comp_zero_trim_verify_timeout_ms = 1500
         self._calibration_temp_comp_zero_trim_verify_tolerance_x10 = 10
         self._calibration_temp_comp_zero_trim_verify_repeat_threshold_x10 = 25
+        self._calibration_temp_comp_zero_trim_verify_retries_left = 0
+        self._calibration_temp_comp_zero_trim_verify_retries_max = 1
         self._calibration_temp_comp_period_slope_before: float | None = None
         self._calibration_temp_comp_period_slope_after: float | None = None
         self._calibration_temp_comp_level_slope_before: float | None = None

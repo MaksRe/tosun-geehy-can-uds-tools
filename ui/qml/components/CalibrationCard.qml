@@ -1005,8 +1005,8 @@ Item {
                         id: tempCompZeroTrimSpoiler
                         Layout.fillWidth: true
                         Layout.fillHeight: false
-                        title: "Эксплуатационная подгонка 0% (zero trim, DID 0x002D)"
-                        hintText: "Онлайн-подгонка по фактическому уровню МК без изменения K1/K0"
+                        title: "Эксплуатационная подгонка 0% (DID 0x002D)"
+                        hintText: "Онлайн-подгонка смещения 0% по фактическому уровню МК без изменения K1/K0"
                         cardColor: "#f8fafc"
                         cardBorder: "#dbeafe"
                         textMain: root.textMain
@@ -1033,7 +1033,7 @@ Item {
 
                                     Text {
                                         Layout.preferredWidth: 148
-                                        text: "Zero trim (0x002D)"
+                                        text: "Смещение 0% (0x002D)"
                                         color: root.textSoft
                                         font.pixelSize: 11
                                         font.family: "Bahnschrift"
@@ -1091,7 +1091,7 @@ Item {
 
                                     LabelValue {
                                         Layout.fillWidth: true
-                                        labelText: "Текущее trim"
+                                        labelText: "Текущее смещение"
                                         valueText: root.appController ? root.appController.calibrationTempCompCurrentZeroTrimText : "-"
                                         labelColor: root.textSoft
                                         valueColor: root.textMain
@@ -1137,6 +1137,15 @@ Item {
 
                                 Text {
                                     Layout.fillWidth: true
+                                    text: "Шаги: 1) Читать. 2) Подогнать смещение 0% к нулю. 3) Проверить остаток. 4) При необходимости повторить."
+                                    color: root.textSoft
+                                    font.pixelSize: 10
+                                    font.family: "Bahnschrift"
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
                                     text: root.appController ? root.appController.calibrationTempCompZeroTrimLastReportText : "Операции подгонки еще не выполнялись."
                                     color: root.textSoft
                                     font.pixelSize: 10
@@ -1160,7 +1169,7 @@ Item {
                                     FancyButton {
                                         Layout.preferredWidth: 206
                                         Layout.preferredHeight: 32
-                                        text: "Подогнать zero trim к 0%"
+                                        text: "Подогнать смещение 0% к нулю"
                                         tone: "#0f766e"
                                         toneHover: "#115e59"
                                         tonePressed: "#134e4a"

@@ -156,10 +156,13 @@ class AppControllerContract:
     _calibration_temp_comp_zero_trim_count_next: Any
     _calibration_temp_comp_zero_trim_residual_x10: Any
     _calibration_temp_comp_zero_trim_last_report: Any
+    _calibration_temp_comp_zero_trim_csv_log_path: Any
     _calibration_temp_comp_zero_trim_verify_pending: Any
     _calibration_temp_comp_zero_trim_verify_timeout_ms: Any
     _calibration_temp_comp_zero_trim_verify_tolerance_x10: Any
     _calibration_temp_comp_zero_trim_verify_repeat_threshold_x10: Any
+    _calibration_temp_comp_zero_trim_verify_retries_left: Any
+    _calibration_temp_comp_zero_trim_verify_retries_max: Any
     _calibration_temp_comp_zero_trim_verify_timeout_timer: Any
     _calibration_temp_comp_period_slope_before: Any
     _calibration_temp_comp_period_slope_after: Any

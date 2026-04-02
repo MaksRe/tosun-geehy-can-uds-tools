@@ -706,6 +706,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
         new_zero_trim: int | None,
         residual_x10: int | None,
         status_text: str,
+        write_csv: bool = False,
     ):
         """Цель функции в формировании краткой сводки подгонки zero trim, затем она сохраняет человеко-понятный отчет для оператора."""
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
@@ -727,11 +728,115 @@ class AppControllerCalibrationMixin(AppControllerContract):
             f"{timestamp} | SA 0x{node_sa:02X} | T={temperature_text} | "
             f"trim {old_text}->{new_text} | остаток {residual_text} | {status_value}."
         )
+        if bool(write_csv):
+            try:
+                csv_path = self._append_calibration_temp_comp_zero_trim_report_csv_row(
+                    timestamp_text=timestamp,
+                    node_sa=node_sa,
+                    temperature_text=temperature_text,
+                    old_zero_trim_text=old_text,
+                    new_zero_trim_text=new_text,
+                    residual_text=residual_text,
+                    status_text=status_value,
+                )
+                if str(self._calibration_temp_comp_zero_trim_csv_log_path) != str(csv_path):
+                    self._calibration_temp_comp_zero_trim_csv_log_path = str(csv_path)
+                    self._append_log(
+                        f"Калибровка: CSV-лог операций zero trim записывается в {csv_path}.",
+                        RowColor.blue,
+                    )
+            except Exception as exc:
+                self._append_log(
+                    f"Калибровка: не удалось записать CSV-лог zero trim: {str(exc)}",
+                    RowColor.yellow,
+                )
+
+    def _resolve_calibration_temp_comp_zero_trim_report_directory(self) -> Path:
+        """Цель функции в выборе каталога логов подгонки zero trim, затем она возвращает рабочий путь для CSV-отчета операций."""
+        session_dir = self._collector_session_dir
+        if session_dir is not None:
+            try:
+                resolved_session_dir = Path(session_dir).expanduser().resolve()
+                resolved_session_dir.mkdir(parents=True, exist_ok=True)
+                return resolved_session_dir
+            except Exception:
+                pass
+
+        try:
+            output_dir = Path(str(self._collector_output_directory)).expanduser().resolve()
+            output_dir.mkdir(parents=True, exist_ok=True)
+            return output_dir
+        except Exception:
+            fallback_dir = Path(self._project_root_directory) / "logs"
+            fallback_dir.mkdir(parents=True, exist_ok=True)
+            return fallback_dir
+
+    def _append_calibration_temp_comp_zero_trim_report_csv_row(
+        self,
+        *,
+        timestamp_text: str,
+        node_sa: int,
+        temperature_text: str,
+        old_zero_trim_text: str,
+        new_zero_trim_text: str,
+        residual_text: str,
+        status_text: str,
+    ) -> str:
+        """Цель функции в накоплении CSV-истории подгонки zero trim, затем она добавляет строку операции в UTF-8 файл сессии."""
+        report_dir = self._resolve_calibration_temp_comp_zero_trim_report_directory()
+        csv_path = report_dir / "calibration_zero_trim_session.csv"
+        need_header = not csv_path.exists()
+        with csv_path.open("a", newline="", encoding="utf-8") as file:
+            writer = csv.writer(file, delimiter=";")
+            if need_header:
+                writer.writerow(
+                    (
+                        "Время",
+                        "Узел",
+                        "Температура",
+                        "Zero trim старый",
+                        "Zero trim новый",
+                        "Остаток",
+                        "Статус",
+                    )
+                )
+            writer.writerow(
+                (
+                    str(timestamp_text),
+                    f"0x{int(node_sa) & 0xFF:02X}",
+                    str(temperature_text),
+                    str(old_zero_trim_text),
+                    str(new_zero_trim_text),
+                    str(residual_text),
+                    str(status_text),
+                )
+            )
+        return str(csv_path)
 
     @classmethod
     def _saturate_int16(cls, value: int) -> int:
         """Цель функции в защите от переполнения DID int16, затем она ограничивает значение диапазоном -32768..32767."""
         return max(cls._INT16_MIN, min(cls._INT16_MAX, int(value)))
+
+    @classmethod
+    def _calculate_zero_trim_adjustment(
+        cls,
+        *,
+        span_count: int,
+        current_level_x10: int,
+        current_zero_trim: int,
+    ) -> tuple[int, int, int]:
+        """Цель функции в вычислении коррекции 0%-смещения, затем она возвращает delta/target/residual в формате int16 + x10%."""
+        span = int(span_count)
+        if span <= 0:
+            raise ValueError("Некорректный span для расчета zero trim.")
+
+        normalized_level_x10 = max(-1000, min(1000, int(current_level_x10)))
+        delta_zero_trim = cls._c_trunc_div((-normalized_level_x10) * span, 1000)
+        target_zero_trim = cls._saturate_int16(int(current_zero_trim) + int(delta_zero_trim))
+        applied_delta = int(target_zero_trim) - int(current_zero_trim)
+        residual_x10 = int(normalized_level_x10) + cls._c_trunc_div(int(applied_delta) * 1000, span)
+        return int(delta_zero_trim), int(target_zero_trim), int(residual_x10)
 
     @classmethod
     def _apply_temperature_compensation_model(
@@ -2992,6 +3097,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
         if self._calibration_temp_comp_zero_trim_verify_timeout_timer.isActive():
             self._calibration_temp_comp_zero_trim_verify_timeout_timer.stop()
         self._calibration_temp_comp_zero_trim_verify_pending = False
+        self._calibration_temp_comp_zero_trim_verify_retries_left = 0
 
     def _request_next_calibration_temp_comp_k0_air_zero_adjust_did(self) -> bool:
         """Цель функции в пошаговом чтении DID для автоподстройки K0, затем она отправляет только следующий необходимый запрос."""
@@ -3185,10 +3291,12 @@ class AppControllerCalibrationMixin(AppControllerContract):
             return
 
         current_zero_trim_int = int(current_zero_trim)
+        delta_zero_trim, target_zero_trim, residual_x10 = self._calculate_zero_trim_adjustment(
+            span_count=int(span),
+            current_level_x10=int(current_level_x10),
+            current_zero_trim=current_zero_trim_int,
+        )
         normalized_level_x10 = max(-1000, min(1000, int(current_level_x10)))
-        delta_zero_trim = self._c_trunc_div((-int(normalized_level_x10)) * int(span), 1000)
-        target_zero_trim = self._saturate_int16(current_zero_trim_int + int(delta_zero_trim))
-        residual_x10 = int(normalized_level_x10) + self._c_trunc_div(int(delta_zero_trim) * 1000, int(span))
         self._calibration_temp_comp_zero_trim_count_recommended = int(target_zero_trim)
         self._calibration_temp_comp_zero_trim_count_delta = int(delta_zero_trim)
         self._calibration_temp_comp_zero_trim_count_next = int(target_zero_trim)
@@ -3216,6 +3324,10 @@ class AppControllerCalibrationMixin(AppControllerContract):
         pending_after = pending_key in self._calibration_write_verify_pending
 
         if (not pending_before) and pending_after:
+            self._calibration_temp_comp_zero_trim_verify_retries_left = max(
+                0,
+                int(self._calibration_temp_comp_zero_trim_verify_retries_max),
+            )
             self._calibration_temp_comp_zero_trim_verify_pending = True
             self._calibration_temp_comp_zero_trim_verify_timeout_timer.start(
                 max(500, int(self._calibration_temp_comp_zero_trim_verify_timeout_ms))
@@ -3372,11 +3484,34 @@ class AppControllerCalibrationMixin(AppControllerContract):
         """Цель функции в завершении автопроверки zero trim по таймауту, затем она сообщает оператору о необходимости повторить проверку."""
         if not bool(self._calibration_temp_comp_zero_trim_verify_pending):
             return
+        retries_left = max(0, int(self._calibration_temp_comp_zero_trim_verify_retries_left))
+        if retries_left > 0:
+            self._calibration_temp_comp_zero_trim_verify_retries_left = retries_left - 1
+            if self._request_calibration_temp_comp_raw_level_read():
+                self._calibration_temp_comp_zero_trim_verify_timeout_timer.start(
+                    max(500, int(self._calibration_temp_comp_zero_trim_verify_timeout_ms))
+                )
+                self._set_calibration_temp_comp_operation_status(
+                    (
+                        "Автопроверка zero trim: DID 0x0018 не получен, выполняется повторный запрос "
+                        f"(осталось попыток: {int(self._calibration_temp_comp_zero_trim_verify_retries_left)})."
+                    ),
+                    busy=True,
+                    progress_percent=90,
+                    determinate=True,
+                )
+                self._append_log(
+                    "Калибровка: автопроверка zero trim — повторный запрос DID 0x0018 после таймаута.",
+                    RowColor.yellow,
+                )
+                return
+
         self._set_calibration_temp_comp_zero_trim_last_report(
             old_zero_trim=self._calibration_temp_comp_zero_trim_count_current,
             new_zero_trim=self._calibration_temp_comp_zero_trim_count_next,
             residual_x10=self._calibration_temp_comp_zero_trim_residual_x10,
             status_text="таймаут автопроверки, нужен повтор",
+            write_csv=True,
         )
         self._reset_calibration_temp_comp_zero_trim_verify_state()
         self._set_calibration_temp_comp_operation_status(
@@ -4115,6 +4250,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
                             new_zero_trim=self._calibration_temp_comp_zero_trim_count_next,
                             residual_x10=int(signed_level),
                             status_text="успех",
+                            write_csv=True,
                         )
                         self._set_calibration_temp_comp_operation_status(
                             f"Автопроверка zero trim: успех, остаток {residual_text}.",
@@ -4132,6 +4268,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
                             new_zero_trim=self._calibration_temp_comp_zero_trim_count_next,
                             residual_x10=int(signed_level),
                             status_text="нужен повтор",
+                            write_csv=True,
                         )
                         self._set_calibration_temp_comp_operation_status(
                             f"Автопроверка zero trim: остаток {residual_text} выше допуска, рекомендуется повторить подгонку.",
@@ -4149,6 +4286,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
                             new_zero_trim=self._calibration_temp_comp_zero_trim_count_next,
                             residual_x10=int(signed_level),
                             status_text="подозрение на механику/датчик",
+                            write_csv=True,
                         )
                         self._set_calibration_temp_comp_operation_status(
                             f"Автопроверка zero trim: остаток {residual_text} слишком большой, проверьте механику/датчик.",
