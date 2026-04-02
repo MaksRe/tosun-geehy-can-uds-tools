@@ -155,6 +155,7 @@ class AppControllerContract:
     _calibration_temp_comp_zero_trim_count_delta: Any
     _calibration_temp_comp_zero_trim_count_next: Any
     _calibration_temp_comp_zero_trim_residual_x10: Any
+    _calibration_temp_comp_zero_trim_last_report: Any
     _calibration_temp_comp_zero_trim_verify_pending: Any
     _calibration_temp_comp_zero_trim_verify_timeout_ms: Any
     _calibration_temp_comp_zero_trim_verify_tolerance_x10: Any

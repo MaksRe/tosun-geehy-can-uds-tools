@@ -810,6 +810,13 @@ class AppControllerPropertiesMixin(AppControllerContract):
             return "не рассчитан"
         return f"{float(value) / 10.0:+.1f} %"
 
+    @Property(str, notify=calibrationTempCompChanged)
+    def calibrationTempCompZeroTrimLastReportText(self):
+        value = str(self._calibration_temp_comp_zero_trim_last_report or "").strip()
+        if not value:
+            return "Операции подгонки еще не выполнялись."
+        return value
+
     @Property(bool, notify=calibrationTempCompChanged)
     def calibrationTempCompLinearPreviewEnabled(self):
         return bool(self._calibration_temp_comp_linear_preview_enabled)

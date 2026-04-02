@@ -810,6 +810,13 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         if not self._ensure_calibration_write_ready("автоподстройка zero trim к 0%"):
             return
 
+        if len(self._calibration_temp_comp_recommendation_apply_queue) > 0:
+            self.infoMessage.emit(
+                "Калибровка",
+                "Дождитесь завершения пакетной записи рекомендаций K1/K0 перед автоподгонкой zero trim.",
+            )
+            return
+
         if self._calibration_temp_comp_adv_read_active:
             self._stop_calibration_temp_comp_advanced_read_sequence()
             self._append_log(
@@ -1662,6 +1669,13 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         if not self._ensure_calibration_write_ready("запись рекомендуемых параметров компенсации"):
             return
 
+        if bool(self._calibration_temp_comp_zero_trim_air_zero_adjust_active) or bool(self._calibration_temp_comp_zero_trim_verify_pending):
+            self.infoMessage.emit(
+                "Калибровка",
+                "Дождитесь завершения автоподстройки/автопроверки zero trim перед записью рекомендаций K1/K0.",
+            )
+            return
+
         if self._calibration_temp_comp_adv_read_active:
             self._stop_calibration_temp_comp_advanced_read_sequence()
             self._append_log(
@@ -1709,6 +1723,10 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
                 f"для текущего режима {self._temp_comp_mode_text(current_mode)} "
                 f"({', '.join(steps)})."
             ),
+            RowColor.blue,
+        )
+        self._append_log(
+            "Калибровка: пакет рекомендаций изменяет только K1/K0 и DID 0x001D..0x002C. Zero trim (0x002D) выполняется отдельной эксплуатационной подгонкой.",
             RowColor.blue,
         )
         self._continue_calibration_temp_comp_recommendation_apply_queue()

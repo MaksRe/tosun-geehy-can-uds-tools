@@ -699,6 +699,35 @@ class AppControllerCalibrationMixin(AppControllerContract):
             return -quotient
         return quotient
 
+    def _set_calibration_temp_comp_zero_trim_last_report(
+        self,
+        *,
+        old_zero_trim: int | None,
+        new_zero_trim: int | None,
+        residual_x10: int | None,
+        status_text: str,
+    ):
+        """Цель функции в формировании краткой сводки подгонки zero trim, затем она сохраняет человеко-понятный отчет для оператора."""
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        node_sa = int(self._resolve_calibration_target_sa()) & 0xFF
+        temperature_x10 = self._calibration_temp_comp_last_temperature_x10
+        if temperature_x10 is None:
+            temperature_text = "н/д"
+        else:
+            temperature_text = f"{float(int(temperature_x10)) / 10.0:+.1f}°C"
+
+        old_text = "н/д" if old_zero_trim is None else str(int(old_zero_trim))
+        new_text = "н/д" if new_zero_trim is None else str(int(new_zero_trim))
+        residual_text = "н/д" if residual_x10 is None else f"{float(int(residual_x10)) / 10.0:+.1f}%"
+        status_value = str(status_text or "").strip()
+        if not status_value:
+            status_value = "выполнено"
+
+        self._calibration_temp_comp_zero_trim_last_report = (
+            f"{timestamp} | SA 0x{node_sa:02X} | T={temperature_text} | "
+            f"trim {old_text}->{new_text} | остаток {residual_text} | {status_value}."
+        )
+
     @classmethod
     def _saturate_int16(cls, value: int) -> int:
         """Цель функции в защите от переполнения DID int16, затем она ограничивает значение диапазоном -32768..32767."""
@@ -3164,6 +3193,12 @@ class AppControllerCalibrationMixin(AppControllerContract):
         self._calibration_temp_comp_zero_trim_count_delta = int(delta_zero_trim)
         self._calibration_temp_comp_zero_trim_count_next = int(target_zero_trim)
         self._calibration_temp_comp_zero_trim_residual_x10 = int(residual_x10)
+        self._set_calibration_temp_comp_zero_trim_last_report(
+            old_zero_trim=int(current_zero_trim_int),
+            new_zero_trim=int(target_zero_trim),
+            residual_x10=int(residual_x10),
+            status_text="расчет выполнен, запись отправлена",
+        )
         self._reset_calibration_temp_comp_zero_trim_air_zero_adjust_state()
         self._append_log(
             (
@@ -3337,6 +3372,12 @@ class AppControllerCalibrationMixin(AppControllerContract):
         """Цель функции в завершении автопроверки zero trim по таймауту, затем она сообщает оператору о необходимости повторить проверку."""
         if not bool(self._calibration_temp_comp_zero_trim_verify_pending):
             return
+        self._set_calibration_temp_comp_zero_trim_last_report(
+            old_zero_trim=self._calibration_temp_comp_zero_trim_count_current,
+            new_zero_trim=self._calibration_temp_comp_zero_trim_count_next,
+            residual_x10=self._calibration_temp_comp_zero_trim_residual_x10,
+            status_text="таймаут автопроверки, нужен повтор",
+        )
         self._reset_calibration_temp_comp_zero_trim_verify_state()
         self._set_calibration_temp_comp_operation_status(
             "Автопроверка zero trim не завершена: не получен DID 0x0018. Повторите чтение уровня.",
@@ -4069,6 +4110,12 @@ class AppControllerCalibrationMixin(AppControllerContract):
                     )
                     residual_text = f"{float(int(signed_level)) / 10.0:+.1f}%"
                     if abs_level_x10 <= tolerance_x10:
+                        self._set_calibration_temp_comp_zero_trim_last_report(
+                            old_zero_trim=self._calibration_temp_comp_zero_trim_count_current,
+                            new_zero_trim=self._calibration_temp_comp_zero_trim_count_next,
+                            residual_x10=int(signed_level),
+                            status_text="успех",
+                        )
                         self._set_calibration_temp_comp_operation_status(
                             f"Автопроверка zero trim: успех, остаток {residual_text}.",
                             busy=False,
@@ -4080,6 +4127,12 @@ class AppControllerCalibrationMixin(AppControllerContract):
                             RowColor.green,
                         )
                     elif abs_level_x10 <= repeat_threshold_x10:
+                        self._set_calibration_temp_comp_zero_trim_last_report(
+                            old_zero_trim=self._calibration_temp_comp_zero_trim_count_current,
+                            new_zero_trim=self._calibration_temp_comp_zero_trim_count_next,
+                            residual_x10=int(signed_level),
+                            status_text="нужен повтор",
+                        )
                         self._set_calibration_temp_comp_operation_status(
                             f"Автопроверка zero trim: остаток {residual_text} выше допуска, рекомендуется повторить подгонку.",
                             busy=False,
@@ -4091,6 +4144,12 @@ class AppControllerCalibrationMixin(AppControllerContract):
                             RowColor.yellow,
                         )
                     else:
+                        self._set_calibration_temp_comp_zero_trim_last_report(
+                            old_zero_trim=self._calibration_temp_comp_zero_trim_count_current,
+                            new_zero_trim=self._calibration_temp_comp_zero_trim_count_next,
+                            residual_x10=int(signed_level),
+                            status_text="подозрение на механику/датчик",
+                        )
                         self._set_calibration_temp_comp_operation_status(
                             f"Автопроверка zero trim: остаток {residual_text} слишком большой, проверьте механику/датчик.",
                             busy=False,

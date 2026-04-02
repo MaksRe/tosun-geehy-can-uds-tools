@@ -195,6 +195,7 @@ class AppController(
         self._calibration_temp_comp_zero_trim_count_delta: int | None = None
         self._calibration_temp_comp_zero_trim_count_next: int | None = None
         self._calibration_temp_comp_zero_trim_residual_x10: int | None = None
+        self._calibration_temp_comp_zero_trim_last_report = "Операции подгонки еще не выполнялись."
         self._calibration_temp_comp_zero_trim_verify_pending = False
         self._calibration_temp_comp_zero_trim_verify_timeout_ms = 1500
         self._calibration_temp_comp_zero_trim_verify_tolerance_x10 = 10
