@@ -198,6 +198,7 @@ Item {
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: false
+            Layout.alignment: Qt.AlignTop
             Layout.preferredHeight: implicitHeight
             Layout.maximumHeight: implicitHeight
             radius: 10
@@ -309,6 +310,7 @@ Item {
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: false
+            Layout.alignment: Qt.AlignTop
             Layout.preferredHeight: implicitHeight
             Layout.maximumHeight: implicitHeight
             radius: 10
@@ -375,6 +377,7 @@ Item {
             id: levelCalibrationSpoiler
             Layout.fillWidth: true
             Layout.fillHeight: false
+            Layout.alignment: Qt.AlignTop
             Layout.preferredHeight: implicitHeight
             Layout.maximumHeight: implicitHeight
             title: "Калибровка уровней 0% и 100%"
@@ -714,7 +717,10 @@ Item {
             id: tempCompSpoiler
             Layout.fillWidth: true
             Layout.fillHeight: expanded
+            Layout.alignment: Qt.AlignTop
             Layout.minimumHeight: 44
+            Layout.preferredHeight: expanded ? -1 : implicitHeight
+            Layout.maximumHeight: expanded ? 16777215 : implicitHeight
             contentFillAvailableHeight: true
             title: "Температурная компенсация"
             hintText: "Офлайн-анализ CSV/XLSX и настройка K1/K0 + segmented heat/cool"
@@ -992,15 +998,6 @@ Item {
                         }
                     }
 
-                    Text {
-                        Layout.fillWidth: true
-                        text: "Базовый поток: загрузить CSV/XLSX -> проверить график -> записать рекомендации. Ручные DID доступны в расширенном блоке."
-                        color: root.textSoft
-                        font.pixelSize: 10
-                        font.family: "Bahnschrift"
-                        wrapMode: Text.WordWrap
-                    }
-
                     SpoilerSection {
                         id: tempCompZeroTrimSpoiler
                         Layout.fillWidth: true
@@ -1100,15 +1097,6 @@ Item {
 
                                     LabelValue {
                                         Layout.fillWidth: true
-                                        labelText: "Рекоменд."
-                                        valueText: root.appController ? root.appController.calibrationTempCompRecommendedZeroTrimText : "-"
-                                        labelColor: root.textSoft
-                                        valueColor: "#0f766e"
-                                        fontFamily: "Bahnschrift"
-                                    }
-
-                                    LabelValue {
-                                        Layout.fillWidth: true
                                         labelText: "Изменение"
                                         valueText: root.appController ? root.appController.calibrationTempCompDeltaZeroTrimText : "-"
                                         labelColor: root.textSoft
@@ -1135,22 +1123,39 @@ Item {
                                     fontFamily: "Bahnschrift"
                                 }
 
-                                Text {
+                                Rectangle {
                                     Layout.fillWidth: true
-                                    text: "Шаги: 1) Читать. 2) Подогнать смещение 0% к нулю. 3) Проверить остаток. 4) При необходимости повторить."
-                                    color: root.textSoft
-                                    font.pixelSize: 10
-                                    font.family: "Bahnschrift"
-                                    wrapMode: Text.WordWrap
-                                }
+                                    radius: 7
+                                    color: "#f8fafc"
+                                    border.color: "#d6e2ef"
+                                    implicitHeight: zeroTrimReportLayout.implicitHeight + 8
 
-                                Text {
-                                    Layout.fillWidth: true
-                                    text: root.appController ? root.appController.calibrationTempCompZeroTrimLastReportText : "Операции подгонки еще не выполнялись."
-                                    color: root.textSoft
-                                    font.pixelSize: 10
-                                    font.family: "Bahnschrift"
-                                    wrapMode: Text.WordWrap
+                                    ColumnLayout {
+                                        id: zeroTrimReportLayout
+                                        anchors.fill: parent
+                                        anchors.margins: 4
+                                        spacing: 2
+
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: "Последняя операция"
+                                            color: "#334155"
+                                            font.pixelSize: 10
+                                            font.bold: true
+                                            font.family: "Bahnschrift"
+                                        }
+
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: root.appController ? root.appController.calibrationTempCompZeroTrimLastReportText : "Операции подгонки еще не выполнялись."
+                                            color: root.textSoft
+                                            font.pixelSize: 10
+                                            font.family: "Bahnschrift"
+                                            wrapMode: Text.WordWrap
+                                            maximumLineCount: 3
+                                            elide: Text.ElideRight
+                                        }
+                                    }
                                 }
 
                                 RowLayout {

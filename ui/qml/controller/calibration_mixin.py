@@ -838,6 +838,23 @@ class AppControllerCalibrationMixin(AppControllerContract):
         residual_x10 = int(normalized_level_x10) + cls._c_trunc_div(int(applied_delta) * 1000, span)
         return int(delta_zero_trim), int(target_zero_trim), int(residual_x10)
 
+    @staticmethod
+    def _classify_zero_trim_verification_result(
+        *,
+        residual_x10: int,
+        tolerance_x10: int,
+        repeat_threshold_x10: int,
+    ) -> str:
+        """Цель функции в единой классификации автопроверки zero trim, затем она возвращает статус success/repeat/mechanics."""
+        abs_level_x10 = abs(int(residual_x10))
+        normalized_tolerance_x10 = max(0, int(tolerance_x10))
+        normalized_repeat_threshold_x10 = max(normalized_tolerance_x10, int(repeat_threshold_x10))
+        if abs_level_x10 <= normalized_tolerance_x10:
+            return "success"
+        if abs_level_x10 <= normalized_repeat_threshold_x10:
+            return "repeat"
+        return "mechanics"
+
     @classmethod
     def _apply_temperature_compensation_model(
         cls,
@@ -4237,14 +4254,18 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 if bool(self._calibration_temp_comp_zero_trim_verify_pending):
                     self._reset_calibration_temp_comp_zero_trim_verify_state()
                     self._calibration_temp_comp_zero_trim_residual_x10 = int(signed_level)
-                    abs_level_x10 = abs(int(signed_level))
                     tolerance_x10 = max(0, int(self._calibration_temp_comp_zero_trim_verify_tolerance_x10))
                     repeat_threshold_x10 = max(
                         tolerance_x10,
                         int(self._calibration_temp_comp_zero_trim_verify_repeat_threshold_x10),
                     )
                     residual_text = f"{float(int(signed_level)) / 10.0:+.1f}%"
-                    if abs_level_x10 <= tolerance_x10:
+                    verification_state = self._classify_zero_trim_verification_result(
+                        residual_x10=int(signed_level),
+                        tolerance_x10=int(tolerance_x10),
+                        repeat_threshold_x10=int(repeat_threshold_x10),
+                    )
+                    if verification_state == "success":
                         self._set_calibration_temp_comp_zero_trim_last_report(
                             old_zero_trim=self._calibration_temp_comp_zero_trim_count_current,
                             new_zero_trim=self._calibration_temp_comp_zero_trim_count_next,
@@ -4262,7 +4283,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
                             f"Калибровка: автопроверка zero trim успешна, остаток уровня {residual_text}.",
                             RowColor.green,
                         )
-                    elif abs_level_x10 <= repeat_threshold_x10:
+                    elif verification_state == "repeat":
                         self._set_calibration_temp_comp_zero_trim_last_report(
                             old_zero_trim=self._calibration_temp_comp_zero_trim_count_current,
                             new_zero_trim=self._calibration_temp_comp_zero_trim_count_next,
