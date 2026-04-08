@@ -65,6 +65,24 @@ class AppControllerCalibrationMixin(AppControllerContract):
         "k1_heat_seg4_x100",
         "k1_heat_seg5_x100",
     )
+    _TEMP_COMP_BASE_READ_FIELDS: tuple[dict[str, object], ...] = (
+        {
+            "key": "base_k1",
+            "var": UdsData.fuel_temp_comp_k1_x100,
+            "label": "Коэффициент K1",
+        },
+        {
+            "key": "base_k0",
+            "var": UdsData.fuel_temp_comp_k0_count,
+            "label": "Коэффициент K0",
+        },
+        {
+            "key": "base_zero_trim",
+            "var": UdsData.fuel_zero_trim_count,
+            "label": "Смещение 0% (zero trim)",
+        },
+    )
+    _TEMP_COMP_BASE_READ_KEYS = tuple(str(field.get("key", "")) for field in _TEMP_COMP_BASE_READ_FIELDS)
     _TEMP_COMP_ADVANCED_FIELDS = (
         {
             "key": "mode",
@@ -255,6 +273,17 @@ class AppControllerCalibrationMixin(AppControllerContract):
             if (int(field_var.pid) & 0xFFFF) == target_did:
                 return field
         return None
+
+    @classmethod
+    def _temp_comp_read_field_by_key(cls, key: str) -> dict[str, object] | None:
+        """Цель функции в поиске поля в общей карте чтения, затем она учитывает базовые DID и расширенные параметры."""
+        target_key = str(key or "").strip()
+        if not target_key:
+            return None
+        for field in cls._TEMP_COMP_BASE_READ_FIELDS:
+            if str(field.get("key", "")) == target_key:
+                return field
+        return cls._temp_comp_advanced_field_by_key(target_key)
 
     @classmethod
     def _temp_comp_mode_text(cls, raw_mode: int) -> str:
@@ -534,6 +563,33 @@ class AppControllerCalibrationMixin(AppControllerContract):
             self._calibration_active = False
             self.calibrationStateChanged.emit()
         self._append_log(message, RowColor.red)
+        self._recompute_calibration_wizard_state()
+
+    def _invalidate_calibration_session_after_nrc(self, message: str):
+        """Цель функции в сбросе локального состояния калибровки после потери сессии на МК, затем она переводит UI в безопасный режим до повторного запуска."""
+        self._reset_calibration_sequence_state()
+        self._stop_calibration_temp_comp_advanced_read_sequence()
+        self._reset_calibration_temp_comp_recommendation_apply_queue()
+        self._reset_calibration_temp_comp_k0_air_zero_adjust_state()
+        self._reset_calibration_temp_comp_zero_trim_air_zero_adjust_state()
+        self._reset_calibration_temp_comp_zero_trim_verify_state()
+        self._calibration_runtime_target_sa = None
+        self._calibration_waiting_session = False
+        self._calibration_session_ready = False
+        self._stop_calibration_poll_timer()
+        self._calibration_write_verify_pending = {}
+        self.calibrationVerificationChanged.emit()
+        self._set_calibration_service_access_state(
+            busy=False,
+            pending_action="",
+            unlocked=False,
+            target_sa=None,
+            status=message,
+        )
+        if self._calibration_active:
+            self._calibration_active = False
+            self.calibrationStateChanged.emit()
+        self._append_log(message, RowColor.yellow)
         self._recompute_calibration_wizard_state()
 
     def _finish_calibration_deactivation(self, message: str):
@@ -3543,11 +3599,11 @@ class AppControllerCalibrationMixin(AppControllerContract):
         )
 
     def _request_calibration_temp_comp_advanced_read(self, field_key: str) -> bool:
-        """Цель функции в чтении одного расширенного параметра, затем она отправляет DID по ключу поля."""
+        """Цель функции в чтении одного параметра компенсации, затем она отправляет DID по ключу поля."""
         if not self._can.is_connect or not self._can.is_trace:
             return False
 
-        field = self._temp_comp_advanced_field_by_key(field_key)
+        field = self._temp_comp_read_field_by_key(field_key)
         if field is None:
             return False
 
@@ -3687,7 +3743,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
         waiting_count = len(self._calibration_temp_comp_adv_read_queue) + (1 if inflight_key is not None else 0)
         waiting_text = f", в очереди: {int(waiting_count)}"
         if inflight_key is not None:
-            inflight_field = self._temp_comp_advanced_field_by_key(str(inflight_key))
+            inflight_field = self._temp_comp_read_field_by_key(str(inflight_key))
             if inflight_field is not None:
                 waiting_text += f", читается: {self._temp_comp_field_display_name(inflight_field)}"
         return f"{str(prefix).strip()} {success}/{total}{waiting_text}."
@@ -3746,7 +3802,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
             field_key = str(raw_key or "").strip()
             if not field_key or field_key in used_keys:
                 continue
-            if self._temp_comp_advanced_field_by_key(field_key) is None:
+            if self._temp_comp_read_field_by_key(field_key) is None:
                 continue
             used_keys.add(field_key)
             unique_keys.append(field_key)
@@ -3843,7 +3899,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
             return
 
         field_key = str(self._calibration_temp_comp_adv_read_queue.pop(0))
-        field = self._temp_comp_advanced_field_by_key(field_key)
+        field = self._temp_comp_read_field_by_key(field_key)
         if field is None:
             self._schedule_next_calibration_temp_comp_advanced_read(immediate=True)
             return
@@ -3877,7 +3933,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
         inflight_key = self._calibration_temp_comp_adv_read_inflight_key
         self._calibration_temp_comp_adv_read_inflight_key = None
         if inflight_key is not None:
-            field = self._temp_comp_advanced_field_by_key(inflight_key)
+            field = self._temp_comp_read_field_by_key(inflight_key)
             label = "параметра"
             if field is not None:
                 label = self._temp_comp_field_display_name(field)
@@ -3905,8 +3961,13 @@ class AppControllerCalibrationMixin(AppControllerContract):
             expected_mode=None,
         )
 
-    def _request_calibration_temp_comp_advanced_read_for_mode(self, mode_value: int) -> tuple[int, int]:
-        """Цель функции в запуске чтения параметров конкретного режима, затем она ограничивает очередь DID только нужными полями."""
+    def _request_calibration_temp_comp_advanced_read_for_mode(
+        self,
+        mode_value: int,
+        *,
+        include_base: bool = False,
+    ) -> tuple[int, int]:
+        """Цель функции в запуске чтения параметров режима, затем она собирает очередь DID и выполняет их строго последовательно."""
         normalized_mode = int(mode_value)
         if (
             normalized_mode < int(self._TEMP_COMP_MODE_SINGLE_LINEAR)
@@ -3918,12 +3979,57 @@ class AppControllerCalibrationMixin(AppControllerContract):
             normalized_mode,
             include_mode=True,
         )
+        if include_base:
+            field_keys = list(self._TEMP_COMP_BASE_READ_KEYS) + list(field_keys)
         self._calibration_temp_comp_adv_read_recompute_pending = False
         return self._start_calibration_temp_comp_advanced_read_sequence(
             field_keys,
             mode_aware=True,
             expected_mode=normalized_mode,
         )
+
+    def _try_complete_calibration_temp_comp_advanced_read_step(
+        self,
+        *,
+        did: int,
+        value: int,
+    ) -> bool:
+        """Цель функции в подтверждении шага очереди чтения, затем она сравнивает DID ответа с ожидаемым и запускает следующий запрос."""
+        if not self._calibration_temp_comp_adv_read_active:
+            return False
+
+        inflight_key = self._calibration_temp_comp_adv_read_inflight_key
+        if inflight_key is None:
+            return False
+
+        inflight_field = self._temp_comp_read_field_by_key(str(inflight_key))
+        if inflight_field is None:
+            return False
+
+        inflight_var = inflight_field.get("var")
+        if inflight_var is None:
+            return False
+
+        expected_did = int(inflight_var.pid) & 0xFFFF
+        if expected_did != (int(did) & 0xFFFF):
+            return False
+
+        if self._calibration_temp_comp_adv_read_timeout_timer.isActive():
+            self._calibration_temp_comp_adv_read_timeout_timer.stop()
+        self._calibration_temp_comp_adv_read_inflight_key = None
+        self._calibration_temp_comp_adv_read_success_count += 1
+        self._set_calibration_temp_comp_operation_status(
+            self._build_calibration_temp_comp_advanced_read_progress_text(
+                prefix="Чтение параметров из МК:",
+            ),
+            busy=True,
+            progress_percent=self._calibration_temp_comp_advanced_read_progress_percent(),
+            determinate=True,
+        )
+        if str(inflight_key) == "mode":
+            self._adapt_calibration_temp_comp_mode_aware_queue(int(value))
+        self._schedule_next_calibration_temp_comp_advanced_read(immediate=False)
+        return True
 
     def _reset_calibration_temp_comp_recommendation_apply_queue(self):
         """Цель функции в остановке цепочки записи рекомендаций, затем она очищает очередь шагов K1/K0."""
@@ -4084,11 +4190,20 @@ class AppControllerCalibrationMixin(AppControllerContract):
                         " Проверьте условия записи на стороне МК: "
                         "активная сессия, Security Access, состояние приложения/загрузчика и внутренние блокировки DID."
                     )
+                elif nrc in (0x7E, 0x7F):
+                    extra_hint = (
+                        " На МК неактивна требуемая диагностическая сессия. "
+                        "Повторно запустите калибровку (0x10/0x27) и повторите запись."
+                    )
 
                 self._append_log(
                     f"Калибровка: запись {did_label} отклонена, NRC 0x{nrc:02X} ({nrc_text}).{extra_hint}",
                     RowColor.red,
                 )
+                if nrc in (0x7E, 0x7F):
+                    self._invalidate_calibration_session_after_nrc(
+                        "Калибровка: сессия на МК завершена или недоступна. Перезапустите калибровку перед записью параметров."
+                    )
                 self._recompute_calibration_wizard_state()
                 return
 
@@ -4098,7 +4213,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
                     self._calibration_temp_comp_adv_read_inflight_key = None
                     if self._calibration_temp_comp_adv_read_timeout_timer.isActive():
                         self._calibration_temp_comp_adv_read_timeout_timer.stop()
-                    inflight_field = self._temp_comp_advanced_field_by_key(inflight_key)
+                    inflight_field = self._temp_comp_read_field_by_key(inflight_key)
                     if inflight_field is not None:
                         self._append_log(
                             (
@@ -4115,6 +4230,11 @@ class AppControllerCalibrationMixin(AppControllerContract):
                         progress_percent=self._calibration_temp_comp_advanced_read_progress_percent(),
                         determinate=True,
                     )
+                    if nrc in (0x7E, 0x7F):
+                        self._invalidate_calibration_session_after_nrc(
+                            "Калибровка: сессия на МК завершена или недоступна. Перезапустите калибровку перед чтением параметров."
+                        )
+                        return
                     self._schedule_next_calibration_temp_comp_advanced_read(immediate=False)
                     return
 
@@ -4127,6 +4247,10 @@ class AppControllerCalibrationMixin(AppControllerContract):
                     f"Калибровка: чтение параметра отклонено, NRC 0x{nrc:02X} ({nrc_text}).",
                     RowColor.red,
                 )
+                if nrc in (0x7E, 0x7F):
+                    self._invalidate_calibration_session_after_nrc(
+                        "Калибровка: сессия на МК завершена или недоступна. Перезапустите калибровку перед чтением параметров."
+                    )
                 return
 
         if payload[1] == 0x67 and len(payload) >= 3:
@@ -4356,15 +4480,24 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 bits = max(8, int(UdsData.fuel_zero_trim_count.size) * 8)
                 signed_zero_trim = self._decode_signed_value(raw_value, bits)
                 value = int(signed_zero_trim)
-                if self._calibration_temp_comp_zero_trim_count_current != signed_zero_trim:
-                    self._calibration_temp_comp_zero_trim_count_current = int(signed_zero_trim)
+                previous_zero_trim = self._calibration_temp_comp_zero_trim_count_current
+                self._calibration_temp_comp_zero_trim_count_current = int(signed_zero_trim)
+                if previous_zero_trim != signed_zero_trim:
                     self._append_log(
                         f"Калибровка: считана коррекция zero trim = {int(signed_zero_trim)}.",
                         RowColor.green,
                     )
+                else:
+                    self._append_log(
+                        f"Калибровка: подтверждено значение zero trim = {int(signed_zero_trim)} (без изменений).",
+                        RowColor.blue,
+                    )
                 if bool(self._calibration_temp_comp_zero_trim_air_zero_adjust_active):
                     self._calibration_temp_comp_zero_trim_air_zero_adjust_current_zero_trim = int(signed_zero_trim)
-                recompute_temp_comp = True
+                if self._calibration_temp_comp_adv_read_active:
+                    self._calibration_temp_comp_adv_read_recompute_pending = True
+                else:
+                    recompute_temp_comp = True
             else:
                 advanced_field = self._temp_comp_advanced_field_by_did(did)
                 if advanced_field is not None:
@@ -4390,31 +4523,16 @@ class AppControllerCalibrationMixin(AppControllerContract):
                             self._append_log(f"Калибровка: считан {label_text} = {formatted}.", RowColor.green)
                         else:
                             self._append_log(f"Калибровка: считан {label_text} = {int(value)}.", RowColor.green)
-                    if (
-                        self._calibration_temp_comp_adv_read_active
-                        and self._calibration_temp_comp_adv_read_inflight_key is not None
-                        and str(self._calibration_temp_comp_adv_read_inflight_key) == field_key
-                    ):
-                        if self._calibration_temp_comp_adv_read_timeout_timer.isActive():
-                            self._calibration_temp_comp_adv_read_timeout_timer.stop()
-                        self._calibration_temp_comp_adv_read_inflight_key = None
-                        self._calibration_temp_comp_adv_read_success_count += 1
-                        self._set_calibration_temp_comp_operation_status(
-                            self._build_calibration_temp_comp_advanced_read_progress_text(
-                                prefix="Чтение параметров из МК:",
-                            ),
-                            busy=True,
-                            progress_percent=self._calibration_temp_comp_advanced_read_progress_percent(),
-                            determinate=True,
-                        )
-                        if field_key == "mode":
-                            self._adapt_calibration_temp_comp_mode_aware_queue(int(value))
-                        self._schedule_next_calibration_temp_comp_advanced_read(immediate=False)
                     if advanced_value_changed:
                         if self._calibration_temp_comp_adv_read_active:
                             self._calibration_temp_comp_adv_read_recompute_pending = True
                         else:
                             recompute_temp_comp = True
+
+            self._try_complete_calibration_temp_comp_advanced_read_step(
+                did=int(did),
+                value=int(value),
+            )
 
             if self._calibration_sequence_waiting_action == "read_level_0" and did == int(UdsData.empty_fuel_tank.pid):
                 self._finish_calibration_sequence_wait("read_level_0")

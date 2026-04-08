@@ -35,6 +35,18 @@ class ServiceReadDataById:
             return (data[3] << 8) | data[2]
         return (data[2] << 8) | data[3]
 
+    @staticmethod
+    def _is_send_success(ret) -> bool:
+        """Цель функции в единообразной проверке результата send_async, затем она считает успехом любой неотрицательный код."""
+        if ret is None:
+            return False
+        if isinstance(ret, bool):
+            return bool(ret)
+        try:
+            return int(ret) >= 0
+        except Exception:
+            return bool(ret)
+
     def verify_answer_read_data(self, data) -> bool:
         sid = data[1]
         pid = self._parse_pid_field(data)
@@ -48,12 +60,7 @@ class ServiceReadDataById:
             8,
             [0x03, self._sid, pid_b0, pid_b1, 0xFF, 0xFF, 0xFF, 0xFF],
         )
-        if ret is None:
-            return False
-        try:
-            return int(ret) in (0, 5)
-        except Exception:
-            return bool(ret)
+        return self._is_send_success(ret)
 
     def read_data_by_identifier(self, tx_identifier: Optional[int], var: UdsVar) -> bool:
         self._pid_request = var.pid
@@ -63,12 +70,7 @@ class ServiceReadDataById:
             8,
             [0x03, self._sid, pid_b0, pid_b1, 0xFF, 0xFF, 0xFF, 0xFF],
         )
-        if ret is None:
-            return False
-        try:
-            return int(ret) in (0, 5)
-        except Exception:
-            return bool(ret)
+        return self._is_send_success(ret)
 
     def parse_pid_field(self, data):
         return self._parse_pid_field(data)

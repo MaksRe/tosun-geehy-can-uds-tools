@@ -24,6 +24,7 @@ Item {
     property bool tempCompShowRawSeries: true
     property bool tempCompShowCurrentSeries: true
     property bool tempCompShowRecommendedSeries: true
+    property bool tempCompZeroTrimForceRefresh: false
     property var tempCompFilteredSeries: []
     property int tempCompLastChartRevision: -1
     property string tempCompLastFilterMask: ""
@@ -1056,7 +1057,14 @@ Item {
                                         toneHover: "#115e59"
                                         tonePressed: "#134e4a"
                                         enabled: root.appController !== null
-                                        onClicked: if (root.appController) root.appController.readCalibrationTempCompZeroTrim()
+                                        onClicked: {
+                                            if (!root.appController) {
+                                                return
+                                            }
+                                            root.tempCompZeroTrimForceRefresh = true
+                                            tempCompZeroTrimField.focus = false
+                                            root.appController.readCalibrationTempCompZeroTrim()
+                                        }
                                     }
 
                                     FancyButton {
@@ -2418,9 +2426,10 @@ Item {
                 var currentK0 = root.appController.calibrationTempCompCurrentK0Text
                 tempCompK0Field.text = (currentK0 && currentK0 !== "-") ? currentK0 : ""
             }
-            if (!tempCompZeroTrimField.activeFocus) {
+            if (root.tempCompZeroTrimForceRefresh || !tempCompZeroTrimField.activeFocus) {
                 var currentZeroTrim = root.appController.calibrationTempCompCurrentZeroTrimText
                 tempCompZeroTrimField.text = (currentZeroTrim && currentZeroTrim !== "-") ? currentZeroTrim : ""
+                root.tempCompZeroTrimForceRefresh = false
             }
             root.syncLinearPreviewFields()
             root.rebuildFilteredTempCompSeries()

@@ -726,7 +726,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot()
     def readCalibrationTempCompZeroTrim(self):
-        """Цель функции в чтении коррекции zero trim, затем она отправляет запрос DID 0x002D."""
+        """Цель функции в чтении коррекции zero trim, затем она отправляет прямой запрос DID 0x002D."""
         if not self._can.is_connect:
             self.infoMessage.emit("Калибровка", "Сначала подключите CAN-адаптер.")
             return
@@ -871,7 +871,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot()
     def readCalibrationTempCompFromMcu(self):
-        """Цель функции в чтении параметров компенсации из МК, затем она запрашивает K1/K0/zero trim и только DID текущего режима mode."""
+        """Цель функции в чтении параметров компенсации из МК, затем она выполняет последовательный опрос K1/K0/zero trim и DID текущего режима."""
         if not self._can.is_connect:
             self.infoMessage.emit("Калибровка", "Сначала подключите CAN-адаптер.")
             self._set_calibration_temp_comp_operation_status(
@@ -901,38 +901,17 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         mode_known = self._calibration_temp_comp_advanced_values.get("mode") is not None
         mode_value = self._temp_comp_get_mode_from_values(self._calibration_temp_comp_advanced_values)
         mode_text = self._temp_comp_mode_text(mode_value)
-
-        k1_sent = self._request_calibration_temp_comp_k1_read()
-        k0_sent = self._request_calibration_temp_comp_k0_read()
-        zero_trim_sent = self._request_calibration_temp_comp_zero_trim_read()
-        queued_count, total_count = self._request_calibration_temp_comp_advanced_read_for_mode(mode_value)
-
-        if not k1_sent:
-            self._append_log("Калибровка: не удалось отправить чтение DID 0x001B (K1).", RowColor.red)
-        if not k0_sent:
-            self._append_log("Калибровка: не удалось отправить чтение DID 0x001C (K0).", RowColor.red)
-        if not zero_trim_sent:
-            self._append_log("Калибровка: не удалось отправить чтение DID 0x002D (zero trim).", RowColor.red)
-
+        queued_count, total_count = self._request_calibration_temp_comp_advanced_read_for_mode(
+            mode_value,
+            include_base=True,
+        )
         if total_count <= 0 or queued_count <= 0:
-            if not k1_sent and not k0_sent and not zero_trim_sent:
-                self.infoMessage.emit("Калибровка", "Не удалось отправить чтение параметров температурной компенсации.")
-                self._set_calibration_temp_comp_operation_status(
-                    "Чтение параметров из МК не запущено: очередь DID для режима не сформирована.",
-                    busy=False,
-                    progress_percent=0,
-                    determinate=False,
-                )
-                return
+            self.infoMessage.emit("Калибровка", "Не удалось отправить чтение параметров температурной компенсации.")
             self._set_calibration_temp_comp_operation_status(
-                "Чтение K1/K0/zero trim отправлено. Дополнительные DID режима не требуются.",
+                "Чтение параметров из МК не запущено: очередь DID не сформирована.",
                 busy=False,
-                progress_percent=100,
-                determinate=True,
-            )
-            self._append_log(
-                f"Калибровка: отправлено чтение K1/K0/zero trim. Для режима {mode_text} дополнительные DID не требуются.",
-                RowColor.blue,
+                progress_percent=0,
+                determinate=False,
             )
             return
 
@@ -945,13 +924,13 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._append_log(
             (
                 "Калибровка: запущено чтение параметров температурной компенсации по режиму "
-                f"{mode_text} ({queued_count} DID), дополнительно отправлены K1/K0/zero trim."
+                f"{mode_text} ({queued_count} DID, включая K1/K0/zero trim)."
             ),
             RowColor.blue,
         )
         self.infoMessage.emit(
             "Калибровка",
-            f"Запущено чтение K1/K0/zero trim и {queued_count} DID по режиму {mode_text}.",
+            f"Запущено последовательное чтение {queued_count} DID по режиму {mode_text}, включая K1/K0/zero trim.",
         )
 
     @Slot()

@@ -169,7 +169,7 @@ class AppController(
         self._calibration_temp_comp_adv_read_expected_mode: int | None = None
         self._calibration_temp_comp_adv_read_recompute_pending = False
         self._calibration_temp_comp_adv_read_timeout_ms = 1200
-        self._calibration_temp_comp_adv_read_delay_ms = 80
+        self._calibration_temp_comp_adv_read_delay_ms = 120
         self._calibration_temp_comp_recommendation_apply_queue: list[str] = []
         self._calibration_temp_comp_k0_air_zero_adjust_active = False
         self._calibration_temp_comp_k0_air_zero_adjust_empty_period: int | None = None
