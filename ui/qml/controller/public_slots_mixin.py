@@ -624,6 +624,32 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._append_log(f"Автосброс перед программированием: {state_text}", QColor("#0ea5e9"))
 
     @Slot(int)
+    def setSelectedProgrammingNodeIndex(self, index):
+        """Цель функции в выборе узла прошивки, затем она сразу настраивает UDS ID под этот SA."""
+        if self._programming_active or self._programming_batch_active:
+            self.infoMessage.emit("Программирование", "Нельзя менять целевой узел во время программирования.")
+            return
+
+        try:
+            parsed_index = int(index)
+        except (TypeError, ValueError):
+            return
+
+        if parsed_index < 0 or parsed_index >= len(self._programming_node_values):
+            return
+
+        self._selected_programming_node_index = parsed_index
+        target_sa = int(self._programming_node_values[parsed_index]) & 0xFF
+        self._apply_programming_target_sa(target_sa, "Настройки UDS обновлены после выбора узла.")
+        self.programmingNodeSelectionChanged.emit()
+
+    @Slot()
+    def refreshProgrammingNodeList(self):
+        """Цель функции в ручном обновлении списка узлов прошивки, затем она перечитывает накопленные CAN-кандидаты."""
+        self._refresh_programming_node_options()
+        self.infoMessage.emit("Программирование", "Список узлов обновлен по принятым CAN/J1939 кадрам.")
+
+    @Slot(int)
     def setTransferByteOrderIndex(self, index):
         try:
             parsed_index = int(index)
@@ -2696,22 +2722,89 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot()
     def startProgramming(self):
-        if self._programming_active:
+        if not self._validate_programming_start_conditions():
             return
+
+        target_sa = self._resolve_programming_selected_sa()
+        self._programming_batch_active = False
+        self._programming_batch_queue = []
+        self._programming_batch_total = 0
+        self._programming_batch_done = 0
+        self._programming_batch_status = "Запущено программирование одного выбранного узла."
+        self.programmingBatchChanged.emit()
+        self._start_programming_for_node(target_sa)
+
+    @Slot()
+    def startProgrammingAllNodes(self):
+        """Цель функции в запуске групповой прошивки, затем она программирует найденные узлы строго по одному."""
+        if not self._validate_programming_start_conditions():
+            return
+
+        nodes = self._detected_programming_node_values()
+        if len(nodes) == 0:
+            self.infoMessage.emit(
+                "Программирование",
+                "Нет найденных узлов для группового программирования. Запустите трассировку CAN и дождитесь RX кадров от узлов.",
+            )
+            return
+
+        self._programming_batch_active = True
+        self._programming_batch_queue = list(nodes)
+        self._programming_batch_total = len(nodes)
+        self._programming_batch_done = 0
+        self._programming_batch_status = f"Групповое программирование: подготовлено {len(nodes)} узл."
+        self.programmingBatchChanged.emit()
+        self._append_log(
+            "Групповое программирование: очередь узлов "
+            + ", ".join(f"0x{int(node) & 0xFF:02X}" for node in nodes),
+            RowColor.blue,
+        )
+        self._start_next_programming_batch_node()
+
+    def _validate_programming_start_conditions(self) -> bool:
+        """Цель функции в проверке безопасного старта прошивки, затем она блокирует конфликтующие операции."""
+        if self._programming_active or self._programming_batch_active:
+            self.infoMessage.emit("Программирование", "Программирование уже выполняется.")
+            return False
 
         if not self._can.is_connect:
             self.infoMessage.emit("Программирование", "Сначала подключите CAN-адаптер.")
-            return
+            return False
 
         if self._firmware_loading:
             self.infoMessage.emit("Программирование", "Дождитесь завершения загрузки BIN-файла.")
-            return
+            return False
 
+        if not str(self._firmware_path).strip():
+            self.infoMessage.emit("Программирование", "Сначала выберите BIN-файл прошивки.")
+            return False
+
+        if self._source_address_busy or self._service_access_busy or self._communication_control_busy:
+            self.infoMessage.emit("Программирование", "Дождитесь завершения активной UDS-операции.")
+            return False
+
+        if self._options_busy or self._options_bulk_busy or self._calibration_active:
+            self.infoMessage.emit("Программирование", "Завершите настройку параметров или калибровку перед прошивкой.")
+            return False
+
+        if self._collector_state == "recording":
+            self.infoMessage.emit("Программирование", "Остановите запись коллектора перед прошивкой.")
+            return False
+
+        return True
+
+    def _start_programming_for_node(self, target_sa: int) -> bool:
+        """Цель функции в запуске прошивки одного SA, затем она применяет UDS ID и выполняет автосброс при необходимости."""
+        normalized_sa = int(target_sa) & 0xFF
+        self._apply_programming_target_sa(normalized_sa, "Узел подготовлен к программированию.")
+
+        self._progress_value = 0
+        self.progressChanged.emit()
         self._set_programming_active(True)
 
         if self._auto_reset_before_programming:
             self._pending_programming_after_reset = True
-            self._append_log("Автосброс: отправка команды перехода в загрузчик", RowColor.blue)
+            self._append_log(f"Автосброс: отправка команды перехода в загрузчик для узла 0x{normalized_sa:02X}", RowColor.blue)
 
             try:
                 self._ui_ecu_reset_service.ecu_uds_reset()
@@ -2720,15 +2813,55 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
                 self._set_programming_active(False)
                 self._append_log("Автосброс: ошибка отправки команды", RowColor.red)
                 self.infoMessage.emit("Программирование", "Не удалось отправить команду автосброса.")
-                return
+                return False
 
             self._programming_start_timer.start(self._auto_reset_delay_ms)
-            return
+            return True
 
         self._start_programming_flow()
+        return True
+
+    def _start_next_programming_batch_node(self):
+        """Цель функции в продолжении групповой прошивки, затем она берет следующий SA из очереди."""
+        if not self._programming_batch_active:
+            return
+
+        if len(self._programming_batch_queue) == 0:
+            self._finish_programming_batch(True, "Групповое программирование успешно завершено.")
+            return
+
+        target_sa = int(self._programming_batch_queue.pop(0)) & 0xFF
+        step_index = int(self._programming_batch_done) + 1
+        self._programming_batch_status = (
+            f"Групповое программирование: узел {step_index}/{self._programming_batch_total}, SA 0x{target_sa:02X}."
+        )
+        self.programmingBatchChanged.emit()
+
+        if not self._start_programming_for_node(target_sa):
+            self._finish_programming_batch(False, f"Групповое программирование остановлено на узле 0x{target_sa:02X}.")
+
+    def _finish_programming_batch(self, success: bool, message: str):
+        """Цель функции в завершении групповой прошивки, затем она очищает очередь и сообщает итог оператору."""
+        if self._programming_batch_step_timer.isActive():
+            self._programming_batch_step_timer.stop()
+        self._programming_batch_active = False
+        self._programming_batch_queue = []
+        self._programming_batch_total = 0
+        self._programming_batch_done = 0
+        self._programming_batch_status = str(message)
+        self.programmingBatchChanged.emit()
+        self._append_log(message, RowColor.green if success else RowColor.red)
+        if not success:
+            self._set_programming_active(False)
+
+    def _on_programming_batch_step_timeout(self):
+        """Цель функции в задержке между узлами, затем она запускает следующий элемент групповой очереди."""
+        self._start_next_programming_batch_node()
 
     @Slot()
     def checkState(self):
+        target_sa = self._resolve_programming_selected_sa()
+        self._apply_programming_target_sa(target_sa, "Проверка статуса будет отправлена этому узлу.")
         self._bootloader.check_state()
 
     @Slot()
@@ -2737,8 +2870,10 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             self.infoMessage.emit("Сброс", "Сначала подключите CAN-адаптер.")
             return
 
+        target_sa = self._resolve_programming_selected_sa()
+        self._apply_programming_target_sa(target_sa, "Сброс в загрузчик будет отправлен этому узлу.")
         self._ui_ecu_reset_service.ecu_uds_reset()
-        self._append_log("Отправлена команда сброса в загрузчик", RowColor.blue)
+        self._append_log(f"Отправлена команда сброса в загрузчик для узла 0x{int(target_sa) & 0xFF:02X}", RowColor.blue)
 
     @Slot()
     def resetToMainProgram(self):
@@ -2746,8 +2881,10 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             self.infoMessage.emit("Сброс", "Сначала подключите CAN-адаптер.")
             return
 
+        target_sa = self._resolve_programming_selected_sa()
+        self._apply_programming_target_sa(target_sa, "Сброс в основное ПО будет отправлен этому узлу.")
         self._ui_ecu_reset_service.ecu_software_reset()
-        self._append_log("Отправлена команда сброса в основное ПО", RowColor.blue)
+        self._append_log(f"Отправлена команда сброса в основное ПО для узла 0x{int(target_sa) & 0xFF:02X}", RowColor.blue)
 
     @Slot()
     def clearLogs(self):

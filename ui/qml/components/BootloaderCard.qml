@@ -31,7 +31,8 @@ Card {
     readonly property int contentPadding: 14
     readonly property bool serviceControlsEnabled: root.appController
                                                    ? (!root.appController.programmingActive
-                                                      && !root.appController.firmwareLoading)
+                                                      && !root.appController.firmwareLoading
+                                                      && !root.appController.programmingBatchActive)
                                                    : false
 
     signal openFirmwareDialogRequested()
@@ -167,6 +168,93 @@ Card {
             }
         }
 
+        Rectangle {
+            Layout.fillWidth: true
+            radius: 12
+            color: "#f6fbff"
+            border.color: "#d6e2ef"
+            border.width: 1
+            implicitHeight: targetColumn.implicitHeight + 18
+
+            ColumnLayout {
+                id: targetColumn
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: 9
+                spacing: 8
+
+                Text {
+                    Layout.fillWidth: true
+                    text: "Целевой узел"
+                    color: root.textMain
+                    font.pixelSize: 14
+                    font.bold: true
+                    font.family: "Bahnschrift"
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: "Выберите SA узла перед прошивкой. GUI автоматически перестроит UDS TX/RX ID для выбранного устройства."
+                    color: root.textSoft
+                    font.pixelSize: 11
+                    font.family: "Bahnschrift"
+                    wrapMode: Text.WordWrap
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    FancyComboBox {
+                        Layout.fillWidth: true
+                        model: root.appController ? root.appController.programmingNodeItems : []
+                        currentIndex: root.appController ? root.appController.selectedProgrammingNodeIndex : 0
+                        enabled: root.serviceControlsEnabled
+                        textColor: root.textMain
+                        bgColor: root.inputBg
+                        borderColor: root.inputBorder
+                        focusBorderColor: root.inputFocus
+                        onActivated: if (root.appController) root.appController.setSelectedProgrammingNodeIndex(currentIndex)
+                    }
+
+                    FancyButton {
+                        Layout.preferredWidth: 116
+                        Layout.minimumWidth: 104
+                        text: "Обновить"
+                        enabled: root.serviceControlsEnabled
+                        fontPixelSize: 12
+                        tone: "#64748b"
+                        toneHover: "#55657a"
+                        tonePressed: "#465669"
+                        onClicked: if (root.appController) root.appController.refreshProgrammingNodeList()
+                    }
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    radius: 9
+                    color: "#edf6ff"
+                    border.color: "#c7dff4"
+                    implicitHeight: targetStatusText.implicitHeight + 14
+
+                    Text {
+                        id: targetStatusText
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.leftMargin: 8
+                        anchors.rightMargin: 8
+                        text: root.appController ? root.appController.programmingTargetText : "Ожидание контроллера"
+                        color: root.textSoft
+                        font.pixelSize: 12
+                        font.family: "Bahnschrift"
+                        wrapMode: Text.WordWrap
+                    }
+                }
+            }
+        }
+
         // Основные действия по программированию и диагностике.
         RowLayout {
             Layout.fillWidth: true
@@ -183,7 +271,7 @@ Card {
 
             FancySwitch {
                 checked: root.appController ? root.appController.autoResetBeforeProgramming : true
-                enabled: root.appController ? !root.appController.programmingActive : false
+                enabled: root.serviceControlsEnabled
                 onToggled: if (root.appController) root.appController.setAutoResetBeforeProgramming(checked)
             }
         }
@@ -194,14 +282,49 @@ Card {
 
             FancyButton {
                 Layout.fillWidth: true
-                text: root.appController && root.appController.programmingActive ? "Идет загрузка..." : "Начать программирование"
+                text: root.appController && root.appController.programmingActive ? "Идет загрузка..." : "Прошить выбранный узел"
                 Layout.preferredWidth: 1
                 Layout.minimumWidth: 0
-                enabled: root.appController ? (!root.appController.programmingActive && !root.appController.firmwareLoading) : false
+                enabled: root.serviceControlsEnabled
                 tone: "#10b981"
                 toneHover: "#059669"
                 tonePressed: "#047857"
                 onClicked: if (root.appController) root.appController.startProgramming()
+            }
+
+            FancyButton {
+                Layout.fillWidth: true
+                text: "Прошить все найденные"
+                Layout.preferredWidth: 1
+                Layout.minimumWidth: 0
+                enabled: root.serviceControlsEnabled && root.appController && root.appController.programmingAllNodesAvailable
+                tone: "#0ea5e9"
+                toneHover: "#0284c7"
+                tonePressed: "#0369a1"
+                onClicked: if (root.appController) root.appController.startProgrammingAllNodes()
+            }
+        }
+
+        Rectangle {
+            Layout.fillWidth: true
+            radius: 10
+            color: "#f4f8fd"
+            border.color: "#d6e2ef"
+            implicitHeight: batchStatusText.implicitHeight + 14
+            visible: root.appController ? root.appController.programmingBatchActive || root.appController.programmingBatchStatusText.length > 0 : false
+
+            Text {
+                id: batchStatusText
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: 8
+                anchors.rightMargin: 8
+                text: root.appController ? root.appController.programmingBatchStatusText : ""
+                color: root.textSoft
+                font.pixelSize: 12
+                font.family: "Bahnschrift"
+                wrapMode: Text.WordWrap
             }
         }
 

@@ -20,6 +20,8 @@ class AppControllerPropertiesMixin(AppControllerContract):
     canTrafficLogsChanged = Signal()
     canFilterOptionsChanged = Signal()
     infoMessage = Signal(str, str)
+    programmingNodeSelectionChanged = Signal()
+    programmingBatchChanged = Signal()
     programmingActiveChanged = Signal()
     autoResetBeforeProgrammingChanged = Signal()
     debugEnabledChanged = Signal()
@@ -188,6 +190,30 @@ class AppControllerPropertiesMixin(AppControllerContract):
     @Property(bool, notify=firmwareLoadingChanged)
     def firmwareLoading(self):
         return self._firmware_loading
+
+    @Property("QStringList", notify=programmingNodeSelectionChanged)
+    def programmingNodeItems(self):
+        return self._programming_node_items
+
+    @Property(int, notify=programmingNodeSelectionChanged)
+    def selectedProgrammingNodeIndex(self):
+        return int(self._selected_programming_node_index)
+
+    @Property(str, notify=programmingNodeSelectionChanged)
+    def programmingTargetText(self):
+        return str(self._programming_target_status)
+
+    @Property(bool, notify=programmingNodeSelectionChanged)
+    def programmingAllNodesAvailable(self):
+        return len(self._detected_programming_node_values()) > 0
+
+    @Property(bool, notify=programmingBatchChanged)
+    def programmingBatchActive(self):
+        return bool(self._programming_batch_active)
+
+    @Property(str, notify=programmingBatchChanged)
+    def programmingBatchStatusText(self):
+        return str(self._programming_batch_status)
 
     @Property("QStringList", notify=serviceAccessChanged)
     def serviceSessionItems(self):

@@ -89,6 +89,17 @@ class AppController(
         self._auto_reset_before_programming = True
         self._auto_reset_delay_ms = 650
         self._pending_programming_after_reset = False
+        self._programming_node_items: list[str] = []
+        self._programming_node_values: list[int] = []
+        self._selected_programming_node_index = 0
+        self._programming_target_status = "Целевой узел программирования будет выбран по текущим UDS ID."
+        self._programming_current_target_sa: int | None = None
+        self._programming_batch_active = False
+        self._programming_batch_queue: list[int] = []
+        self._programming_batch_total = 0
+        self._programming_batch_done = 0
+        self._programming_batch_delay_ms = 1200
+        self._programming_batch_status = ""
         self._debug_enabled = False
         self._firmware_loading = False
         self._service_session_items = [
@@ -446,6 +457,10 @@ class AppController(
         self._programming_start_timer = QTimer(self)
         self._programming_start_timer.setSingleShot(True)
         self._programming_start_timer.timeout.connect(self._start_programming_after_reset)
+        self._programming_batch_step_timer = QTimer(self)
+        self._programming_batch_step_timer.setSingleShot(True)
+        self._programming_batch_step_timer.setInterval(self._programming_batch_delay_ms)
+        self._programming_batch_step_timer.timeout.connect(self._on_programming_batch_step_timeout)
 
         self._calibration_poll_timer = QTimer(self)
         self._calibration_poll_timer.setSingleShot(False)

@@ -42,6 +42,8 @@ class AppControllerContract:
     logsChanged: Any
     observedUdsCandidateChanged: Any
     optionHistoryChanged: Any
+    programmingBatchChanged: Any
+    programmingNodeSelectionChanged: Any
     protocolControlChanged: Any
     optionsBulkChanged: Any
     optionsBulkRowsChanged: Any
@@ -318,7 +320,18 @@ class AppControllerContract:
     _project_root_directory: Any
     _product: Any
     _programming_active: Any
+    _programming_batch_active: Any
+    _programming_batch_delay_ms: Any
+    _programming_batch_done: Any
+    _programming_batch_queue: Any
+    _programming_batch_status: Any
+    _programming_batch_step_timer: Any
+    _programming_batch_total: Any
+    _programming_current_target_sa: Any
+    _programming_node_items: Any
+    _programming_node_values: Any
     _programming_start_timer: Any
+    _programming_target_status: Any
     _progress_max: Any
     _progress_value: Any
     _rx_dst_text: Any
@@ -330,6 +343,7 @@ class AppControllerContract:
     _rx_time_anchor_wall: Any
     _selected_calibration_node_index: Any
     _selected_device_index: Any
+    _selected_programming_node_index: Any
     _selected_service_session_index: Any
     _selected_option_index: Any
     _selected_options_target_node_index: Any

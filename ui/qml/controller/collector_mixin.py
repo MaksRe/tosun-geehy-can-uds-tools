@@ -827,6 +827,7 @@ class AppControllerCollectorMixin(AppControllerContract):
             )
         self._collector_nodes_view = rows
         self.collectorNodesChanged.emit()
+        self._refresh_programming_node_options()
 
     def _append_collector_csv(self, node_sa: int, node: dict[str, object], timestamp: str):
         if (not self._collector_enabled) or self._collector_state != "recording" or self._collector_session_dir is None:

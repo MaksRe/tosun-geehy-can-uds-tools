@@ -16,6 +16,15 @@ class AppControllerRuntimeMixin(AppControllerContract):
 
     def _on_bootloader_state(self, text, color):
         self._append_log(text, color)
+        if self._programming_batch_active and isinstance(color, QColor) and color == RowColor.red:
+            current_sa = self._programming_current_target_sa
+            if current_sa is None:
+                self._finish_programming_batch(False, "Групповое программирование остановлено из-за ошибки загрузчика.")
+            else:
+                self._finish_programming_batch(
+                    False,
+                    f"Групповое программирование остановлено из-за ошибки узла 0x{int(current_sa) & 0xFF:02X}.",
+                )
 
     def _on_data_sent(self, value):
         clamped_value = min(max(value, 0), self._progress_max)
@@ -30,32 +39,75 @@ class AppControllerRuntimeMixin(AppControllerContract):
         self._pending_programming_after_reset = False
         self._set_programming_active(False)
         if not success:
+            if self._programming_batch_active:
+                current_sa = self._programming_current_target_sa
+                if current_sa is None:
+                    self._finish_programming_batch(False, "Групповое программирование остановлено: узел не прошился.")
+                else:
+                    self._finish_programming_batch(
+                        False,
+                        f"Групповое программирование остановлено: узел 0x{int(current_sa) & 0xFF:02X} не прошился.",
+                    )
             return
 
+        current_sa = self._programming_current_target_sa
         self._progress_value = self._progress_max
         self.progressChanged.emit()
-        self._append_log("Программирование успешно завершено", RowColor.green)
+        if current_sa is None:
+            self._append_log("Программирование успешно завершено", RowColor.green)
+        else:
+            self._append_log(f"Программирование узла 0x{int(current_sa) & 0xFF:02X} успешно завершено", RowColor.green)
+
+        if self._programming_batch_active:
+            self._programming_batch_done += 1
+            self._programming_batch_status = (
+                f"Групповое программирование: готово {self._programming_batch_done}/{self._programming_batch_total}."
+            )
+            self.programmingBatchChanged.emit()
 
         if not self._can.is_connect:
             self.infoMessage.emit(
                 "Программирование",
                 "Программирование завершено, но CAN отключен: автосброс в основное ПО не отправлен.",
             )
+            if self._programming_batch_active:
+                self._finish_programming_batch(False, "Групповое программирование остановлено: CAN отключен.")
             return
 
         try:
             self._ui_ecu_reset_service.ecu_software_reset()
-            self._append_log("Автосброс: отправлена команда перехода в основное ПО", RowColor.blue)
-            self.infoMessage.emit(
-                "Программирование",
-                "Программирование завершено. Отправлена команда запуска основного ПО.",
-            )
+            if current_sa is None:
+                self._append_log("Автосброс: отправлена команда перехода в основное ПО", RowColor.blue)
+            else:
+                self._append_log(
+                    f"Автосброс: отправлена команда перехода в основное ПО для узла 0x{int(current_sa) & 0xFF:02X}",
+                    RowColor.blue,
+                )
         except Exception:
             self._append_log("Автосброс: ошибка отправки команды перехода в основное ПО", RowColor.red)
             self.infoMessage.emit(
                 "Программирование",
                 "Программирование завершено, но автосброс в основное ПО не отправлен.",
             )
+            if self._programming_batch_active:
+                self._finish_programming_batch(False, "Групповое программирование остановлено: не удалось сбросить узел.")
+            return
+
+        if self._programming_batch_active:
+            if len(self._programming_batch_queue) > 0:
+                self._programming_batch_status = (
+                    f"Пауза перед следующим узлом, осталось {len(self._programming_batch_queue)}."
+                )
+                self.programmingBatchChanged.emit()
+                self._programming_batch_step_timer.start(self._programming_batch_delay_ms)
+            else:
+                self._finish_programming_batch(True, "Групповое программирование успешно завершено.")
+            return
+
+        self.infoMessage.emit(
+            "Программирование",
+            "Программирование завершено. Отправлена команда запуска основного ПО.",
+        )
 
     def _on_trace_state_event(self):
         self._rx_time_anchor_raw = None
@@ -198,9 +250,129 @@ class AppControllerRuntimeMixin(AppControllerContract):
         self._rx_dst_text = f"0x{int(rx.dst) & 0xFF:02X}"
         self._rx_identifier_text = f"0x{int(rx.identifier) & 0x1FFFFFFF:08X}"
         self._refresh_options_target_node_options(emit_signal=emit_signal)
+        self._refresh_programming_node_options(emit_signal=emit_signal)
 
         if emit_signal:
             self.udsIdentifiersChanged.emit()
+
+    def _detected_programming_node_values(self) -> list[int]:
+        """Цель функции в сборе найденных узлов, затем она возвращает SA из CAN-потока и коллектора без дублей."""
+        nodes: list[int] = []
+        seen: set[int] = set()
+
+        for raw_value in list(self._observed_candidate_values) + list(self._collector_node_order):
+            try:
+                node_sa = int(raw_value) & 0xFF
+            except (TypeError, ValueError):
+                continue
+            if node_sa in seen:
+                continue
+            seen.add(node_sa)
+            nodes.append(node_sa)
+
+        return nodes
+
+    def _refresh_programming_node_options(self, emit_signal: bool = True):
+        """Цель функции в обновлении списка узлов программирования, затем она синхронизирует ComboBox с найденными SA."""
+        previous_items = list(self._programming_node_items)
+        previous_values = list(self._programming_node_values)
+        previous_index = int(self._selected_programming_node_index)
+        previous_status = str(self._programming_target_status)
+
+        selected_sa = None
+        if 0 <= previous_index < len(previous_values):
+            selected_sa = int(previous_values[previous_index]) & 0xFF
+
+        current_sa = int(UdsIdentifiers.rx.src) & 0xFF
+        detected_nodes = self._detected_programming_node_values()
+        detected_set = set(detected_nodes)
+
+        new_values: list[int] = []
+        new_items: list[str] = []
+        seen: set[int] = set()
+
+        def add_node(node_sa: int, label: str):
+            normalized_sa = int(node_sa) & 0xFF
+            if normalized_sa in seen:
+                return
+            seen.add(normalized_sa)
+            new_values.append(normalized_sa)
+            new_items.append(label)
+
+        current_suffix = ", найден в CAN" if current_sa in detected_set else ""
+        add_node(current_sa, f"Узел 0x{current_sa:02X} (текущий UDS{current_suffix})")
+
+        for node_sa in detected_nodes:
+            normalized_sa = int(node_sa) & 0xFF
+            if normalized_sa == current_sa:
+                continue
+            add_node(normalized_sa, f"Узел 0x{normalized_sa:02X} (найден CAN)")
+
+        if len(new_values) == 0:
+            add_node(current_sa, f"Узел 0x{current_sa:02X} (текущий UDS)")
+
+        if selected_sa in new_values:
+            new_index = new_values.index(selected_sa)
+        elif current_sa in new_values:
+            new_index = new_values.index(current_sa)
+        else:
+            new_index = 0
+
+        self._programming_node_values = new_values
+        self._programming_node_items = new_items
+        self._selected_programming_node_index = int(new_index)
+
+        target_sa = int(new_values[new_index]) & 0xFF if 0 <= new_index < len(new_values) else current_sa
+        found_count = len(detected_nodes)
+        self._programming_target_status = (
+            f"Целевой узел: 0x{target_sa:02X}. Найдено узлов для группового программирования: {found_count}."
+        )
+
+        if emit_signal and (
+            previous_items != self._programming_node_items
+            or previous_values != self._programming_node_values
+            or previous_index != self._selected_programming_node_index
+            or previous_status != self._programming_target_status
+        ):
+            self.programmingNodeSelectionChanged.emit()
+
+    def _resolve_programming_selected_sa(self) -> int:
+        """Цель функции в определении выбранного узла прошивки, затем она возвращает SA для UDS-запросов."""
+        index = int(self._selected_programming_node_index)
+        if 0 <= index < len(self._programming_node_values):
+            return int(self._programming_node_values[index]) & 0xFF
+        return int(UdsIdentifiers.rx.src) & 0xFF
+
+    def _apply_programming_target_sa(self, target_sa: int, reason: str = ""):
+        """Цель функции в настройке UDS ID под выбранный узел, затем она обновляет TX/RX адреса перед командами загрузчика."""
+        normalized_sa = int(target_sa) & 0xFF
+        node = self._observed_node_stats.get(normalized_sa, {})
+        tester_sa, _ = self._choose_tester_sa_for_node(node, int(UdsIdentifiers.tx.src) & 0xFF)
+        tester_sa = int(tester_sa) & 0xFF
+
+        changed = (
+            (int(UdsIdentifiers.tx.dst) & 0xFF) != normalized_sa
+            or (int(UdsIdentifiers.rx.src) & 0xFF) != normalized_sa
+            or (int(UdsIdentifiers.tx.src) & 0xFF) != tester_sa
+            or (int(UdsIdentifiers.rx.dst) & 0xFF) != tester_sa
+        )
+
+        UdsIdentifiers.tx.src = tester_sa
+        UdsIdentifiers.tx.dst = normalized_sa
+        UdsIdentifiers.rx.src = normalized_sa
+        UdsIdentifiers.rx.dst = tester_sa
+
+        self._programming_current_target_sa = normalized_sa
+        self._source_address_text = f"0x{normalized_sa:02X}"
+        self.sourceAddressTextChanged.emit()
+        self._refresh_uds_identifier_texts()
+
+        if changed or reason:
+            suffix = f" {reason}" if reason else ""
+            self._append_log(
+                f"Программирование: выбран узел 0x{normalized_sa:02X}, SA тестера 0x{tester_sa:02X}.{suffix}",
+                RowColor.blue,
+            )
 
     @staticmethod
     def _parse_source_address(text):
@@ -327,10 +499,20 @@ class AppControllerRuntimeMixin(AppControllerContract):
         if not self._pending_programming_after_reset:
             return
         self._pending_programming_after_reset = False
-        self._append_log("Автосброс завершен, запуск сценария программирования", RowColor.blue)
+        current_sa = self._programming_current_target_sa
+        if current_sa is None:
+            self._append_log("Автосброс завершен, запуск сценария программирования", RowColor.blue)
+        else:
+            self._append_log(
+                f"Автосброс завершен, запуск сценария программирования узла 0x{int(current_sa) & 0xFF:02X}",
+                RowColor.blue,
+            )
         self._start_programming_flow()
 
     def _start_programming_flow(self):
+        current_sa = self._programming_current_target_sa
+        if current_sa is not None:
+            self._apply_programming_target_sa(current_sa, "Запуск bootloader-сценария.")
         if not self._bootloader.start():
             self._set_programming_active(False)
 

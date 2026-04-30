@@ -731,6 +731,7 @@ class AppControllerCanMixin(AppControllerContract):
 
         self._refresh_calibration_node_options()
         self._refresh_options_target_node_options()
+        self._refresh_programming_node_options()
 
     def _update_observed_candidate_text(self):
         if not (0 <= self._observed_candidate_index < len(self._observed_candidate_values)):
@@ -806,5 +807,6 @@ class AppControllerCanMixin(AppControllerContract):
         self._observed_uds_text = "Ожидание входящих J1939 RX кадров для автоопределения адреса..."
         self._refresh_calibration_node_options()
         self._refresh_options_target_node_options()
+        self._refresh_programming_node_options()
         if emit_signal:
             self.observedUdsCandidateChanged.emit()
