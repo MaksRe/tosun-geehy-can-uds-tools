@@ -25,10 +25,12 @@ class AppControllerPropertiesMixin(AppControllerContract):
     debugEnabledChanged = Signal()
     firmwareLoadingChanged = Signal()
     serviceAccessChanged = Signal()
+    protocolControlChanged = Signal()
     transferByteOrderIndexChanged = Signal()
     sourceAddressTextChanged = Signal()
     sourceAddressBusyChanged = Signal()
     sourceAddressOperationChanged = Signal()
+    sourceAddressStatusChanged = Signal()
     udsIdentifiersChanged = Signal()
     observedUdsCandidateChanged = Signal()
     canJournalEnabledChanged = Signal()
@@ -207,6 +209,42 @@ class AppControllerPropertiesMixin(AppControllerContract):
     def serviceSecurityUnlocked(self):
         return bool(self._service_security_unlocked)
 
+    @Property("QStringList", notify=protocolControlChanged)
+    def communicationControlModeItems(self):
+        return self._communication_control_mode_items
+
+    @Property(int, notify=protocolControlChanged)
+    def selectedCommunicationControlModeIndex(self):
+        return int(self._selected_communication_control_mode_index)
+
+    @Property("QStringList", notify=protocolControlChanged)
+    def communicationControlAddressingItems(self):
+        return self._communication_control_addressing_items
+
+    @Property(int, notify=protocolControlChanged)
+    def selectedCommunicationControlAddressingIndex(self):
+        return int(self._selected_communication_control_addressing_index)
+
+    @Property("QStringList", notify=protocolControlChanged)
+    def communicationControlTypeItems(self):
+        return self._communication_control_type_items
+
+    @Property(int, notify=protocolControlChanged)
+    def selectedCommunicationControlTypeIndex(self):
+        return int(self._selected_communication_control_type_index)
+
+    @Property(bool, notify=protocolControlChanged)
+    def communicationControlSuppressPositiveResponse(self):
+        return bool(self._communication_control_suppress_positive_response)
+
+    @Property(bool, notify=protocolControlChanged)
+    def communicationControlBusy(self):
+        return bool(self._communication_control_busy)
+
+    @Property(str, notify=protocolControlChanged)
+    def communicationControlStatusText(self):
+        return str(self._communication_control_status)
+
     @Property(int, notify=transferByteOrderIndexChanged)
     def transferByteOrderIndex(self):
         return self._transfer_byte_order_index
@@ -222,6 +260,10 @@ class AppControllerPropertiesMixin(AppControllerContract):
     @Property(str, notify=sourceAddressOperationChanged)
     def sourceAddressOperation(self):
         return self._source_address_operation
+
+    @Property(str, notify=sourceAddressStatusChanged)
+    def sourceAddressStatusText(self):
+        return str(self._source_address_status)
 
     @Property(str, notify=udsIdentifiersChanged)
     def txPriorityText(self):

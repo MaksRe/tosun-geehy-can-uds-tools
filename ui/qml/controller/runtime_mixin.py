@@ -73,11 +73,13 @@ class AppControllerRuntimeMixin(AppControllerContract):
             self._source_address_text = f"0x{int(source_address) & 0xFF:02X}"
             self.sourceAddressTextChanged.emit()
             self._refresh_uds_identifier_texts()
+            self._set_source_address_status(f"Source Address изменен: {self._source_address_text}.")
             self.infoMessage.emit("Протокол", f"Source Address изменен: {self._source_address_text}.")
         else:
             self._source_address_text = f"0x{UdsIdentifiers.rx.src:02X}"
             self.sourceAddressTextChanged.emit()
             self._refresh_uds_identifier_texts()
+            self._set_source_address_status("Не удалось применить Source Address.")
             self.infoMessage.emit("Протокол", "Не удалось применить Source Address.")
 
     @Slot(int, bool)
@@ -87,8 +89,10 @@ class AppControllerRuntimeMixin(AppControllerContract):
             self._source_address_text = f"0x{int(source_address) & 0xFF:02X}"
             self.sourceAddressTextChanged.emit()
             self._refresh_uds_identifier_texts()
+            self._set_source_address_status(f"Source Address считан: {self._source_address_text}.")
             self.infoMessage.emit("Протокол", f"Source Address считан: {self._source_address_text}.")
         else:
+            self._set_source_address_status("Не удалось прочитать Source Address.")
             self.infoMessage.emit("Протокол", "Не удалось прочитать Source Address.")
 
     @Slot(str, bool, bytes, str)

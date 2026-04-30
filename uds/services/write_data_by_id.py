@@ -25,6 +25,18 @@ class ServiceWriteDataById:
             return (data[3] << 8) | data[2]
         return (data[2] << 8) | data[3]
 
+    @staticmethod
+    def _is_send_success(ret) -> bool:
+        """Цель функции в единообразной проверке send_async, затем она считает успешным любой неотрицательный код."""
+        if ret is None:
+            return False
+        if isinstance(ret, bool):
+            return bool(ret)
+        try:
+            return int(ret) >= 0
+        except Exception:
+            return bool(ret)
+
     def write_data(self, var: UdsVar, value, tx_identifier: int | None = None) -> bool:
         if var.size > 4:
             return False
@@ -44,8 +56,8 @@ class ServiceWriteDataById:
                 frame.append(0xFF)
 
         identifier = UdsIdentifiers.tx.identifier if tx_identifier is None else int(tx_identifier)
-        CanDevice.instance().send_async(identifier, 8, frame)
-        return True
+        ret = CanDevice.instance().send_async(identifier, 8, frame)
+        return self._is_send_success(ret)
 
     def verify_answer_write_data(self, response_data) -> bool:
         sid = response_data[1]
@@ -55,11 +67,12 @@ class ServiceWriteDataById:
 
     def write_fingerprint(self, value: int):
         pid_b0, pid_b1 = self._pid_to_bytes(UdsData.fingerprint.pid)
-        CanDevice.instance().send_async(
+        ret = CanDevice.instance().send_async(
             UdsIdentifiers.tx.identifier,
             8,
             [0x04, self._sid, pid_b0, pid_b1, value, 0xFF, 0xFF, 0xFF],
         )
+        return self._is_send_success(ret)
 
     def verify_answer_write_fingerprint(self, response_data) -> bool:
         sid = response_data[1]

@@ -42,6 +42,7 @@ class AppControllerContract:
     logsChanged: Any
     observedUdsCandidateChanged: Any
     optionHistoryChanged: Any
+    protocolControlChanged: Any
     optionsBulkChanged: Any
     optionsBulkRowsChanged: Any
     optionOperationChanged: Any
@@ -54,6 +55,7 @@ class AppControllerContract:
     serviceAccessChanged: Any
     sourceAddressBusyChanged: Any
     sourceAddressOperationChanged: Any
+    sourceAddressStatusChanged: Any
     sourceAddressTextChanged: Any
     traceStateChanged: Any
     transferByteOrderIndexChanged: Any
@@ -297,6 +299,20 @@ class AppControllerContract:
     _options_timeout_timer: Any
     _options_value_text: Any
     _options_write_service: Any
+    _communication_control_mode_items: Any
+    _selected_communication_control_mode_index: Any
+    _communication_control_addressing_items: Any
+    _selected_communication_control_addressing_index: Any
+    _communication_control_type_items: Any
+    _selected_communication_control_type_index: Any
+    _communication_control_suppress_positive_response: Any
+    _communication_control_busy: Any
+    _communication_control_status: Any
+    _communication_control_pending_target_sa: Any
+    _communication_control_pending_sub_function: Any
+    _communication_control_pending_suppress: Any
+    _communication_control_service: Any
+    _communication_control_timeout_timer: Any
     _pending_programming_after_reset: Any
     _perf_origin: Any
     _project_root_directory: Any
@@ -329,6 +345,12 @@ class AppControllerContract:
     _service_session_service: Any
     _source_address_busy: Any
     _source_address_operation: Any
+    _source_address_status: Any
+    _source_address_pending_target_sa: Any
+    _source_address_pending_new_sa: Any
+    _source_address_read_service: Any
+    _source_address_write_service: Any
+    _source_address_timeout_timer: Any
     _source_address_text: Any
     _transfer_byte_order_index: Any
     _tx_dst_text: Any

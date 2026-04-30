@@ -296,10 +296,200 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._append_log(message, RowColor.red)
 
     def _resolve_source_address_operation_target_sa(self) -> int:
-        # Keep SA read/write on the same node where 0x10/0x27 is active.
-        if self._service_security_unlocked and self._service_access_target_sa is not None:
+        # Держим SA-операции на том же узле, где уже запускались сервисные операции 0x10/0x27.
+        if self._service_access_target_sa is not None:
             return int(self._service_access_target_sa) & 0xFF
         return int(self._resolve_options_target_sa()) & 0xFF
+
+    @staticmethod
+    def _communication_control_mode_value_for_index(index: int) -> int:
+        """Цель функции в нормализации индекса режима 0x28, затем она возвращает подфункцию управления RX/TX."""
+        normalized = int(index)
+        if normalized < 0:
+            return 0
+        if normalized > 3:
+            return 3
+        return normalized
+
+    @staticmethod
+    def _communication_control_type_value_for_index(index: int) -> int:
+        """Цель функции в нормализации типа сообщений 0x28, затем она возвращает CommunicationType по ISO."""
+        if int(index) == 0:
+            return 0x01
+        if int(index) == 1:
+            return 0x02
+        return 0x03
+
+    def _build_communication_control_tx_identifier(self, target_sa: int) -> int:
+        """Цель функции в выборе физической или функциональной адресации 0x28, затем она формирует CAN ID запроса."""
+        if int(self._selected_communication_control_addressing_index) == 1:
+            tx_identifier = int(UdsIdentifiers.tx.identifier)
+            priority = (tx_identifier >> 26) & 0x07
+            source_address = tx_identifier & 0xFF
+            return int((priority << 26) | (0xDBFF << 8) | source_address)
+        return self._build_options_tx_identifier(target_sa)
+
+    def _set_communication_control_busy(self, busy: bool):
+        """Цель функции в переключении состояния операции 0x28, затем она обновляет UI-флаги занятости."""
+        value = bool(busy)
+        if self._communication_control_busy == value:
+            return
+        self._communication_control_busy = value
+        self.protocolControlChanged.emit()
+
+    def _set_communication_control_status(self, status_text: str):
+        """Цель функции в обновлении статуса 0x28, затем она отправляет новое текстовое состояние в UI."""
+        value = str(status_text or "").strip()
+        if self._communication_control_status == value:
+            return
+        self._communication_control_status = value
+        self.protocolControlChanged.emit()
+
+    def _reset_communication_control_state(self, status_text: str | None = None):
+        """Цель функции в сбросе промежуточного состояния 0x28, затем она очищает ожидания ответа и таймер."""
+        if self._communication_control_timeout_timer.isActive():
+            self._communication_control_timeout_timer.stop()
+        self._communication_control_pending_target_sa = None
+        self._communication_control_pending_sub_function = None
+        self._communication_control_pending_suppress = False
+        self._set_communication_control_busy(False)
+        if status_text is not None:
+            self._set_communication_control_status(status_text)
+
+    def _on_communication_control_timeout(self):
+        """Цель функции в обработке таймаута 0x28, затем она завершает операцию с учетом подавления положительного ответа."""
+        if not self._communication_control_busy:
+            return
+        pending_suppress = bool(self._communication_control_pending_suppress)
+        if pending_suppress:
+            target_sa = self._communication_control_pending_target_sa
+            self._reset_communication_control_state(
+                "Команда 0x28 отправлена без положительного ответа МК, подтверждение ожидаемо не приходит."
+            )
+            if target_sa is not None:
+                self._append_log(
+                    f"SID 0x28: положительный ответ не ожидался (бит 0x80 включен), узел 0x{int(target_sa) & 0xFF:02X}.",
+                    RowColor.green,
+                )
+            return
+
+        self._reset_communication_control_state("Таймаут ожидания ответа на SID 0x28.")
+        self._append_log("SID 0x28: таймаут ожидания ответа.", RowColor.red)
+
+    @Slot(int)
+    def setSelectedCommunicationControlModeIndex(self, index):
+        """Цель функции в выборе режима управления RX/TX, затем она сохраняет подфункцию SID 0x28 для отправки."""
+        try:
+            parsed = int(index)
+        except (TypeError, ValueError):
+            return
+        if parsed < 0 or parsed >= len(self._communication_control_mode_items):
+            return
+        if parsed == self._selected_communication_control_mode_index:
+            return
+        self._selected_communication_control_mode_index = parsed
+        self.protocolControlChanged.emit()
+
+    @Slot(int)
+    def setSelectedCommunicationControlAddressingIndex(self, index):
+        """Цель функции в выборе адресации SID 0x28, затем она сохраняет физический или функциональный CAN ID."""
+        try:
+            parsed = int(index)
+        except (TypeError, ValueError):
+            return
+        if parsed < 0 or parsed >= len(self._communication_control_addressing_items):
+            return
+        if parsed == self._selected_communication_control_addressing_index:
+            return
+        self._selected_communication_control_addressing_index = parsed
+        self.protocolControlChanged.emit()
+
+    @Slot(int)
+    def setSelectedCommunicationControlTypeIndex(self, index):
+        """Цель функции в выборе CommunicationType, затем она сохраняет тип сообщений для запроса SID 0x28."""
+        try:
+            parsed = int(index)
+        except (TypeError, ValueError):
+            return
+        if parsed < 0 or parsed >= len(self._communication_control_type_items):
+            return
+        if parsed == self._selected_communication_control_type_index:
+            return
+        self._selected_communication_control_type_index = parsed
+        self.protocolControlChanged.emit()
+
+    @Slot(bool)
+    def setCommunicationControlSuppressPositiveResponse(self, enabled):
+        """Цель функции в переключении подавления положительного ответа, затем она сохраняет бит 0x80 подфункции."""
+        value = bool(enabled)
+        if self._communication_control_suppress_positive_response == value:
+            return
+        self._communication_control_suppress_positive_response = value
+        self.protocolControlChanged.emit()
+
+    @Slot()
+    def applyCommunicationControl(self):
+        """Цель функции в отправке запроса SID 0x28, затем она запускает ожидание ответа и обновляет статус оператора."""
+        if self._communication_control_busy:
+            self.infoMessage.emit("Протокол", "Операция CommunicationControl уже выполняется.")
+            return
+
+        if self._programming_active or self._options_busy or self._options_bulk_busy or self._source_address_busy or self._calibration_active:
+            self.infoMessage.emit("Протокол", "Завершите активную UDS операцию перед отправкой SID 0x28.")
+            return
+
+        if self._service_access_busy:
+            self.infoMessage.emit("Протокол", "Дождитесь завершения Session/Security Access перед SID 0x28.")
+            return
+
+        if not self._can.is_connect or not self._can.is_trace:
+            self.infoMessage.emit("Протокол", "Сначала подключите адаптер и запустите трассировку CAN.")
+            return
+
+        control_type = self._communication_control_mode_value_for_index(self._selected_communication_control_mode_index)
+        communication_type = self._communication_control_type_value_for_index(self._selected_communication_control_type_index)
+        suppress_positive = bool(self._communication_control_suppress_positive_response)
+        target_sa = int(self._resolve_source_address_operation_target_sa()) & 0xFF
+        tx_identifier = self._build_communication_control_tx_identifier(target_sa)
+        addressing_text = "функционально" if int(self._selected_communication_control_addressing_index) == 1 else "физически"
+
+        self._communication_control_pending_target_sa = target_sa
+        self._communication_control_pending_sub_function = int(control_type) & 0x7F
+        self._communication_control_pending_suppress = suppress_positive
+        self._set_communication_control_busy(True)
+        self._set_communication_control_status(
+            f"SID 0x28 отправлен {addressing_text}: sub=0x{int(control_type) & 0x7F:02X}, type=0x{int(communication_type) & 0xFF:02X}, SA 0x{target_sa:02X}."
+        )
+        self._append_log(
+            (
+                f"SID 0x28: запрос sub=0x{int(control_type) & 0x7F:02X}, "
+                f"type=0x{int(communication_type) & 0xFF:02X}, SPR={1 if suppress_positive else 0}, "
+                f"адресация={addressing_text}, CAN ID=0x{int(tx_identifier) & 0x1FFFFFFF:08X}, SA 0x{target_sa:02X}."
+            ),
+            RowColor.blue,
+        )
+
+        if not self._communication_control_service.request(
+            control_type=control_type,
+            communication_type=communication_type,
+            suppress_positive_response=suppress_positive,
+            tx_identifier=tx_identifier,
+        ):
+            self._reset_communication_control_state("Ошибка отправки SID 0x28.")
+            self.infoMessage.emit("Протокол", "Не удалось отправить команду CommunicationControl.")
+            return
+
+        timeout_ms = 900 if suppress_positive else 1800
+        self._communication_control_timeout_timer.start(timeout_ms)
+
+    @Slot()
+    def applyCommunicationControlEnableAll(self):
+        """Цель функции в быстром возврате штатной связи, затем она отправляет режим RX/TX включены для SID 0x28."""
+        self._selected_communication_control_mode_index = 0
+        self._selected_communication_control_type_index = 0
+        self._communication_control_suppress_positive_response = False
+        self.protocolControlChanged.emit()
+        self.applyCommunicationControl()
 
     @Slot(int)
     def setSelectedServiceSessionIndex(self, index):
@@ -1878,65 +2068,186 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._source_address_text = value
         self.sourceAddressTextChanged.emit()
 
+    def _set_source_address_status(self, status_text: str):
+        """Цель функции в отображении состояния Source Address, затем она передает оператору причину ожидания или отказа."""
+        value = str(status_text or "").strip()
+        if self._source_address_status == value:
+            return
+        self._source_address_status = value
+        self.sourceAddressStatusChanged.emit()
+
+    def _reset_source_address_operation(self):
+        """Цель функции в завершении операции SA, затем она очищает ожидания ответа и снимает занятость UI."""
+        if self._source_address_timeout_timer.isActive():
+            self._source_address_timeout_timer.stop()
+        self._source_address_pending_target_sa = None
+        self._source_address_pending_new_sa = None
+        self._set_source_address_busy(False)
+
+    def _on_source_address_timeout(self):
+        """Цель функции в обработке таймаута SA, затем она завершает чтение или запись DID 0x0011 ошибкой."""
+        operation = str(self._source_address_operation or "")
+        target_sa = self._source_address_pending_target_sa
+        self._reset_source_address_operation()
+        if operation == "write":
+            message = "Таймаут ожидания подтверждения записи Source Address (DID 0x0011)."
+        else:
+            message = "Таймаут ожидания чтения Source Address (DID 0x0011)."
+        if target_sa is not None:
+            message = f"{message} Узел: 0x{int(target_sa) & 0xFF:02X}."
+        self._set_source_address_status(message)
+        self._append_log(message, RowColor.red)
+        self.infoMessage.emit("Протокол", message)
+
     @Slot(str)
     def applySourceAddress(self, text):
         """Цель функции в записи Source Address, затем она отправляет команду в МК и синхронизирует локальный UI."""
+        requested_text = str(text).strip()
+        self._set_source_address_status(f"Запрошена запись Source Address: {requested_text or '<пусто>'}.")
         if self._source_address_busy:
-            self.infoMessage.emit("Протокол", "Изменение Source Address уже выполняется.")
+            message = "Изменение Source Address уже выполняется."
+            self._set_source_address_status(message)
+            self._append_log(f"Source Address: {message}", RowColor.yellow)
+            self.infoMessage.emit("Протокол", message)
+            return
+
+        if self._service_access_busy:
+            message = "Дождитесь завершения Session/Security Access перед сменой Source Address."
+            self._set_source_address_status(message)
+            self._append_log(f"Source Address: {message}", RowColor.yellow)
+            self.infoMessage.emit("Протокол", message)
             return
 
         if self._programming_active:
-            self.infoMessage.emit("Протокол", "Нельзя менять Source Address во время программирования.")
+            message = "Нельзя менять Source Address во время программирования."
+            self._set_source_address_status(message)
+            self._append_log(f"Source Address: {message}", RowColor.yellow)
+            self.infoMessage.emit("Протокол", message)
+            return
+
+        if self._options_busy or self._options_bulk_busy or self._calibration_active:
+            message = "Завершите активную UDS операцию перед сменой Source Address."
+            self._set_source_address_status(message)
+            self._append_log(f"Source Address: {message}", RowColor.yellow)
+            self.infoMessage.emit("Протокол", message)
+            return
+
+        if not self._can.is_connect or not self._can.is_trace:
+            message = "Сначала подключите адаптер и запустите трассировку CAN."
+            self._set_source_address_status(message)
+            self._append_log(f"Source Address: {message}", RowColor.yellow)
+            self.infoMessage.emit("Протокол", message)
+            return
+
+        if not self._service_security_unlocked:
+            message = "Для записи Source Address сначала установите Extended Session и откройте Security Access."
+            self._set_source_address_status(message)
+            self._append_log(f"Source Address: {message}", RowColor.yellow)
+            self.infoMessage.emit(
+                "Протокол",
+                message,
+            )
             return
 
         try:
             source_address = self._parse_source_address(text)
         except ValueError:
-            self.infoMessage.emit("Протокол", "Некорректный Source Address. Допустимо 0..255 или 0x00..0xFF.")
+            message = "Некорректный Source Address. Допустимо 0..255 или 0x00..0xFF."
+            self._set_source_address_status(message)
+            self._append_log(f"Source Address: {message}", RowColor.yellow)
+            self.infoMessage.emit("Протокол", message)
             return
 
         target_sa = self._resolve_source_address_operation_target_sa()
-        if (int(UdsIdentifiers.rx.src) & 0xFF) != target_sa:
-            UdsIdentifiers.set_src(target_sa)
-            self._append_log(
-                f"Source Address write target synchronized to node SA 0x{target_sa:02X}.",
-                RowColor.blue,
-            )
+        tx_identifier = self._build_options_tx_identifier(target_sa)
 
+        self._source_address_pending_target_sa = int(target_sa) & 0xFF
+        self._source_address_pending_new_sa = int(source_address) & 0xFF
         self._set_source_address_operation("write")
         self._set_source_address_busy(True)
-        if not self._bootloader.write_can_source_address(source_address):
-            self._set_source_address_busy(False)
-            self.infoMessage.emit("Протокол", "Не удалось отправить запрос на изменение Source Address.")
+        self._set_source_address_status(
+            f"Отправка DID 0x0011: новый SA 0x{source_address:02X}, текущий узел 0x{target_sa:02X}, CAN ID 0x{int(tx_identifier) & 0x1FFFFFFF:08X}."
+        )
+        if not self._source_address_write_service.write_data(
+            UdsData.can_sa,
+            int(source_address) & 0xFF,
+            tx_identifier=tx_identifier,
+        ):
+            self._reset_source_address_operation()
+            message = "Не удалось отправить запрос на изменение Source Address."
+            self._set_source_address_status(message)
+            self._append_log(f"Source Address: {message}", RowColor.red)
+            self.infoMessage.emit("Протокол", message)
             return
 
-        self._source_address_text = f"0x{source_address:02X}"
-        self.sourceAddressTextChanged.emit()
+        self._append_log(
+            f"Source Address: отправлена запись DID 0x0011 = 0x{source_address:02X} для узла 0x{target_sa:02X}, CAN ID 0x{int(tx_identifier) & 0x1FFFFFFF:08X}.",
+            RowColor.blue,
+        )
+        self._source_address_timeout_timer.start()
 
     @Slot()
     def readSourceAddress(self):
         """Цель функции в чтении Source Address, затем она инициирует запрос текущего SA в выбранном узле."""
+        self._set_source_address_status("Запрошено чтение Source Address.")
         if self._source_address_busy:
-            self.infoMessage.emit("Протокол", "Операция с Source Address уже выполняется.")
+            message = "Операция с Source Address уже выполняется."
+            self._set_source_address_status(message)
+            self._append_log(f"Source Address: {message}", RowColor.yellow)
+            self.infoMessage.emit("Протокол", message)
+            return
+
+        if self._service_access_busy:
+            message = "Дождитесь завершения Session/Security Access перед чтением Source Address."
+            self._set_source_address_status(message)
+            self._append_log(f"Source Address: {message}", RowColor.yellow)
+            self.infoMessage.emit("Протокол", message)
             return
 
         if self._programming_active:
-            self.infoMessage.emit("Протокол", "Нельзя читать Source Address во время программирования.")
+            message = "Нельзя читать Source Address во время программирования."
+            self._set_source_address_status(message)
+            self._append_log(f"Source Address: {message}", RowColor.yellow)
+            self.infoMessage.emit("Протокол", message)
+            return
+
+        if self._options_busy or self._options_bulk_busy or self._calibration_active:
+            message = "Завершите активную UDS операцию перед чтением Source Address."
+            self._set_source_address_status(message)
+            self._append_log(f"Source Address: {message}", RowColor.yellow)
+            self.infoMessage.emit("Протокол", message)
+            return
+
+        if not self._can.is_connect or not self._can.is_trace:
+            message = "Сначала подключите адаптер и запустите трассировку CAN."
+            self._set_source_address_status(message)
+            self._append_log(f"Source Address: {message}", RowColor.yellow)
+            self.infoMessage.emit("Протокол", message)
             return
 
         target_sa = self._resolve_source_address_operation_target_sa()
-        if (int(UdsIdentifiers.rx.src) & 0xFF) != target_sa:
-            UdsIdentifiers.set_src(target_sa)
-            self._append_log(
-                f"Source Address read target synchronized to node SA 0x{target_sa:02X}.",
-                RowColor.blue,
-            )
+        tx_identifier = self._build_options_tx_identifier(target_sa)
 
+        self._source_address_pending_target_sa = int(target_sa) & 0xFF
+        self._source_address_pending_new_sa = None
         self._set_source_address_operation("read")
         self._set_source_address_busy(True)
-        if not self._bootloader.read_can_source_address():
-            self._set_source_address_busy(False)
-            self.infoMessage.emit("Протокол", "Не удалось отправить запрос на чтение Source Address.")
+        self._set_source_address_status(
+            f"Отправка чтения DID 0x0011 для узла 0x{target_sa:02X}, CAN ID 0x{int(tx_identifier) & 0x1FFFFFFF:08X}."
+        )
+        if not self._source_address_read_service.read_data_by_identifier(tx_identifier, UdsData.can_sa):
+            self._reset_source_address_operation()
+            message = "Не удалось отправить запрос на чтение Source Address."
+            self._set_source_address_status(message)
+            self._append_log(f"Source Address: {message}", RowColor.red)
+            self.infoMessage.emit("Протокол", message)
+            return
+
+        self._append_log(
+            f"Source Address: отправлено чтение DID 0x0011 для узла 0x{target_sa:02X}, CAN ID 0x{int(tx_identifier) & 0x1FFFFFFF:08X}.",
+            RowColor.blue,
+        )
+        self._source_address_timeout_timer.start()
 
     @Slot(int)
     def setSelectedOptionsParameterIndex(self, index):
@@ -2462,7 +2773,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot()
     def createCollectorTimestampedLogsDirectory(self):
-        timestamp = datetime.now().strftime("%d.%m.%Y_%H-%M-%S")
+        session_name = self._collector_session_directory_name()
         base_logs_dir = self._project_root_directory / "logs"
         try:
             base_logs_dir.mkdir(parents=True, exist_ok=True)
@@ -2470,13 +2781,46 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             self.infoMessage.emit("Коллектор", "Не удалось создать корневой каталог logs.")
             return
 
-        candidate = base_logs_dir / timestamp
+        candidate = base_logs_dir / session_name
         if not self._apply_collector_output_directory(candidate):
             self.infoMessage.emit("Коллектор", "Не удалось создать каталог с датой и временем внутри logs.")
             return
 
         self._collector_output_is_session_dir = True
         self.infoMessage.emit("Коллектор", f"Создан каталог для CSV: {self._collector_output_directory}")
+
+    @staticmethod
+    def _collector_session_timestamp_text() -> str:
+        """Цель функции в формировании единой метки времени каталога, затем она возвращает формат День.Месяц.Год_Час-Минуты-Секунды."""
+        return datetime.now().strftime("%d.%m.%Y_%H-%M-%S")
+
+    def _collector_session_nodes_suffix_text(self) -> str:
+        """Цель функции в формировании суффикса узлов сессии, затем она возвращает список SA, участвующих в логировании."""
+        nodes: list[int] = []
+        seen: set[int] = set()
+        for raw_value in list(self._collector_node_order):
+            try:
+                node_sa = int(raw_value) & 0xFF
+            except (TypeError, ValueError):
+                continue
+            if node_sa in seen:
+                continue
+            seen.add(node_sa)
+            nodes.append(node_sa)
+
+        if len(nodes) <= 0:
+            return "nodes-none"
+
+        nodes = sorted(nodes)
+        max_items = 8
+        labels = [f"0x{value:02X}" for value in nodes[:max_items]]
+        if len(nodes) > max_items:
+            labels.append(f"more{len(nodes) - max_items}")
+        return "nodes-" + "-".join(labels)
+
+    def _collector_session_directory_name(self) -> str:
+        """Цель функции в сборке имени каталога сессии, затем она объединяет метку времени и список узлов."""
+        return f"{self._collector_session_timestamp_text()}_{self._collector_session_nodes_suffix_text()}"
 
     @Slot(str)
     def setCollectorPollIntervalMs(self, interval_value):
@@ -2556,7 +2900,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             if self._collector_output_is_session_dir:
                 self._collector_session_dir = base_dir
             else:
-                self._collector_session_dir = base_dir / datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                self._collector_session_dir = base_dir / self._collector_session_directory_name()
             self._collector_session_dir.mkdir(parents=True, exist_ok=True)
             self._collector_csv_managers = {}
             try:

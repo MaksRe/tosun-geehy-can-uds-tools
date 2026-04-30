@@ -22,6 +22,7 @@ Card {
     readonly property int contentPadding: 12
     readonly property bool sourceAddressWriteBusy: root.appController ? (root.appController.sourceAddressBusy && root.appController.sourceAddressOperation === "write") : false
     readonly property bool sourceAddressReadBusy: root.appController ? (root.appController.sourceAddressBusy && root.appController.sourceAddressOperation === "read") : false
+    readonly property bool communicationControlBusy: root.appController ? root.appController.communicationControlBusy : false
 
     Layout.fillWidth: true
     implicitHeight: contentColumn.implicitHeight + (root.contentPadding * 2)
@@ -115,6 +116,200 @@ Card {
                 tonePressed: "#1e40af"
                 onClicked: if (root.appController) root.appController.readSourceAddress()
             }
+        }
+
+        Rectangle {
+            Layout.fillWidth: true
+            radius: 10
+            color: "#f7fbff"
+            border.color: "#d6e2ef"
+            border.width: 1
+            implicitHeight: sourceAddressStatusText.implicitHeight + 16
+
+            Text {
+                id: sourceAddressStatusText
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: 9
+                anchors.rightMargin: 9
+                text: root.appController ? root.appController.sourceAddressStatusText : "Ожидание контроллера"
+                color: root.textSoft
+                font.pixelSize: 12
+                font.family: "Bahnschrift"
+                wrapMode: Text.WordWrap
+            }
+        }
+
+        Rectangle {
+            Layout.fillWidth: true
+            implicitHeight: 1
+            color: "#e5edf6"
+        }
+
+        Text {
+            text: "Блокировка трафика (SID 0x28)"
+            color: root.textSoft
+            font.pixelSize: 12
+            font.family: "Bahnschrift"
+            Layout.fillWidth: true
+        }
+
+        Text {
+            text: "Управление RX/TX обычного J1939/CAN-трафика с сохранением UDS-диагностики. Отдельного Network Management в изделии нет."
+            color: root.textSoft
+            font.pixelSize: 11
+            font.family: "Bahnschrift"
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+        }
+
+        GridLayout {
+            Layout.fillWidth: true
+            columns: 2
+            columnSpacing: 8
+            rowSpacing: 8
+
+            Text {
+                text: "Адресация"
+                color: root.textSoft
+                font.pixelSize: 12
+                font.family: "Bahnschrift"
+                Layout.alignment: Qt.AlignVCenter
+            }
+
+            FancyComboBox {
+                Layout.fillWidth: true
+                model: root.appController ? root.appController.communicationControlAddressingItems : []
+                currentIndex: root.appController ? root.appController.selectedCommunicationControlAddressingIndex : 0
+                enabled: root.appController ? (!root.communicationControlBusy && !root.appController.programmingActive) : false
+                textColor: root.textMain
+                bgColor: root.inputBg
+                borderColor: root.inputBorder
+                focusBorderColor: root.inputFocus
+                onActivated: if (root.appController) root.appController.setSelectedCommunicationControlAddressingIndex(currentIndex)
+            }
+
+            Text {
+                text: "Режим RX/TX"
+                color: root.textSoft
+                font.pixelSize: 12
+                font.family: "Bahnschrift"
+                Layout.alignment: Qt.AlignVCenter
+            }
+
+            FancyComboBox {
+                Layout.fillWidth: true
+                model: root.appController ? root.appController.communicationControlModeItems : []
+                currentIndex: root.appController ? root.appController.selectedCommunicationControlModeIndex : 0
+                enabled: root.appController ? (!root.communicationControlBusy && !root.appController.programmingActive) : false
+                textColor: root.textMain
+                bgColor: root.inputBg
+                borderColor: root.inputBorder
+                focusBorderColor: root.inputFocus
+                onActivated: if (root.appController) root.appController.setSelectedCommunicationControlModeIndex(currentIndex)
+            }
+
+            Text {
+                text: "Тип сообщений"
+                color: root.textSoft
+                font.pixelSize: 12
+                font.family: "Bahnschrift"
+                Layout.alignment: Qt.AlignVCenter
+            }
+
+            FancyComboBox {
+                Layout.fillWidth: true
+                model: root.appController ? root.appController.communicationControlTypeItems : []
+                currentIndex: root.appController ? root.appController.selectedCommunicationControlTypeIndex : 0
+                enabled: root.appController ? (!root.communicationControlBusy && !root.appController.programmingActive) : false
+                textColor: root.textMain
+                bgColor: root.inputBg
+                borderColor: root.inputBorder
+                focusBorderColor: root.inputFocus
+                onActivated: if (root.appController) root.appController.setSelectedCommunicationControlTypeIndex(currentIndex)
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 8
+
+            CheckBox {
+                checked: root.appController ? root.appController.communicationControlSuppressPositiveResponse : false
+                enabled: root.appController ? (!root.communicationControlBusy && !root.appController.programmingActive) : false
+                onToggled: if (root.appController) root.appController.setCommunicationControlSuppressPositiveResponse(checked)
+            }
+
+            Text {
+                Layout.fillWidth: true
+                text: "Без положительного ответа МК (бит 0x80 в подфункции)"
+                color: root.textSoft
+                font.pixelSize: 12
+                font.family: "Bahnschrift"
+                wrapMode: Text.WordWrap
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 8
+
+            FancyButton {
+                Layout.preferredWidth: 168
+                Layout.minimumWidth: 152
+                text: root.communicationControlBusy ? "Отправка..." : "Применить 0x28"
+                loading: root.communicationControlBusy
+                enabled: root.appController ? (!root.communicationControlBusy && !root.appController.programmingActive) : false
+                tone: "#0b8f7a"
+                toneHover: "#0f766e"
+                tonePressed: "#115e59"
+                onClicked: if (root.appController) root.appController.applyCommunicationControl()
+            }
+
+            FancyButton {
+                Layout.preferredWidth: 196
+                Layout.minimumWidth: 170
+                text: "Снять блокировку RX/TX"
+                enabled: root.appController ? (!root.communicationControlBusy && !root.appController.programmingActive) : false
+                tone: "#2563eb"
+                toneHover: "#1d4ed8"
+                tonePressed: "#1e40af"
+                onClicked: if (root.appController) root.appController.applyCommunicationControlEnableAll()
+            }
+
+            Item {
+                Layout.fillWidth: true
+            }
+        }
+
+        Rectangle {
+            Layout.fillWidth: true
+            radius: 10
+            color: "#f7fbff"
+            border.color: "#d6e2ef"
+            border.width: 1
+            implicitHeight: communicationStatusText.implicitHeight + 16
+
+            Text {
+                id: communicationStatusText
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: 9
+                anchors.rightMargin: 9
+                text: root.appController ? root.appController.communicationControlStatusText : "Ожидание контроллера"
+                color: root.textSoft
+                font.pixelSize: 12
+                font.family: "Bahnschrift"
+                wrapMode: Text.WordWrap
+            }
+        }
+
+        Rectangle {
+            Layout.fillWidth: true
+            implicitHeight: 1
+            color: "#e5edf6"
         }
 
         Text {

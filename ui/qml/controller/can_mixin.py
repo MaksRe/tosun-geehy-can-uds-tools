@@ -62,6 +62,8 @@ class AppControllerCanMixin(AppControllerContract):
             uds_text = self._parse_isotp_summary(payload)
 
         if direction == "RX":
+            self._handle_source_address_frame(identifier, payload)
+            self._handle_communication_control_frame(identifier, payload)
             self._handle_service_access_frame(identifier, payload)
             self._handle_options_frame(identifier, payload)
             self._handle_calibration_frame(identifier, payload)
@@ -354,6 +356,192 @@ class AppControllerCanMixin(AppControllerContract):
         if expected_src is None:
             expected_src = self._resolve_options_target_sa()
         return (int(parsed.src) & 0xFF) == (int(expected_src) & 0xFF)
+
+    def _is_communication_control_response_identifier(self, identifier: int) -> bool:
+        """Цель функции в фильтрации ответа на SID 0x28, затем она проверяет PGN/SA назначения для текущей операции."""
+        try:
+            parsed = J1939CanIdentifier(int(identifier))
+        except Exception:
+            return False
+
+        expected_pgn = int(UdsIdentifiers.rx.pgn) & 0x3FFFF
+        if (int(parsed.pgn) & 0x3FFFF) != expected_pgn:
+            return False
+
+        expected_dst = int(UdsIdentifiers.rx.dst) & 0xFF
+        if (int(parsed.dst) & 0xFF) != expected_dst:
+            return False
+
+        expected_src = self._communication_control_pending_target_sa
+        if expected_src is None:
+            expected_src = self._resolve_source_address_operation_target_sa()
+        return (int(parsed.src) & 0xFF) == (int(expected_src) & 0xFF)
+
+    def _extract_single_frame_uds_payload(self, payload: list[int]) -> list[int]:
+        """Цель функции в извлечении UDS-полезной нагрузки из Single Frame, затем она отсекает ISO-TP PCI."""
+        if payload is None or len(payload) <= 1:
+            return []
+        pci_type = (int(payload[0]) >> 4) & 0x0F
+        if pci_type != 0x0:
+            return []
+        sf_len = int(payload[0]) & 0x0F
+        if sf_len <= 0:
+            return []
+        end_index = min(1 + sf_len, len(payload))
+        return [int(item) & 0xFF for item in payload[1:end_index]]
+
+    def _is_source_address_response_identifier(self, identifier: int) -> bool:
+        """Цель функции в фильтрации ответа на DID 0x0011, затем она допускает старый и новый SA после записи."""
+        if not self._source_address_busy:
+            return False
+
+        try:
+            parsed = J1939CanIdentifier(int(identifier))
+        except Exception:
+            return False
+
+        expected_pgn = int(UdsIdentifiers.rx.pgn) & 0x3FFFF
+        if (int(parsed.pgn) & 0x3FFFF) != expected_pgn:
+            return False
+
+        expected_dst = int(UdsIdentifiers.rx.dst) & 0xFF
+        if (int(parsed.dst) & 0xFF) != expected_dst:
+            return False
+
+        expected_sources: set[int] = set()
+        if self._source_address_pending_target_sa is not None:
+            expected_sources.add(int(self._source_address_pending_target_sa) & 0xFF)
+        if str(self._source_address_operation or "") == "write" and self._source_address_pending_new_sa is not None:
+            expected_sources.add(int(self._source_address_pending_new_sa) & 0xFF)
+        if len(expected_sources) <= 0:
+            expected_sources.add(int(self._resolve_source_address_operation_target_sa()) & 0xFF)
+        return (int(parsed.src) & 0xFF) in expected_sources
+
+    def _finish_source_address_write_success(self):
+        """Цель функции в применении успешной записи SA, затем она синхронизирует актуальные UDS ID."""
+        old_target_sa = self._source_address_pending_target_sa
+        new_sa = self._source_address_pending_new_sa
+        if new_sa is None:
+            self._reset_source_address_operation()
+            self.infoMessage.emit("Протокол", "Source Address записан, но новое значение не было сохранено в операции.")
+            return
+
+        normalized_new_sa = int(new_sa) & 0xFF
+        normalized_old_sa = int(old_target_sa) & 0xFF if old_target_sa is not None else None
+        UdsIdentifiers.set_src(normalized_new_sa)
+
+        if normalized_old_sa is not None:
+            if self._service_access_target_sa is not None and (int(self._service_access_target_sa) & 0xFF) == normalized_old_sa:
+                self._service_access_target_sa = normalized_new_sa
+                self.serviceAccessChanged.emit()
+            if self._options_target_node_sa is not None and (int(self._options_target_node_sa) & 0xFF) == normalized_old_sa:
+                self._options_target_node_sa = None
+                self._selected_options_target_node_index = 0
+                self.optionsTargetNodeChanged.emit()
+
+        self._source_address_text = f"0x{normalized_new_sa:02X}"
+        self.sourceAddressTextChanged.emit()
+        self._refresh_uds_identifier_texts()
+        self._reset_source_address_operation()
+        self._set_source_address_status(f"Source Address изменен: 0x{normalized_new_sa:02X}.")
+        self._append_log(f"Source Address изменен: 0x{normalized_new_sa:02X}.", QColor("#16a34a"))
+        self.infoMessage.emit("Протокол", f"Source Address изменен: 0x{normalized_new_sa:02X}.")
+
+    def _finish_source_address_read_success(self, source_address: int):
+        """Цель функции в применении успешного чтения SA, затем она обновляет поле ввода без смены целевого узла."""
+        normalized_sa = int(source_address) & 0xFF
+        self._source_address_text = f"0x{normalized_sa:02X}"
+        self.sourceAddressTextChanged.emit()
+        self._reset_source_address_operation()
+        self._set_source_address_status(f"Source Address считан: 0x{normalized_sa:02X}.")
+        self._append_log(f"Source Address считан: 0x{normalized_sa:02X}.", QColor("#16a34a"))
+        self.infoMessage.emit("Протокол", f"Source Address считан: 0x{normalized_sa:02X}.")
+
+    def _handle_source_address_frame(self, identifier: int, payload: list[int]):
+        """Цель функции в обработке ответа DID 0x0011, затем она завершает чтение или запись Source Address."""
+        operation = str(self._source_address_operation or "")
+        if operation not in ("read", "write"):
+            return
+
+        if not self._is_source_address_response_identifier(identifier):
+            return
+
+        uds_payload = self._extract_single_frame_uds_payload(payload)
+        if len(uds_payload) <= 0:
+            return
+
+        sid = int(uds_payload[0]) & 0xFF
+        expected_original_sid = 0x2E if operation == "write" else 0x22
+        if sid == 0x7F:
+            original_sid = int(uds_payload[1]) & 0xFF if len(uds_payload) > 1 else 0
+            nrc = int(uds_payload[2]) & 0xFF if len(uds_payload) > 2 else 0
+            if original_sid != expected_original_sid:
+                return
+            nrc_text = self._uds_nrc_description(nrc)
+            self._reset_source_address_operation()
+            message = f"Source Address: отказ UDS, NRC 0x{nrc:02X} ({nrc_text})."
+            self._set_source_address_status(message)
+            self._append_log(message, QColor("#dc2626"))
+            self.infoMessage.emit("Протокол", message)
+            return
+
+        sf_like_frame = [min(0xFF, len(uds_payload))] + [int(item) & 0xFF for item in uds_payload]
+        if operation == "write":
+            if not self._source_address_write_service.verify_answer_write_data(sf_like_frame):
+                return
+            self._finish_source_address_write_success()
+            return
+
+        if not self._source_address_read_service.verify_answer_read_data(sf_like_frame):
+            return
+        source_address = self._source_address_read_service.parse_data_field(sf_like_frame) & 0xFF
+        self._finish_source_address_read_success(source_address)
+
+    def _handle_communication_control_frame(self, identifier: int, payload: list[int]):
+        """Цель функции в обработке ответа на SID 0x28, затем она завершает операцию успехом или NRC."""
+        if (not self._communication_control_busy) or len(payload) <= 1:
+            return
+
+        if not self._is_communication_control_response_identifier(identifier):
+            return
+
+        uds_payload = self._extract_single_frame_uds_payload(payload)
+        if len(uds_payload) <= 0:
+            return
+
+        target_sa = self._communication_control_pending_target_sa
+        if target_sa is None:
+            target_sa = self._resolve_source_address_operation_target_sa()
+
+        sid = int(uds_payload[0]) & 0xFF
+        if sid == 0x7F:
+            original_sid = int(uds_payload[1]) & 0xFF if len(uds_payload) > 1 else 0
+            nrc = int(uds_payload[2]) & 0xFF if len(uds_payload) > 2 else 0
+            if original_sid != 0x28:
+                return
+            nrc_text = self._uds_nrc_description(nrc)
+            self._reset_communication_control_state(f"Отказ SID 0x28: NRC 0x{nrc:02X} ({nrc_text}).")
+            self._append_log(
+                f"SID 0x28: отрицательный ответ NRC=0x{nrc:02X} ({nrc_text}), узел 0x{int(target_sa) & 0xFF:02X}.",
+                QColor("#dc2626"),
+            )
+            return
+
+        if not self._communication_control_service.is_expected_positive_response(uds_payload):
+            return
+
+        pending_sub_function = self._communication_control_pending_sub_function
+        pending_type = self._communication_control_service.pending_communication_type
+        self._reset_communication_control_state(
+            f"SID 0x28 подтвержден: sub=0x{int(pending_sub_function or 0) & 0x7F:02X}, type=0x{int(pending_type) & 0xFF:02X}."
+        )
+        self._append_log(
+            (
+                f"SID 0x28: подтверждение получено для sub=0x{int(pending_sub_function or 0) & 0x7F:02X}, "
+                f"type=0x{int(pending_type) & 0xFF:02X}, узел 0x{int(target_sa) & 0xFF:02X}."
+            ),
+            QColor("#16a34a"),
+        )
 
     def _handle_service_access_frame(self, identifier: int, payload: list[int]):
         if (not self._service_access_busy) or len(payload) < 2:

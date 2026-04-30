@@ -9,6 +9,7 @@ from app_can.CanDevice import CanDevice
 from uds.bootloader import Bootloader
 from uds.data_identifiers import UdsData
 from uds.options_catalog import UDS_OPTIONS, UdsOptionParameter
+from uds.services.communication_control import ServiceCommunicationControl
 from uds.services.ecu_reset import ServiceEcuReset
 from uds.services.read_data_by_id import ServiceReadDataById
 from uds.services.security_access import ServiceSecurityAccess
@@ -103,10 +104,42 @@ class AppController(
         self._service_access_target_sa: int | None = None
         self._service_session_service = ServiceSession()
         self._service_security_access_service = ServiceSecurityAccess()
+        self._communication_control_mode_items = [
+            "Разрешить RX и TX (0x00)",
+            "Разрешить RX, запретить TX (0x01)",
+            "Запретить RX, разрешить TX (0x02)",
+            "Запретить RX и TX (0x03)",
+        ]
+        self._selected_communication_control_mode_index = 0
+        self._communication_control_addressing_items = [
+            "Физически выбранному узлу (0x18DA)",
+            "Функционально всем узлам (0x18DBFF)",
+        ]
+        self._selected_communication_control_addressing_index = 0
+        self._communication_control_type_items = [
+            "Обычный J1939/CAN трафик (0x01)",
+            "Network Management (0x02, отсутствует)",
+            "J1939/CAN + Network Management (0x03)",
+        ]
+        self._selected_communication_control_type_index = 0
+        self._communication_control_suppress_positive_response = False
+        self._communication_control_busy = False
+        self._communication_control_status = "Готово к управлению блокировкой трафика (SID 0x28)."
+        self._communication_control_pending_target_sa: int | None = None
+        self._communication_control_pending_sub_function: int | None = None
+        self._communication_control_pending_suppress = False
+        self._communication_control_service = ServiceCommunicationControl()
         self._transfer_byte_order_index = 0
         self._source_address_text = f"0x{UdsIdentifiers.rx.src:02X}"
         self._source_address_busy = False
         self._source_address_operation = ""
+        self._source_address_status = "Готово к чтению или записи Source Address (DID 0x0011)."
+        self._source_address_pending_target_sa: int | None = None
+        self._source_address_pending_new_sa: int | None = None
+        self._source_address_read_service = ServiceReadDataById()
+        self._source_address_write_service = ServiceWriteDataById()
+        self._source_address_read_service.set_byte_order("big")
+        self._source_address_write_service.set_byte_order("big")
         self._can_journal_enabled = False
         self._auto_detect_enabled = True
 
@@ -486,6 +519,14 @@ class AppController(
         self._service_access_timeout_timer.setSingleShot(True)
         self._service_access_timeout_timer.setInterval(4000)
         self._service_access_timeout_timer.timeout.connect(self._on_service_access_timeout)
+        self._communication_control_timeout_timer = QTimer(self)
+        self._communication_control_timeout_timer.setSingleShot(True)
+        self._communication_control_timeout_timer.setInterval(1800)
+        self._communication_control_timeout_timer.timeout.connect(self._on_communication_control_timeout)
+        self._source_address_timeout_timer = QTimer(self)
+        self._source_address_timeout_timer.setSingleShot(True)
+        self._source_address_timeout_timer.setInterval(2500)
+        self._source_address_timeout_timer.timeout.connect(self._on_source_address_timeout)
         self._options_fc_retry_left = 0
         self._options_fc_retry_timer = QTimer(self)
         self._options_fc_retry_timer.setSingleShot(False)

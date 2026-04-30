@@ -489,7 +489,7 @@ ApplicationWindow {
                 SpoilerSection {
                     Layout.fillWidth: true
                     title: "Параметры протокола"
-                    hintText: "Source Address и порядок байтов"
+                    hintText: "Source Address, SID 0x28 и порядок байтов"
                     cardColor: window.cardColor
                     cardBorder: window.cardBorder
                     textMain: window.textMain
