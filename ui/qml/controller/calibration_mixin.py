@@ -4150,8 +4150,12 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 return
 
             if original_sid == 0x2E:
-                self._reset_calibration_temp_comp_recommendation_apply_queue()
                 did = self._pending_calibration_write_did()
+                if (did is None) and (not self._calibration_restore_active):
+                    # Игнорируем чужие ответы 0x2E (например, запись DID из других карточек UI).
+                    return
+
+                self._reset_calibration_temp_comp_recommendation_apply_queue()
                 did_label = "параметра"
                 extra_hint = ""
                 expected_value = None
@@ -4208,6 +4212,24 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 return
 
             if original_sid == 0x22:
+                if (
+                    (not bool(self._calibration_dump_capture_active))
+                    and (not (self._calibration_temp_comp_adv_read_active and self._calibration_temp_comp_adv_read_inflight_key is not None))
+                    and (str(self._calibration_sequence_waiting_action or "") not in ("read_level_0", "read_level_100"))
+                ):
+                    # Игнорируем чужие ответы 0x22 (например, чтение DID из других карточек UI).
+                    return
+
+                if bool(self._calibration_dump_capture_active):
+                    did_text = "-"
+                    if self._calibration_dump_capture_current_did is not None:
+                        did_text = f"0x{int(self._calibration_dump_capture_current_did) & 0xFFFF:04X}"
+                    self._finish_calibration_dump_capture(
+                        False,
+                        f"Калибровка: чтение дампа отклонено, DID {did_text}, NRC 0x{nrc:02X} ({nrc_text}).",
+                    )
+                    return
+
                 if self._calibration_temp_comp_adv_read_active and self._calibration_temp_comp_adv_read_inflight_key is not None:
                     inflight_key = str(self._calibration_temp_comp_adv_read_inflight_key)
                     self._calibration_temp_comp_adv_read_inflight_key = None
@@ -4534,6 +4556,15 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 value=int(value),
             )
 
+            if bool(self._calibration_dump_capture_active):
+                required_dids = set(int(item) & 0xFFFF for item in self._calibration_dump_required_dids())
+                if (int(did) & 0xFFFF) in required_dids:
+                    self._calibration_dump_capture_values[int(did) & 0xFFFF] = int(value)
+                    if self._calibration_dump_capture_timeout_timer.isActive():
+                        self._calibration_dump_capture_timeout_timer.stop()
+                    self._calibration_dump_capture_current_did = None
+                    self._request_next_calibration_dump_capture_did()
+
             if self._calibration_sequence_waiting_action == "read_level_0" and did == int(UdsData.empty_fuel_tank.pid):
                 self._finish_calibration_sequence_wait("read_level_0")
                 self._schedule_calibration_sequence_action("read_level_100")
@@ -4712,7 +4743,12 @@ class AppControllerCalibrationMixin(AppControllerContract):
 
         did, value = self._calibration_restore_queue.pop(0)
         self._calibration_restore_current_did = int(did)
-        target_var = UdsData.empty_fuel_tank if int(did) == int(UdsData.empty_fuel_tank.pid) else UdsData.full_fuel_tank
+        target_var = UdsData.get_var_by_pid(int(did))
+        if target_var is None:
+            self._calibration_restore_active = False
+            self._calibration_restore_current_did = None
+            self._append_log(f"Калибровка: восстановление остановлено, DID 0x{int(did) & 0xFFFF:04X} не найден.", RowColor.red)
+            return
         self._configure_calibration_uds_services()
         if self._calibration_write_service.write_data(
             target_var,
@@ -4723,7 +4759,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
             if int(did) == int(UdsData.empty_fuel_tank.pid):
                 self._calibration_level0_written = True
                 self._calibration_verify0_ok = False
-            else:
+            elif int(did) == int(UdsData.full_fuel_tank.pid):
                 self._calibration_level100_written = True
                 self._calibration_verify100_ok = False
             self.calibrationVerificationChanged.emit()

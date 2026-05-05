@@ -372,6 +372,13 @@ class AppControllerCanMixin(AppControllerContract):
         if (int(parsed.dst) & 0xFF) != expected_dst:
             return False
 
+        if bool(getattr(self, "_communication_control_pending_functional", False)):
+            tester_sources = {
+                int(UdsIdentifiers.tx.src) & 0xFF,
+                int(UdsIdentifiers.rx.dst) & 0xFF,
+            }
+            return (int(parsed.src) & 0xFF) not in tester_sources
+
         expected_src = self._communication_control_pending_target_sa
         if expected_src is None:
             expected_src = self._resolve_source_address_operation_target_sa()
@@ -512,6 +519,13 @@ class AppControllerCanMixin(AppControllerContract):
         target_sa = self._communication_control_pending_target_sa
         if target_sa is None:
             target_sa = self._resolve_source_address_operation_target_sa()
+        try:
+            response_sa = int(J1939CanIdentifier(int(identifier)).src) & 0xFF
+        except Exception:
+            response_sa = int(target_sa) & 0xFF
+        target_text = "функциональный запрос, ответ от узла 0x%02X" % response_sa
+        if not bool(getattr(self, "_communication_control_pending_functional", False)):
+            target_text = "узел 0x%02X" % (int(target_sa) & 0xFF)
 
         sid = int(uds_payload[0]) & 0xFF
         if sid == 0x7F:
@@ -522,7 +536,7 @@ class AppControllerCanMixin(AppControllerContract):
             nrc_text = self._uds_nrc_description(nrc)
             self._reset_communication_control_state(f"Отказ SID 0x28: NRC 0x{nrc:02X} ({nrc_text}).")
             self._append_log(
-                f"SID 0x28: отрицательный ответ NRC=0x{nrc:02X} ({nrc_text}), узел 0x{int(target_sa) & 0xFF:02X}.",
+                f"SID 0x28: отрицательный ответ NRC=0x{nrc:02X} ({nrc_text}), {target_text}.",
                 QColor("#dc2626"),
             )
             return
@@ -532,13 +546,35 @@ class AppControllerCanMixin(AppControllerContract):
 
         pending_sub_function = self._communication_control_pending_sub_function
         pending_type = self._communication_control_service.pending_communication_type
+        if bool(getattr(self, "_communication_control_pending_functional", False)):
+            # Функциональный 0x28 может подтвердить несколько узлов, поэтому собираем ответы до таймаута окна.
+            self._communication_control_functional_response_sas.add(int(response_sa) & 0xFF)
+            response_sas = sorted(int(item) & 0xFF for item in self._communication_control_functional_response_sas)
+            expected_sas = sorted(int(item) & 0xFF for item in self._communication_control_expected_response_sas)
+            response_text = ", ".join(f"0x{item:02X}" for item in response_sas)
+            expected_text = f"/{len(expected_sas)}" if len(expected_sas) > 0 else ""
+            self._set_communication_control_status(
+                (
+                    f"Функциональный SID 0x28: подтверждений {len(response_sas)}{expected_text}, "
+                    f"ответили узлы {response_text}. Ожидаю остальные ответы до конца окна."
+                )
+            )
+            self._append_log(
+                (
+                    f"SID 0x28: подтверждение получено для sub=0x{int(pending_sub_function or 0) & 0x7F:02X}, "
+                    f"type=0x{int(pending_type) & 0xFF:02X}, {target_text}."
+                ),
+                QColor("#16a34a"),
+            )
+            return
+
         self._reset_communication_control_state(
-            f"SID 0x28 подтвержден: sub=0x{int(pending_sub_function or 0) & 0x7F:02X}, type=0x{int(pending_type) & 0xFF:02X}."
+            f"SID 0x28 подтвержден: sub=0x{int(pending_sub_function or 0) & 0x7F:02X}, type=0x{int(pending_type) & 0xFF:02X}, {target_text}."
         )
         self._append_log(
             (
                 f"SID 0x28: подтверждение получено для sub=0x{int(pending_sub_function or 0) & 0x7F:02X}, "
-                f"type=0x{int(pending_type) & 0xFF:02X}, узел 0x{int(target_sa) & 0xFF:02X}."
+                f"type=0x{int(pending_type) & 0xFF:02X}, {target_text}."
             ),
             QColor("#16a34a"),
         )

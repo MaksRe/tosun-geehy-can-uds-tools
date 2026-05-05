@@ -2,15 +2,17 @@
 
 import csv
 from datetime import datetime
+import json
 import logging
 from pathlib import Path
+import re
 
 from PySide6.QtCore import QCoreApplication, QTimer, Slot
 from PySide6.QtGui import QColor
 
 from colors import RowColor
 from uds.data_identifiers import UdsData
-from uds.options_catalog import get_option_by_index
+from uds.options_catalog import get_option_by_did, get_option_by_index
 from uds.services.session import Session
 from uds.uds_identifiers import UdsIdentifiers
 from ui.qml.collector_csv_manager import CollectorCombinedCsvManager
@@ -21,6 +23,136 @@ from .workers import UdsOptionProxy
 LOGGER = logging.getLogger(__name__)
 
 class AppControllerPublicSlotsMixin(AppControllerContract):
+    @staticmethod
+    def _extract_firmware_version_from_name(path_text: str) -> str:
+        """Цель функции в извлечении версии из имени BIN, затем она возвращает формат вида 1.0.0.b0006."""
+        file_name = Path(str(path_text or "")).name
+        if not file_name:
+            return ""
+        match = re.search(r"(\d+\.\d+\.\d+\.b\d{4})", file_name, flags=re.IGNORECASE)
+        if match is None:
+            return ""
+        return str(match.group(1))
+
+    @staticmethod
+    def _normalize_software_version_text(version_text: str) -> str:
+        """Цель функции в валидации версии ПО, затем она возвращает безопасную ASCII-строку для DID 0xF195."""
+        value = str(version_text or "").strip()
+        if not value:
+            raise ValueError("Поле версии ПО пустое.")
+        if len(value) > 127:
+            raise ValueError("Версия ПО слишком длинная: максимум 127 символов.")
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", value):
+            raise ValueError("Версия ПО должна содержать только латиницу, цифры, точку, дефис или подчёркивание.")
+        return value
+
+    def _resolve_software_version_target_sa(self) -> int:
+        """Цель функции в выборе узла для DID 0xF195, затем она использует SA из Security Access при его наличии."""
+        if self._service_access_target_sa is not None:
+            return int(self._service_access_target_sa) & 0xFF
+        return int(self._resolve_options_target_sa()) & 0xFF
+
+    @Slot()
+    def readSoftwareVersionDid(self):
+        """Цель функции в чтении DID 0xF195, затем она обновляет версию ПО в правом верхнем блоке главной формы."""
+        if self._software_version_busy or self._options_busy or self._options_bulk_busy:
+            self.infoMessage.emit("Версия ПО", "Подождите завершения текущей UDS-операции.")
+            return
+
+        if self._programming_active or self._programming_batch_active:
+            self.infoMessage.emit("Версия ПО", "Во время программирования чтение DID 0xF195 недоступно.")
+            return
+
+        if not self._can.is_connect or not self._can.is_trace:
+            self.infoMessage.emit("Версия ПО", "Сначала подключите адаптер и запустите трассировку CAN.")
+            return
+
+        parameter = get_option_by_did(int(self._software_version_did))
+        if parameter is None or (not parameter.can_read):
+            self.infoMessage.emit("Версия ПО", "DID 0xF195 недоступен для чтения в текущем каталоге параметров.")
+            return
+
+        self._software_version_busy = True
+        self._software_version_status = "Чтение DID 0xF195..."
+        self.softwareVersionChanged.emit()
+
+        target_sa = self._resolve_software_version_target_sa()
+        if not self._start_options_read_request(
+            parameter,
+            request_origin="sw_version_read",
+            append_history=False,
+            target_sa_override=target_sa,
+        ):
+            self._software_version_busy = False
+            self._software_version_status = "Ошибка отправки запроса чтения DID 0xF195."
+            self.softwareVersionChanged.emit()
+            self.infoMessage.emit("Версия ПО", "Не удалось отправить запрос чтения DID 0xF195.")
+
+    @Slot(str)
+    def writeSoftwareVersionDid(self, version_text):
+        """Цель функции в записи DID 0xF195, затем она отправляет версию ПО в EEPROM выбранного узла."""
+        if self._software_version_busy or self._options_busy or self._options_bulk_busy:
+            self.infoMessage.emit("Версия ПО", "Подождите завершения текущей UDS-операции.")
+            return
+
+        if self._programming_active or self._programming_batch_active:
+            self.infoMessage.emit("Версия ПО", "Во время программирования запись DID 0xF195 недоступна.")
+            return
+
+        if not self._can.is_connect or not self._can.is_trace:
+            self.infoMessage.emit("Версия ПО", "Сначала подключите адаптер и запустите трассировку CAN.")
+            return
+
+        parameter = get_option_by_did(int(self._software_version_did))
+        if parameter is None or (not parameter.can_write):
+            self.infoMessage.emit("Версия ПО", "DID 0xF195 недоступен для записи в текущем каталоге параметров.")
+            return
+
+        try:
+            normalized = self._normalize_software_version_text(str(version_text or ""))
+        except ValueError as exc:
+            self.infoMessage.emit("Версия ПО", str(exc))
+            return
+
+        encoded = normalized.encode("ascii", errors="strict")
+        size = int(parameter.size)
+        if size <= 1:
+            self.infoMessage.emit("Версия ПО", "Некорректный размер DID 0xF195 в каталоге параметров.")
+            return
+        if len(encoded) > (size - 1):
+            self.infoMessage.emit("Версия ПО", f"Версия ПО не помещается в DID 0xF195 ({size} байт).")
+            return
+
+        # Для строковых DID передаем только полезную строку и завершающий ноль.
+        # Остальные байты до размера переменной MCU заполнит нулями на своей стороне.
+        payload = encoded + b"\x00"
+        target_sa = self._resolve_software_version_target_sa()
+        self._software_version_busy = True
+        self._software_version_status = f"Запись DID 0xF195 для SA 0x{target_sa:02X}: {normalized}..."
+        self.softwareVersionChanged.emit()
+
+        started = self._start_options_write_multiframe_request(
+            parameter,
+            payload,
+            request_origin="sw_version_write",
+            append_history=False,
+            target_sa_override=target_sa,
+        )
+        if not started:
+            self._software_version_busy = False
+            self._software_version_status = "Ошибка отправки записи DID 0xF195."
+            self.softwareVersionChanged.emit()
+            self.infoMessage.emit("Версия ПО", "Не удалось отправить запись DID 0xF195.")
+
+    @Slot()
+    def writeSoftwareVersionFromFirmwareFile(self):
+        """Цель функции в записи версии из BIN-файла, затем она автоматически использует формат из имени прошивки."""
+        version_text = str(self._firmware_file_version_text or "").strip()
+        if not version_text or version_text == "—":
+            self.infoMessage.emit("Версия ПО", "В имени выбранного BIN-файла версия не найдена.")
+            return
+        self.writeSoftwareVersionDid(version_text)
+
     @Slot(bool)
     def setCollectorSftpEnabled(self, enabled):
         """Цель функции в переключении SFTP-выгрузки, затем она обновляет конфиг uploader и уведомляет UI."""
@@ -101,6 +233,242 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             return
         self._collector_schedule_sftp_upload(Path(self._collector_session_dir))
         self.infoMessage.emit("SFTP", "Текущая сессия поставлена в очередь выгрузки.")
+
+    @staticmethod
+    def _calibration_dump_required_dids() -> tuple[int, int, int, int, int]:
+        """Цель функции в фиксации состава дампа калибровки, затем она возвращает DID 0%/100%/K1/K0/zero trim."""
+        return (
+            int(UdsData.empty_fuel_tank.pid),
+            int(UdsData.full_fuel_tank.pid),
+            int(UdsData.fuel_temp_comp_k1_x100.pid),
+            int(UdsData.fuel_temp_comp_k0_count.pid),
+            int(UdsData.fuel_zero_trim_count.pid),
+        )
+
+    @staticmethod
+    def _calibration_dump_did_name(did: int) -> str:
+        """Цель функции в человеко-понятной подписи DID, затем она возвращает название параметра для логов."""
+        did_value = int(did) & 0xFFFF
+        if did_value == int(UdsData.empty_fuel_tank.pid):
+            return "0% (DID 0x0012)"
+        if did_value == int(UdsData.full_fuel_tank.pid):
+            return "100% (DID 0x0013)"
+        if did_value == int(UdsData.fuel_temp_comp_k1_x100.pid):
+            return "K1 (DID 0x001B)"
+        if did_value == int(UdsData.fuel_temp_comp_k0_count.pid):
+            return "K0 (DID 0x001C)"
+        if did_value == int(UdsData.fuel_zero_trim_count.pid):
+            return "Смещение 0% (DID 0x002D)"
+        return f"DID 0x{did_value:04X}"
+
+    def _reset_calibration_dump_capture_state(self):
+        """Цель функции в полном сбросе шага чтения дампа, затем она останавливает таймер и очищает промежуточные значения."""
+        self._calibration_dump_capture_active = False
+        self._calibration_dump_capture_target_sa = None
+        self._calibration_dump_capture_queue = []
+        self._calibration_dump_capture_current_did = None
+        self._calibration_dump_capture_values = {}
+        if self._calibration_dump_capture_timeout_timer.isActive():
+            self._calibration_dump_capture_timeout_timer.stop()
+
+    def _resolve_calibration_dump_directory(self) -> Path:
+        """Цель функции в выборе каталога хранения дампов, затем она возвращает рабочий путь для файлов резервной калибровки."""
+        try:
+            output_dir = Path(str(self._collector_output_directory)).expanduser().resolve()
+            output_dir.mkdir(parents=True, exist_ok=True)
+            return output_dir
+        except Exception:
+            fallback_dir = Path(self._project_root_directory) / "logs"
+            fallback_dir.mkdir(parents=True, exist_ok=True)
+            return fallback_dir
+
+    def _write_calibration_dump_file(self, payload: dict[str, object]) -> str:
+        """Цель функции в сохранении дампа в UTF-8 JSON, затем она записывает файл с именем, содержащим SA узла."""
+        output_dir = self._resolve_calibration_dump_directory()
+        try:
+            node_sa = int(payload.get("nodeSaDec", 0)) & 0xFF
+        except Exception:
+            node_sa = 0
+        timestamp_name = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_name = f"calibration_dump_node_0x{node_sa:02X}_{timestamp_name}.json"
+        file_path = output_dir / file_name
+        with file_path.open("w", encoding="utf-8", newline="\n") as file:
+            json.dump(payload, file, ensure_ascii=False, indent=2)
+            file.write("\n")
+        return str(file_path)
+
+    def _apply_calibration_dump_to_state(
+        self,
+        *,
+        node_sa: int,
+        level_0: int,
+        level_100: int,
+        k1: int,
+        k0: int,
+        zero_trim: int,
+        file_path: str,
+        source_text: str,
+        saved_at_text: str,
+        loaded_from_file: bool,
+    ):
+        """Цель функции в синхронизации UI с данными дампа, затем она обновляет все поля отображения резервной копии."""
+        self._calibration_backup_node_sa = int(node_sa) & 0xFF
+        self._calibration_backup_level_0 = int(level_0)
+        self._calibration_backup_level_100 = int(level_100)
+        self._calibration_backup_k1 = int(k1)
+        self._calibration_backup_k0 = int(k0)
+        self._calibration_backup_zero_trim = int(zero_trim)
+        self._calibration_backup_file_path = str(file_path or "")
+        self._calibration_backup_source_text = str(source_text or "").strip()
+        self._calibration_backup_saved_at_text = str(saved_at_text or "").strip()
+        self._calibration_backup_loaded_from_file = bool(loaded_from_file)
+        self._calibration_backup_available = True
+        self.calibrationBackupChanged.emit()
+
+    def _finish_calibration_dump_capture(self, success: bool, message: str):
+        """Цель функции в завершении чтения дампа, затем она либо сохраняет файл и обновляет UI, либо сообщает причину отказа."""
+        values = dict(self._calibration_dump_capture_values)
+        target_sa = self._calibration_dump_capture_target_sa
+        self._reset_calibration_dump_capture_state()
+
+        if not success:
+            self._append_log(str(message), RowColor.red)
+            self.infoMessage.emit("Калибровка", str(message))
+            return
+
+        if target_sa is None:
+            self._append_log("Калибровка: дамп не сохранен, не определен целевой узел.", RowColor.red)
+            self.infoMessage.emit("Калибровка", "Не удалось определить целевой узел для дампа.")
+            return
+
+        did0, did100, didk1, didk0, didtrim = self._calibration_dump_required_dids()
+        missing = [did for did in (did0, did100, didk1, didk0, didtrim) if did not in values]
+        if len(missing) > 0:
+            missing_text = ", ".join(f"0x{int(did) & 0xFFFF:04X}" for did in missing)
+            error_text = f"Калибровка: дамп не сохранен, не получены DID: {missing_text}."
+            self._append_log(error_text, RowColor.red)
+            self.infoMessage.emit("Калибровка", error_text)
+            return
+
+        saved_at_text = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+        payload = {
+            "format": "fuel-intake-calibration-dump-v1",
+            "savedAt": saved_at_text,
+            "nodeSaHex": f"0x{int(target_sa) & 0xFF:02X}",
+            "nodeSaDec": int(target_sa) & 0xFF,
+            "values": {
+                "did_0x0012": int(values[did0]),
+                "did_0x0013": int(values[did100]),
+                "did_0x001B": int(values[didk1]),
+                "did_0x001C": int(values[didk0]),
+                "did_0x002D": int(values[didtrim]),
+            },
+        }
+
+        try:
+            file_path = self._write_calibration_dump_file(payload)
+        except Exception as exc:
+            error_text = f"Калибровка: ошибка сохранения дампа: {str(exc)}"
+            self._append_log(error_text, RowColor.red)
+            self.infoMessage.emit("Калибровка", error_text)
+            return
+
+        self._apply_calibration_dump_to_state(
+            node_sa=int(target_sa) & 0xFF,
+            level_0=int(values[did0]),
+            level_100=int(values[did100]),
+            k1=int(values[didk1]),
+            k0=int(values[didk0]),
+            zero_trim=int(values[didtrim]),
+            file_path=file_path,
+            source_text="Источник дампа: считан из МК.",
+            saved_at_text=saved_at_text,
+            loaded_from_file=False,
+        )
+        self._append_log(
+            f"Калибровка: дамп узла 0x{int(target_sa) & 0xFF:02X} сохранен в {file_path}.",
+            RowColor.green,
+        )
+        self.infoMessage.emit("Калибровка", f"Дамп калибровки сохранен: {file_path}")
+
+    def _request_next_calibration_dump_capture_did(self):
+        """Цель функции в последовательном чтении параметров дампа, затем она отправляет следующий DID в МК."""
+        if not bool(self._calibration_dump_capture_active):
+            return
+
+        if len(self._calibration_dump_capture_queue) <= 0:
+            self._finish_calibration_dump_capture(True, "Калибровка: дамп сохранен.")
+            return
+
+        did = int(self._calibration_dump_capture_queue.pop(0)) & 0xFFFF
+        target_var = UdsData.get_var_by_pid(did)
+        if target_var is None:
+            self._finish_calibration_dump_capture(False, f"Калибровка: параметр DID 0x{did:04X} отсутствует в каталоге.")
+            return
+
+        self._calibration_dump_capture_current_did = int(did)
+        self._configure_calibration_uds_services()
+        self._calibration_read_service.read_data_by_identifier(self._build_calibration_tx_identifier(), target_var)
+        self._calibration_dump_capture_timeout_timer.start()
+        self._append_log(
+            f"Калибровка: чтение для дампа {self._calibration_dump_did_name(did)}.",
+            RowColor.blue,
+        )
+
+    def _on_calibration_dump_capture_timeout(self):
+        """Цель функции в защите шага чтения дампа от зависания, затем она завершает операцию с понятной ошибкой."""
+        if not bool(self._calibration_dump_capture_active):
+            return
+        did = self._calibration_dump_capture_current_did
+        if did is None:
+            self._finish_calibration_dump_capture(False, "Калибровка: таймаут чтения дампа.")
+            return
+        self._finish_calibration_dump_capture(
+            False,
+            f"Калибровка: таймаут чтения {self._calibration_dump_did_name(int(did))}.",
+        )
+
+    @staticmethod
+    def _parse_calibration_dump_value(raw_value, field_name: str) -> int:
+        """Цель функции в строгой валидации значения дампа, затем она преобразует поле в целое число."""
+        if isinstance(raw_value, bool):
+            raise ValueError(f"Поле {field_name} имеет некорректный тип.")
+        if isinstance(raw_value, int):
+            return int(raw_value)
+        text = str(raw_value).strip()
+        if len(text) <= 0:
+            raise ValueError(f"Поле {field_name} не заполнено.")
+        if text.lower().startswith("0x"):
+            return int(text, 16)
+        return int(text, 10)
+
+    @classmethod
+    def _load_calibration_dump_payload(cls, file_path: Path) -> dict[str, object]:
+        """Цель функции в чтении JSON-дампа, затем она возвращает словарь с параметрами и метаданными узла."""
+        with file_path.open("r", encoding="utf-8") as file:
+            raw_payload = json.load(file)
+        if not isinstance(raw_payload, dict):
+            raise ValueError("Формат дампа поврежден: корень JSON должен быть объектом.")
+
+        values = raw_payload.get("values")
+        if not isinstance(values, dict):
+            raise ValueError("Формат дампа поврежден: отсутствует блок values.")
+
+        node_sa_raw = raw_payload.get("nodeSaDec", raw_payload.get("nodeSa", raw_payload.get("nodeSaHex", 0)))
+        node_sa = cls._parse_calibration_dump_value(node_sa_raw, "nodeSa")
+        if node_sa < 0 or node_sa > 0xFF:
+            raise ValueError("Поле nodeSa выходит за диапазон 0..255.")
+
+        result = {
+            "node_sa": int(node_sa) & 0xFF,
+            "saved_at": str(raw_payload.get("savedAt", "")).strip(),
+            "level_0": cls._parse_calibration_dump_value(values.get("did_0x0012"), "did_0x0012"),
+            "level_100": cls._parse_calibration_dump_value(values.get("did_0x0013"), "did_0x0013"),
+            "k1": cls._parse_calibration_dump_value(values.get("did_0x001B"), "did_0x001B"),
+            "k0": cls._parse_calibration_dump_value(values.get("did_0x001C"), "did_0x001C"),
+            "zero_trim": cls._parse_calibration_dump_value(values.get("did_0x002D"), "did_0x002D"),
+        }
+        return result
 
     @staticmethod
     def _calibration_backup_all_nodes_required_dids() -> tuple[int, int, int, int]:
@@ -329,6 +697,30 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             return int((priority << 26) | (0xDBFF << 8) | source_address)
         return self._build_options_tx_identifier(target_sa)
 
+    def _communication_control_expected_functional_sas(self) -> set[int]:
+        """Цель функции в расчете ожидаемых ответов на functional 0x28, затем она возвращает только реально найденные SA."""
+        expected: set[int] = set()
+        tester_sas = {
+            int(UdsIdentifiers.tx.src) & 0xFF,
+            int(UdsIdentifiers.rx.dst) & 0xFF,
+        }
+
+        def add_sa(raw_value):
+            try:
+                node_sa = int(raw_value) & 0xFF
+            except (TypeError, ValueError):
+                return
+            if node_sa in tester_sas:
+                return
+            expected.add(node_sa)
+
+        for raw_value in list(self._observed_candidate_values):
+            add_sa(raw_value)
+        for raw_value in list(self._collector_node_order):
+            add_sa(raw_value)
+
+        return expected
+
     def _set_communication_control_busy(self, busy: bool):
         """Цель функции в переключении состояния операции 0x28, затем она обновляет UI-флаги занятости."""
         value = bool(busy)
@@ -352,6 +744,9 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._communication_control_pending_target_sa = None
         self._communication_control_pending_sub_function = None
         self._communication_control_pending_suppress = False
+        self._communication_control_pending_functional = False
+        self._communication_control_expected_response_sas = set()
+        self._communication_control_functional_response_sas = set()
         self._set_communication_control_busy(False)
         if status_text is not None:
             self._set_communication_control_status(status_text)
@@ -371,6 +766,29 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
                     f"SID 0x28: положительный ответ не ожидался (бит 0x80 включен), узел 0x{int(target_sa) & 0xFF:02X}.",
                     RowColor.green,
                 )
+            return
+
+        if bool(self._communication_control_pending_functional):
+            response_sas = sorted(int(item) & 0xFF for item in self._communication_control_functional_response_sas)
+            expected_sas = sorted(int(item) & 0xFF for item in self._communication_control_expected_response_sas)
+            missing_sas = [item for item in expected_sas if item not in response_sas]
+            if len(response_sas) > 0:
+                response_text = ", ".join(f"0x{item:02X}" for item in response_sas)
+                expected_text = f"/{len(expected_sas)}" if len(expected_sas) > 0 else ""
+                missing_text = ""
+                if len(missing_sas) > 0:
+                    missing_text = " Не ответили: " + ", ".join(f"0x{item:02X}" for item in missing_sas) + "."
+                self._reset_communication_control_state(
+                    f"Функциональный SID 0x28 завершен: подтверждений {len(response_sas)}{expected_text}, ответили узлы {response_text}.{missing_text}"
+                )
+                self._append_log(
+                    f"SID 0x28: функциональная команда принята, ответили узлы {response_text}.{missing_text}",
+                    RowColor.yellow if len(missing_sas) > 0 else RowColor.green,
+                )
+                return
+
+            self._reset_communication_control_state("Функциональный SID 0x28 отправлен, но ответы от узлов не пришли.")
+            self._append_log("SID 0x28: функциональный запрос без ответов от узлов.", RowColor.yellow)
             return
 
         self._reset_communication_control_state("Таймаут ожидания ответа на SID 0x28.")
@@ -451,20 +869,35 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         suppress_positive = bool(self._communication_control_suppress_positive_response)
         target_sa = int(self._resolve_source_address_operation_target_sa()) & 0xFF
         tx_identifier = self._build_communication_control_tx_identifier(target_sa)
-        addressing_text = "функционально" if int(self._selected_communication_control_addressing_index) == 1 else "физически"
+        functional_addressing = int(self._selected_communication_control_addressing_index) == 1
+        addressing_text = "функционально" if functional_addressing else "физически"
 
         self._communication_control_pending_target_sa = target_sa
         self._communication_control_pending_sub_function = int(control_type) & 0x7F
         self._communication_control_pending_suppress = suppress_positive
+        self._communication_control_pending_functional = functional_addressing
+        self._communication_control_expected_response_sas = (
+            self._communication_control_expected_functional_sas() if functional_addressing else {target_sa}
+        )
+        self._communication_control_functional_response_sas = set()
         self._set_communication_control_busy(True)
+        target_text = "всем известным узлам"
+        if functional_addressing:
+            expected_sas = sorted(int(item) & 0xFF for item in self._communication_control_expected_response_sas)
+            if len(expected_sas) > 0:
+                target_text = "всем узлам, ожидаемые ответы: " + ", ".join(f"0x{item:02X}" for item in expected_sas)
+            else:
+                target_text = "всем узлам, список известных SA пуст"
+        else:
+            target_text = f"SA 0x{target_sa:02X}"
         self._set_communication_control_status(
-            f"SID 0x28 отправлен {addressing_text}: sub=0x{int(control_type) & 0x7F:02X}, type=0x{int(communication_type) & 0xFF:02X}, SA 0x{target_sa:02X}."
+            f"SID 0x28 отправлен {addressing_text}: sub=0x{int(control_type) & 0x7F:02X}, type=0x{int(communication_type) & 0xFF:02X}, {target_text}."
         )
         self._append_log(
             (
                 f"SID 0x28: запрос sub=0x{int(control_type) & 0x7F:02X}, "
                 f"type=0x{int(communication_type) & 0xFF:02X}, SPR={1 if suppress_positive else 0}, "
-                f"адресация={addressing_text}, CAN ID=0x{int(tx_identifier) & 0x1FFFFFFF:08X}, SA 0x{target_sa:02X}."
+                f"адресация={addressing_text}, CAN ID=0x{int(tx_identifier) & 0x1FFFFFFF:08X}, {target_text}."
             ),
             RowColor.blue,
         )
@@ -479,7 +912,13 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             self.infoMessage.emit("Протокол", "Не удалось отправить команду CommunicationControl.")
             return
 
-        timeout_ms = 900 if suppress_positive else 1800
+        if suppress_positive:
+            timeout_ms = 900
+        elif functional_addressing:
+            expected_count = max(1, len(self._communication_control_expected_response_sas))
+            timeout_ms = max(2200, min(5000, 1200 + expected_count * 450))
+        else:
+            timeout_ms = 1800
         self._communication_control_timeout_timer.start(timeout_ms)
 
     @Slot()
@@ -665,15 +1104,20 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
         byte_order = "little" if new_index == 1 else "big"
         self._bootloader.set_transfer_byte_order(byte_order)
-        self._calibration_read_service.set_byte_order(byte_order)
-        self._calibration_write_service.set_byte_order(byte_order)
-        self._collector_read_service.set_byte_order(byte_order)
-        self._options_read_service.set_byte_order(byte_order)
-        self._options_write_service.set_byte_order(byte_order)
+
+        # Для DID-сервисов UDS проекта всегда используется стандартный big-endian порядок DID.
+        # Переключатель порядка байтов применяется только к передаче прошивки в bootloader.
+        self._calibration_read_service.set_byte_order("big")
+        self._calibration_write_service.set_byte_order("big")
+        self._collector_read_service.set_byte_order("big")
+        self._options_read_service.set_byte_order("big")
+        self._options_write_service.set_byte_order("big")
+        self._source_address_read_service.set_byte_order("big")
+        self._source_address_write_service.set_byte_order("big")
 
         label = "Little Endian" if new_index == 1 else "Big Endian"
-        self._append_log(f"Выбран порядок байтов: {label}", QColor("#0ea5e9"))
-        self.infoMessage.emit("Протокол", f"Выбран порядок байтов: {label}.")
+        self._append_log(f"Выбран порядок байтов передачи прошивки: {label}. DID-сервисы UDS фиксированы в Big Endian.", QColor("#0ea5e9"))
+        self.infoMessage.emit("Протокол", f"Порядок байтов для прошивки: {label}. DID-сервисы UDS работают в Big Endian.")
 
     @Slot(int)
     def setSelectedCalibrationNodeIndex(self, index):
@@ -2012,55 +2456,121 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot()
     def createCalibrationBackup(self):
-        """Цель функции в создании CSV-копии по всем узлам, затем она считывает из МК 0%/100%/K1/K0 для каждого SA."""
+        """Цель функции в создании дампа текущего узла, затем она последовательно считывает 0%/100%/K1/K0/zero trim и сохраняет JSON."""
         if not self._can.is_connect:
             self.infoMessage.emit("Калибровка", "Сначала подключите CAN-адаптер.")
             return
 
-        if bool(self._calibration_backup_all_nodes_active):
-            self.infoMessage.emit("Калибровка", "Создание копии уже выполняется.")
+        if bool(self._calibration_dump_capture_active):
+            self.infoMessage.emit("Калибровка", "Сохранение дампа уже выполняется.")
             return
 
-        target_nodes = self._resolve_calibration_backup_all_nodes_targets()
-        if len(target_nodes) <= 0:
-            self.infoMessage.emit("Калибровка", "Не найдено узлов для создания копии.")
+        if self._calibration_restore_active:
+            self.infoMessage.emit("Калибровка", "Сейчас выполняется применение дампа. Дождитесь завершения.")
             return
 
-        self._calibration_backup_all_nodes_active = True
-        self._calibration_backup_all_nodes_queue = [int(value) & 0xFF for value in target_nodes]
-        self._calibration_backup_all_nodes_values_by_sa = {}
-        self._calibration_backup_all_nodes_original_target_sa = self._calibration_target_node_sa
-        self._calibration_backup_all_nodes_reference_sa = int(self._resolve_calibration_target_sa()) & 0xFF
-        self._calibration_backup_all_nodes_current_sa = None
-        self._calibration_backup_pending = False
-        self._calibration_backup_values_pending = {}
+        target_sa = int(self._resolve_calibration_target_sa()) & 0xFF
+        self._calibration_target_node_sa = int(target_sa)
+        self._calibration_dump_capture_active = True
+        self._calibration_dump_capture_target_sa = int(target_sa)
+        self._calibration_dump_capture_values = {}
+        self._calibration_dump_capture_current_did = None
+        self._calibration_dump_capture_queue = [int(did) & 0xFFFF for did in self._calibration_dump_required_dids()]
+        if self._calibration_dump_capture_timeout_timer.isActive():
+            self._calibration_dump_capture_timeout_timer.stop()
         self._append_log(
-            f"Калибровка: запуск создания CSV-копии по узлам ({len(target_nodes)} шт.).",
+            f"Калибровка: запуск сохранения дампа для узла 0x{int(target_sa) & 0xFF:02X}.",
             RowColor.blue,
         )
-        self._request_next_calibration_backup_all_nodes_node()
+        self._request_next_calibration_dump_capture_did()
+
+    @Slot(str)
+    def loadCalibrationBackupDump(self, path_or_url):
+        """Цель функции в загрузке JSON-дампа, затем она валидирует параметры и показывает их в блоке резервной копии."""
+        file_path = self._to_local_path(path_or_url)
+        if not file_path:
+            self.infoMessage.emit("Калибровка", "Путь к дампу не выбран.")
+            return
+
+        candidate = Path(str(file_path))
+        if not candidate.exists() or (not candidate.is_file()):
+            self.infoMessage.emit("Калибровка", "Файл дампа не найден.")
+            return
+
+        try:
+            parsed = self._load_calibration_dump_payload(candidate)
+        except Exception as exc:
+            self.infoMessage.emit("Калибровка", f"Не удалось загрузить дамп: {str(exc)}")
+            self._append_log(f"Калибровка: ошибка загрузки дампа {candidate}: {str(exc)}", RowColor.red)
+            return
+
+        self._apply_calibration_dump_to_state(
+            node_sa=int(parsed["node_sa"]) & 0xFF,
+            level_0=int(parsed["level_0"]),
+            level_100=int(parsed["level_100"]),
+            k1=int(parsed["k1"]),
+            k0=int(parsed["k0"]),
+            zero_trim=int(parsed["zero_trim"]),
+            file_path=str(candidate),
+            source_text="Источник дампа: загружен из файла.",
+            saved_at_text=str(parsed.get("saved_at", "")).strip(),
+            loaded_from_file=True,
+        )
+        self._append_log(
+            f"Калибровка: дамп загружен из файла {candidate}.",
+            RowColor.green,
+        )
+        self.infoMessage.emit("Калибровка", f"Дамп загружен: {candidate}")
 
     @Slot()
     def restoreCalibrationBackup(self):
-        """Цель функции в откате к сохраненной калибровке, затем она поочередно записывает резервные DID 0x0012/0x0013."""
+        """Цель функции в применении загруженного дампа, затем она поочередно записывает 0%/100%/K1/K0/zero trim в текущий узел."""
         if not self._calibration_backup_available:
-            self.infoMessage.emit("Калибровка", "Резервная копия еще не создана.")
+            self.infoMessage.emit("Калибровка", "Сначала сохраните или загрузите дамп калибровки.")
             return
 
         if not self._can.is_connect:
             self.infoMessage.emit("Калибровка", "Сначала подключите CAN-адаптер.")
+            return
+
+        if bool(self._calibration_dump_capture_active):
+            self.infoMessage.emit("Калибровка", "Сейчас выполняется чтение дампа из МК. Дождитесь завершения.")
             return
 
         backup0 = int(self._calibration_backup_level_0)
         backup100 = int(self._calibration_backup_level_100)
+        backup_k1 = int(self._calibration_backup_k1)
+        backup_k0 = int(self._calibration_backup_k0)
+        backup_zero_trim = int(self._calibration_backup_zero_trim)
+        target_sa = int(self._resolve_calibration_target_sa()) & 0xFF
+        self._calibration_target_node_sa = int(target_sa)
 
         self._calibration_restore_active = True
         self._calibration_restore_queue = [
             (int(UdsData.empty_fuel_tank.pid), backup0),
             (int(UdsData.full_fuel_tank.pid), backup100),
+            (int(UdsData.fuel_temp_comp_k1_x100.pid), backup_k1),
+            (int(UdsData.fuel_temp_comp_k0_count.pid), backup_k0),
+            (int(UdsData.fuel_zero_trim_count.pid), backup_zero_trim),
         ]
         self._calibration_restore_current_did = None
-        self._append_log("Калибровка: запуск восстановления из резервной копии.", RowColor.blue)
+        source_sa = self._calibration_backup_node_sa
+        source_text = f"0x{int(source_sa) & 0xFF:02X}" if source_sa is not None else "-"
+        if source_sa is not None and (int(source_sa) & 0xFF) != (int(target_sa) & 0xFF):
+            self._append_log(
+                (
+                    f"Калибровка: применяется дамп узла {source_text} к выбранному узлу 0x{target_sa:02X}. "
+                    "Проверьте соответствие изделия перед записью."
+                ),
+                RowColor.yellow,
+            )
+        self._append_log(
+            (
+                f"Калибровка: запуск применения дампа к узлу 0x{target_sa:02X} "
+                f"(источник дампа: {source_text})."
+            ),
+            RowColor.blue,
+        )
         self._send_next_calibration_restore_write()
 
     @Slot(str)
@@ -2641,6 +3151,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             self._calibration_backup_all_nodes_reference_sa = None
             if self._calibration_backup_all_nodes_step_timer.isActive():
                 self._calibration_backup_all_nodes_step_timer.stop()
+            self._reset_calibration_dump_capture_state()
             self._calibration_restore_active = False
             self._calibration_restore_queue = []
             self._reset_calibration_temp_comp_state(
@@ -2712,6 +3223,9 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         # Update UI path immediately after selection, even before file validation.
         self._firmware_path = str(Path(file_path))
         self.firmwarePathChanged.emit()
+        parsed_version = self._extract_firmware_version_from_name(self._firmware_path)
+        self._firmware_file_version_text = parsed_version if parsed_version else "—"
+        self.softwareVersionChanged.emit()
 
         self._set_firmware_loading(True)
         self._append_log("Чтение BIN файла...", RowColor.blue)

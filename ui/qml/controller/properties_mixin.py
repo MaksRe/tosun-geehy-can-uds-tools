@@ -62,6 +62,7 @@ class AppControllerPropertiesMixin(AppControllerContract):
     optionsTargetNodeChanged = Signal()
     optionsBulkChanged = Signal()
     optionsBulkRowsChanged = Signal()
+    softwareVersionChanged = Signal()
 
     @Property("QStringList", notify=devicesChanged)
     def devices(self):
@@ -106,6 +107,26 @@ class AppControllerPropertiesMixin(AppControllerContract):
     @Property(str, notify=firmwarePathChanged)
     def firmwarePath(self):
         return self._firmware_path
+
+    @Property(str, notify=softwareVersionChanged)
+    def softwareVersionText(self):
+        """Цель функции в выдаче текущей версии ПО из DID 0xF195, затем она отображает значение на главной форме."""
+        return str(self._software_version_text)
+
+    @Property(str, notify=softwareVersionChanged)
+    def softwareVersionStatusText(self):
+        """Цель функции в выдаче статуса операций DID 0xF195, затем она показывает оператору ход чтения или записи."""
+        return str(self._software_version_status)
+
+    @Property(bool, notify=softwareVersionChanged)
+    def softwareVersionBusy(self):
+        """Цель функции в выдаче флага занятости DID 0xF195, затем она блокирует повторные клики в UI."""
+        return bool(self._software_version_busy)
+
+    @Property(str, notify=softwareVersionChanged)
+    def firmwareFileVersionText(self):
+        """Цель функции в выдаче версии из имени BIN-файла, затем она позволяет записать ее в DID 0xF195."""
+        return str(self._firmware_file_version_text)
 
     @Property(int, notify=progressChanged)
     def progressValue(self):
@@ -680,6 +701,51 @@ class AppControllerPropertiesMixin(AppControllerContract):
         if not self._calibration_backup_available:
             return "-"
         return str(int(self._calibration_backup_level_100))
+
+    @Property(str, notify=calibrationBackupChanged)
+    def calibrationBackupK1Text(self):
+        if not self._calibration_backup_available:
+            return "-"
+        return str(int(self._calibration_backup_k1))
+
+    @Property(str, notify=calibrationBackupChanged)
+    def calibrationBackupK0Text(self):
+        if not self._calibration_backup_available:
+            return "-"
+        return str(int(self._calibration_backup_k0))
+
+    @Property(str, notify=calibrationBackupChanged)
+    def calibrationBackupZeroTrimText(self):
+        if not self._calibration_backup_available:
+            return "-"
+        return str(int(self._calibration_backup_zero_trim))
+
+    @Property(str, notify=calibrationBackupChanged)
+    def calibrationBackupNodeText(self):
+        if (not self._calibration_backup_available) or (self._calibration_backup_node_sa is None):
+            return "-"
+        return f"0x{int(self._calibration_backup_node_sa) & 0xFF:02X}"
+
+    @Property(str, notify=calibrationBackupChanged)
+    def calibrationBackupSavedAtText(self):
+        if not self._calibration_backup_available:
+            return "-"
+        saved_text = str(self._calibration_backup_saved_at_text).strip()
+        return saved_text if saved_text else "-"
+
+    @Property(str, notify=calibrationBackupChanged)
+    def calibrationBackupFilePathText(self):
+        path_text = str(self._calibration_backup_file_path).strip()
+        return path_text if path_text else "-"
+
+    @Property(str, notify=calibrationBackupChanged)
+    def calibrationBackupSourceText(self):
+        source_text = str(self._calibration_backup_source_text).strip()
+        if source_text:
+            return source_text
+        if self._calibration_backup_available:
+            return "Источник дампа: МК."
+        return "Дамп калибровки не сохранен."
 
     @Property(str, notify=calibrationTempCompChanged)
     def calibrationTempCompStatusText(self):

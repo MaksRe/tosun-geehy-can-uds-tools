@@ -88,7 +88,66 @@ class Bootloader(QObject):
 
         self._service_transfer_data.signal_data_sent.connect(self._handle_data_sent)
 
+        self._programming_state_timeout_timer = QTimer(self)
+        self._programming_state_timeout_timer.setSingleShot(True)
+        self._programming_state_timeout_timer.timeout.connect(self._on_programming_state_timeout)
+
         CanDevice.instance().signal_new_message.connect(self.on_new_message)
+
+    @staticmethod
+    def _is_programming_state(state: BootloaderState) -> bool:
+        """Цель функции в определении этапов прошивки, затем она возвращает true только для состояний активного программирования."""
+        return state in (
+            BootloaderState.SET_PROGRAMMING_SESSION,
+            BootloaderState.REQUEST_SEED,
+            BootloaderState.SEED_VERIFICATION,
+            BootloaderState.WRITE_FINGERPRINT,
+            BootloaderState.ERASE_FIRMWARE,
+            BootloaderState.REQUEST_DOWNLOAD,
+            BootloaderState.REQUEST_DOWNLOAD_CONSECUTIVE,
+            BootloaderState.TRANSFER_DATA_FF,
+            BootloaderState.TRANSFER_DATA_CF,
+            BootloaderState.REQUEST_TRANSFER_EXIT,
+        )
+
+    @staticmethod
+    def _programming_timeout_ms(state: BootloaderState) -> int:
+        """Цель функции в подборе таймаута этапа, затем она возвращает безопасный интервал ожидания ответа МК."""
+        if state == BootloaderState.ERASE_FIRMWARE:
+            return 20000
+        if state in (
+            BootloaderState.REQUEST_DOWNLOAD,
+            BootloaderState.REQUEST_DOWNLOAD_CONSECUTIVE,
+            BootloaderState.TRANSFER_DATA_FF,
+            BootloaderState.TRANSFER_DATA_CF,
+            BootloaderState.REQUEST_TRANSFER_EXIT,
+        ):
+            return 8000
+        return 5000
+
+    def _arm_programming_timeout(self):
+        """Цель функции в запуске сторожевого таймаута прошивки, затем она ограничивает ожидание ответа на текущем этапе."""
+        if not self._is_programming_state(self._state):
+            return
+        self._programming_state_timeout_timer.start(self._programming_timeout_ms(self._state))
+
+    def _stop_programming_timeout(self):
+        """Цель функции в остановке сторожевого таймаута прошивки, затем она предотвращает ложные срабатывания при смене этапа."""
+        if self._programming_state_timeout_timer.isActive():
+            self._programming_state_timeout_timer.stop()
+
+    def _abort_programming(self, message: str):
+        """Цель функции в аварийном завершении прошивки, затем она возвращает загрузчик в READY и отправляет сигнал завершения с ошибкой."""
+        self._stop_programming_timeout()
+        self.signal_new_state.emit(str(message), RowColor.red)
+        self._state = BootloaderState.READY
+        self.signal_finished.emit(False)
+
+    def _on_programming_state_timeout(self):
+        """Цель функции в обработке зависания этапа, затем она завершает программирование ошибкой при отсутствии ответа МК."""
+        if not self._is_programming_state(self._state):
+            return
+        self._abort_programming(f"Таймаут этапа прошивки: {self._state.name}.")
 
     @Slot(int)
     def _handle_data_sent(self, total_bytes):
@@ -197,6 +256,7 @@ class Bootloader(QObject):
             self._service_session.set(Session.PROGRAMMING)
 
             self.signal_new_state.emit("Запрос на установку сессии 'programming'", RowColor.blue)
+            self._arm_programming_timeout()
 
             return True
         else:
@@ -218,6 +278,9 @@ class Bootloader(QObject):
             if identifier != UdsIdentifiers.rx.identifier:
                 return
 
+        if self._is_programming_state(self._state):
+            self._stop_programming_timeout()
+
         if self._state == BootloaderState.SET_PROGRAMMING_SESSION:
             if self._service_session.verify_answer(_data):
 
@@ -227,9 +290,10 @@ class Bootloader(QObject):
                 self._service_security_access.request_seed()
 
                 self.signal_new_state.emit("Запрос seed-фразы", RowColor.blue)
+                self._arm_programming_timeout()
 
             else:
-                self.signal_new_state.emit("Ошибка перехода в сессию 'programming'", RowColor.red)
+                self._abort_programming("Ошибка перехода в сессию 'programming'")
 
         elif self._state == BootloaderState.REQUEST_SEED:
             if self._service_security_access.verify_answer_request_seed(_data):
@@ -240,9 +304,10 @@ class Bootloader(QObject):
                 self._service_security_access.request_check_key()
 
                 self.signal_new_state.emit("Запрос на проверку ключа доступа", RowColor.blue)
+                self._arm_programming_timeout()
 
             else:
-                self.signal_new_state.emit("Ошибочный ответ", RowColor.red)
+                self._abort_programming("Ошибочный ответ на запрос seed")
 
         elif self._state == BootloaderState.SEED_VERIFICATION:
             if self._service_security_access.verify_answer_request_check_key(_data):
@@ -252,9 +317,10 @@ class Bootloader(QObject):
                 self._service_write_data_by_id.write_fingerprint(0xAA)
 
                 self.signal_new_state.emit("Запись fingerprint", RowColor.blue)
+                self._arm_programming_timeout()
 
             else:
-                self.signal_new_state.emit("Ошибка получения доступа", RowColor.red)
+                self._abort_programming("Ошибка получения доступа")
 
         elif self._state == BootloaderState.WRITE_FINGERPRINT:
             if self._service_write_data_by_id.verify_answer_write_fingerprint(_data):
@@ -264,9 +330,10 @@ class Bootloader(QObject):
                 self._service_routine_control.request_erase_firmware()
 
                 self.signal_new_state.emit("Запрос на очистку области памяти основной программы", RowColor.blue)
+                self._arm_programming_timeout()
 
             else:
-                self.signal_new_state.emit("Ошибка записи fingerprint", RowColor.red)
+                self._abort_programming("Ошибка записи fingerprint")
 
         elif self._state == BootloaderState.ERASE_FIRMWARE:
             if self._service_routine_control.verify_answer_erase_firmware(_data):
@@ -276,9 +343,10 @@ class Bootloader(QObject):
                 self._service_request_download.request_download_first()
 
                 self.signal_new_state.emit("Запрос на программирование области памяти", RowColor.blue)
+                self._arm_programming_timeout()
 
             else:
-                self.signal_new_state.emit("Ошибка в процессе очистки памяти", RowColor.red)
+                self._abort_programming("Ошибка в процессе очистки памяти")
 
         elif self._state == BootloaderState.REQUEST_DOWNLOAD:
             # приходит FlowControl
@@ -286,6 +354,9 @@ class Bootloader(QObject):
 
                 self._state = BootloaderState.REQUEST_DOWNLOAD_CONSECUTIVE
                 self._service_request_download.request_download_consecutive()
+                self._arm_programming_timeout()
+            else:
+                self._abort_programming("Ошибка flow control на этапе RequestDownload")
 
         elif self._state == BootloaderState.REQUEST_DOWNLOAD_CONSECUTIVE:
             if self._service_request_download.verify_request_download(_data):
@@ -294,6 +365,9 @@ class Bootloader(QObject):
                 self._state = BootloaderState.TRANSFER_DATA_FF
                 block_size = self._service_transfer_data.send_first_frame()
                 self.signal_new_state.emit(f"Передача блока ({block_size} байт)", RowColor.blue)
+                self._arm_programming_timeout()
+            else:
+                self._abort_programming("Ошибка подтверждения RequestDownload")
 
         elif self._state == BootloaderState.TRANSFER_DATA_FF:
             # Для короткого блока (Single Frame) ECU сразу отвечает позитивным TransferData.
@@ -305,15 +379,17 @@ class Bootloader(QObject):
                     self._state = BootloaderState.REQUEST_TRANSFER_EXIT
                     self._service_request_transfer_exit.request_transfer_exit()
                     self.signal_new_state.emit("Завершение передачи", RowColor.blue)
+                    self._arm_programming_timeout()
                 else:
                     block_size = self._service_transfer_data.send_first_frame()
                     self.signal_new_state.emit(f"Передача блока ({block_size} байт)", RowColor.blue)
+                    self._arm_programming_timeout()
             elif self._service_transfer_data.verify_flow_control(_data):
                 self._state = BootloaderState.TRANSFER_DATA_CF
                 self._service_transfer_data.send_consecutive_frames()
+                self._arm_programming_timeout()
             else:
-                self.signal_new_state.emit("Ошибка обработки flow control", RowColor.red)
-                self._state = BootloaderState.ERROR
+                self._abort_programming("Ошибка обработки flow control")
 
         elif self._state == BootloaderState.TRANSFER_DATA_CF:
             if self._service_transfer_data.data_transferred():
@@ -322,6 +398,7 @@ class Bootloader(QObject):
                 self._state = BootloaderState.REQUEST_TRANSFER_EXIT
                 self._service_request_transfer_exit.request_transfer_exit()
                 self.signal_new_state.emit("Завершение передачи", RowColor.blue)
+                self._arm_programming_timeout()
 
             else:
                 # После передачи полного блока (2048 байт)
@@ -331,26 +408,27 @@ class Bootloader(QObject):
                         self._state = BootloaderState.TRANSFER_DATA_FF
                         block_size = self._service_transfer_data.send_first_frame()
                         self.signal_new_state.emit(f"Передача блока ({block_size} байт)", RowColor.blue)
+                        self._arm_programming_timeout()
                 else:
                     # После передачи максимального количества фреймов в одном блоке,
                     # принимаем очередной flow_control и из него берем очередное количество
                     # фреймов (block_size) для последущей передачи
                     if self._service_transfer_data.verify_flow_control(_data):
                         self._service_transfer_data.send_consecutive_frames()
+                        self._arm_programming_timeout()
                     else:
-                        self.signal_new_state.emit("Ошибка обработки flow control", RowColor.red)
-                        self._state = BootloaderState.ERROR
+                        self._abort_programming("Ошибка обработки flow control")
 
         elif self._state == BootloaderState.REQUEST_TRANSFER_EXIT:
             if self._service_request_transfer_exit.verify_answer_request_transfer_exit(_data):
                 self.signal_new_state.emit("Успешное завершение передачи данных", RowColor.green)
 
+                self._stop_programming_timeout()
                 self.signal_finished.emit(True)
                 self._state = BootloaderState.READY
 
             else:
-                self.signal_new_state.emit("Ошибка завершения передачи данных", RowColor.red)
-                self._state = BootloaderState.ERROR
+                self._abort_programming("Ошибка завершения передачи данных")
 
         elif self._state == BootloaderState.WRITE_CAN_SOURCE_ADDRESS:
             if self._source_address_timeout_timer.isActive():
@@ -416,6 +494,4 @@ class Bootloader(QObject):
                 self._state = BootloaderState.READY
 
         if self._state == BootloaderState.ERROR:
-            pass
-            # CanDevice.instance().signal_new_message.disconnect(self.on_new_message)
-
+            self._abort_programming("Внутренняя ошибка загрузчика")

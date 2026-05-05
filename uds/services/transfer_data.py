@@ -44,6 +44,9 @@ class ServiceTransferData(QObject):
         self._ff_data_length = 0
 
     def set_firmware(self, binary_content: bytes):
+        # Сбрасываем состояние передачи перед каждым новым циклом прошивки,
+        # чтобы повторное программирование другого узла начиналось с нулевых счетчиков.
+        self.reset_transfer()
         self._binary_content = binary_content
         self._binary_content_size = len(self._binary_content)
         # Для каждого запроса TransferData добавляются 2 служебных байта (SID + block_sequence).
@@ -193,8 +196,12 @@ class ServiceTransferData(QObject):
         return False
 
     def reset_transfer(self):
+        if self._timer.isActive():
+            self._timer.stop()
         self._total_bytes_sent = 0
         self._bytes_sent = 0
         self._index_binary_content = 0
         self._block_sequence = 0
         self._frame_number = 0
+        self._ff_data_length = 0
+        self._flow_control = FlowControl(0, 0, 0, 0)

@@ -174,6 +174,153 @@ Card {
             color: "#f6fbff"
             border.color: "#d6e2ef"
             border.width: 1
+            implicitHeight: versionDidColumn.implicitHeight + 16
+
+            ColumnLayout {
+                id: versionDidColumn
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: 8
+                spacing: 8
+
+                Text {
+                    text: "Версия ПО (DID 0xF195)"
+                    color: root.textMain
+                    font.pixelSize: 14
+                    font.bold: true
+                    font.family: "Bahnschrift"
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 6
+
+                    Text {
+                        text: "Текущее значение:"
+                        color: root.textSoft
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        radius: 8
+                        color: "#eef6ff"
+                        border.color: "#c7dff4"
+                        border.width: 1
+                        implicitHeight: swCurrentVersionText.implicitHeight + 10
+
+                        Text {
+                            id: swCurrentVersionText
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.leftMargin: 8
+                            anchors.rightMargin: 8
+                            text: root.appController ? root.appController.softwareVersionText : "—"
+                            color: root.textMain
+                            font.pixelSize: 12
+                            font.bold: true
+                            font.family: "Bahnschrift"
+                            elide: Text.ElideRight
+                        }
+                    }
+
+                    FancyButton {
+                        Layout.preferredWidth: 132
+                        Layout.minimumWidth: 120
+                        Layout.preferredHeight: 30
+                        text: root.appController && root.appController.softwareVersionBusy ? "Чтение..." : "Прочитать"
+                        loading: root.appController ? root.appController.softwareVersionBusy : false
+                        enabled: root.serviceControlsEnabled
+                        fontPixelSize: 12
+                        tone: "#0284c7"
+                        toneHover: "#0369a1"
+                        tonePressed: "#075985"
+                        onClicked: if (root.appController) root.appController.readSoftwareVersionDid()
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 6
+
+                    FancyTextField {
+                        id: swVersionEditField
+                        Layout.fillWidth: true
+                        Layout.minimumWidth: 0
+                        placeholderText: "Введите версию, например 1.0.0.b0006"
+                        textColor: root.textMain
+                        bgColor: root.inputBg
+                        borderColor: root.inputBorder
+                        focusBorderColor: root.inputFocus
+                    }
+
+                    FancyButton {
+                        Layout.preferredWidth: 132
+                        Layout.minimumWidth: 120
+                        Layout.preferredHeight: 30
+                        text: root.appController && root.appController.softwareVersionBusy ? "Запись..." : "Записать"
+                        loading: root.appController ? root.appController.softwareVersionBusy : false
+                        enabled: root.serviceControlsEnabled
+                        fontPixelSize: 12
+                        tone: "#16a34a"
+                        toneHover: "#15803d"
+                        tonePressed: "#166534"
+                        onClicked: if (root.appController) root.appController.writeSoftwareVersionDid(swVersionEditField.text)
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 6
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: {
+                            if (!root.appController) {
+                                return "Версия из BIN: —"
+                            }
+                            return "Версия из BIN: " + root.appController.firmwareFileVersionText
+                        }
+                        color: root.textSoft
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                        elide: Text.ElideRight
+                    }
+
+                    FancyButton {
+                        Layout.preferredWidth: 132
+                        Layout.minimumWidth: 120
+                        Layout.preferredHeight: 30
+                        text: "Записать из BIN"
+                        enabled: root.serviceControlsEnabled
+                        fontPixelSize: 12
+                        tone: "#0ea5a4"
+                        toneHover: "#0f766e"
+                        tonePressed: "#115e59"
+                        onClicked: if (root.appController) root.appController.writeSoftwareVersionFromFirmwareFile()
+                    }
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: root.appController ? root.appController.softwareVersionStatusText : "Ожидание контроллера."
+                    color: root.textSoft
+                    font.pixelSize: 11
+                    font.family: "Bahnschrift"
+                    wrapMode: Text.WordWrap
+                }
+            }
+        }
+
+        Rectangle {
+            Layout.fillWidth: true
+            radius: 12
+            color: "#f6fbff"
+            border.color: "#d6e2ef"
+            border.width: 1
             implicitHeight: targetColumn.implicitHeight + 18
 
             ColumnLayout {

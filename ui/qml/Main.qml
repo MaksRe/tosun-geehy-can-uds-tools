@@ -551,18 +551,102 @@ ApplicationWindow {
         anchors.bottomMargin: 8
         spacing: 12
 
-        ConnectionCard {
+        RowLayout {
             Layout.fillWidth: true
-            appController: window.backendController
-            cardColor: window.cardColor
-            cardBorder: window.cardBorder
-            textMain: window.textMain
-            textSoft: window.textSoft
-            inputBg: window.inputBg
-            inputBorder: window.inputBorder
-            inputFocus: window.inputFocus
-            showCardHeader: false
-            compactMode: true
+            Layout.alignment: Qt.AlignTop
+            spacing: 10
+
+            ConnectionCard {
+                Layout.fillWidth: true
+                appController: window.backendController
+                cardColor: window.cardColor
+                cardBorder: window.cardBorder
+                textMain: window.textMain
+                textSoft: window.textSoft
+                inputBg: window.inputBg
+                inputBorder: window.inputBorder
+                inputFocus: window.inputFocus
+                showCardHeader: false
+                compactMode: true
+            }
+
+            Rectangle {
+                Layout.preferredWidth: 300
+                Layout.minimumWidth: 280
+                Layout.maximumWidth: 340
+                Layout.alignment: Qt.AlignTop
+                radius: 10
+                color: "#f9fcff"
+                border.color: "#d6e2ef"
+                border.width: 1
+                implicitHeight: versionCardColumn.implicitHeight + 14
+
+                ColumnLayout {
+                    id: versionCardColumn
+                    anchors.fill: parent
+                    anchors.margins: 7
+                    spacing: 4
+
+                    Text {
+                        text: "Версия ПО · DID 0xF195"
+                        color: window.textSoft
+                        font.pixelSize: 11
+                        font.bold: true
+                        font.family: "Bahnschrift"
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            radius: 7
+                            color: "#eef6ff"
+                            border.color: "#c7dff4"
+                            border.width: 1
+                            implicitHeight: versionValueText.implicitHeight + 10
+
+                            Text {
+                                id: versionValueText
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.leftMargin: 8
+                                anchors.rightMargin: 8
+                                text: window.backendController ? window.backendController.softwareVersionText : "—"
+                                color: window.textMain
+                                font.pixelSize: 13
+                                font.bold: true
+                                font.family: "Bahnschrift"
+                                elide: Text.ElideRight
+                            }
+                        }
+
+                        FancyButton {
+                            Layout.preferredWidth: 94
+                            Layout.minimumWidth: 84
+                            Layout.preferredHeight: 30
+                            text: window.backendController && window.backendController.softwareVersionBusy ? "Чтение..." : "Прочитать"
+                            loading: window.backendController ? window.backendController.softwareVersionBusy : false
+                            fontPixelSize: 11
+                            tone: "#0284c7"
+                            toneHover: "#0369a1"
+                            tonePressed: "#075985"
+                            onClicked: if (window.backendController) window.backendController.readSoftwareVersionDid()
+                        }
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: window.backendController ? window.backendController.softwareVersionStatusText : "Ожидание контроллера."
+                        color: window.textSoft
+                        font.pixelSize: 10
+                        font.family: "Bahnschrift"
+                        elide: Text.ElideRight
+                    }
+                }
+            }
         }
 
         ToolLauncherCard {

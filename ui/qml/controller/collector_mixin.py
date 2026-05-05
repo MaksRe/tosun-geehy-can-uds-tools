@@ -75,6 +75,7 @@ class AppControllerCollectorMixin(AppControllerContract):
 
         self._collector_enabled = value
         if value:
+            self._seed_collector_nodes_from_known_addresses()
             self._collector_poll_timer.setInterval(
                 self._collector_cycle_pause_ms if int(self._collector_poll_phase) == 0 else self._collector_poll_interval_ms
             )
@@ -89,22 +90,65 @@ class AppControllerCollectorMixin(AppControllerContract):
             self._collector_session_dir = None
             self._collector_csv_managers = {}
             self._collector_combined_csv_manager = None
-            self._collector_nodes = {}
-            self._collector_node_order = []
-            self._collector_nodes_view = []
             self._collector_pending_requests = {}
             self._collector_last_request_monotonic = 0.0
             self._collector_error_logs = []
             self._collector_diagnostics_rate_limit = {}
             self._collector_poll_node_index = 0
             self._collector_poll_phase = 0
-            self.collectorNodesChanged.emit()
             self.collectorDiagnosticsChanged.emit()
             self._reset_collector_trend()
             self._set_programming_active(False)
 
         if emit_signal:
             self.collectorEnabledChanged.emit()
+
+    def _seed_collector_nodes_from_known_addresses(self):
+        """Цель функции в сохранении UDS-опроса после SID 0x28, затем она добавляет в коллектор уже известные SA узлов."""
+        known_addresses: list[int] = []
+        seen: set[int] = set()
+        tester_addresses = {
+            int(UdsIdentifiers.rx.dst) & 0xFF,
+            int(UdsIdentifiers.tx.src) & 0xFF,
+        }
+
+        def append_address(raw_value):
+            try:
+                node_sa = int(raw_value) & 0xFF
+            except (TypeError, ValueError):
+                return
+            if node_sa in tester_addresses or node_sa in seen:
+                return
+            seen.add(node_sa)
+            known_addresses.append(node_sa)
+
+        for raw_value in list(self._collector_node_order):
+            append_address(raw_value)
+        for raw_value in list(self._observed_candidate_values):
+            append_address(raw_value)
+        for raw_value in list(getattr(self, "_programming_node_values", [])):
+            append_address(raw_value)
+        append_address(int(UdsIdentifiers.rx.src) & 0xFF)
+
+        now = time.monotonic()
+        added_count = 0
+        for node_sa in known_addresses:
+            was_new_node = node_sa not in self._collector_nodes
+            node = self._ensure_collector_node(node_sa)
+            node["timeoutStreak"] = 0
+            node["nextPollAfter"] = 0.0
+            node["lastSeenMonotonic"] = now
+            if str(node.get("lastSeen", "-")) == "-":
+                node["lastSeen"] = "UDS"
+            if was_new_node:
+                added_count += 1
+
+        self._collector_pending_requests = {}
+        self._collector_last_request_monotonic = 0.0
+        self._collector_poll_node_index = 0
+        self._collector_poll_phase = 0
+        if len(known_addresses) > 0:
+            self._schedule_collector_views_update(nodes=True, trend=added_count > 0)
 
     @staticmethod
     def _parse_collector_csv_number(raw_value: str) -> float | None:

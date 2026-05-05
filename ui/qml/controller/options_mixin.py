@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import struct
+import time
 from datetime import datetime
 
 from j1939.j1939_can_identifier import J1939CanIdentifier
@@ -131,7 +132,56 @@ class AppControllerOptionsMixin(AppControllerContract):
             return
 
         if self._options_pending_action == "write":
-            if ((int(payload[0]) >> 4) & 0x0F) != 0x0:
+            pci_type = (int(payload[0]) >> 4) & 0x0F
+
+            # При мультикадровой записи DID 0x2E сначала ждем Flow Control от МК.
+            # Если вместо FC пришел SF с NRC, обрабатываем отказ сразу и не ждем таймаут.
+            if bool(self._options_write_isotp_active) and bool(self._options_write_isotp_waiting_fc):
+                if pci_type == 0x3:
+                    if not self._send_options_write_consecutive_frames(payload):
+                        self._finish_options_operation(False, "Ошибка передачи Consecutive Frame для UDS записи DID.")
+                        return
+                    self._touch_options_timeout()
+                    return
+
+                if pci_type == 0x0:
+                    sf_len = int(payload[0]) & 0x0F
+                    if sf_len <= 0 or sf_len > (len(payload) - 1):
+                        return
+                    uds_payload = bytes(payload[1:1 + sf_len])
+                    if len(uds_payload) > 0 and (int(uds_payload[0]) & 0xFF) == 0x6E:
+                        if len(uds_payload) < 3:
+                            return
+                        did = ((int(uds_payload[1]) & 0xFF) << 8) | (int(uds_payload[2]) & 0xFF)
+                        self._finish_options_operation(True, f"Запись DID 0x{did:04X} выполнена")
+                        return
+                    if len(uds_payload) > 0 and (int(uds_payload[0]) & 0xFF) == 0x7F:
+                        original_sid = int(uds_payload[1]) & 0xFF if len(uds_payload) > 1 else 0
+                        if original_sid != 0x2E:
+                            return
+                        nrc = int(uds_payload[2]) & 0xFF if len(uds_payload) > 2 else 0
+                        if nrc == 0x78:
+                            # MCU сообщает «response pending». Продолжаем ждать финальный ответ.
+                            self._touch_options_timeout()
+                            return
+                        self._finish_options_operation(False, f"Негативный ответ UDS (NRC=0x{nrc:02X})")
+                        return
+                return
+
+            if pci_type != 0x0:
+                return
+
+            sf_len = int(payload[0]) & 0x0F
+            if sf_len <= 0 or sf_len > (len(payload) - 1):
+                return
+
+            uds_payload = bytes(payload[1:1 + sf_len])
+            if len(uds_payload) > 0 and (int(uds_payload[0]) & 0xFF) == 0x7F:
+                original_sid = int(uds_payload[1]) & 0xFF if len(uds_payload) > 1 else 0
+                if original_sid != 0x2E:
+                    return
+                nrc = int(uds_payload[2]) & 0xFF if len(uds_payload) > 2 else 0
+                self._finish_options_operation(False, f"Негативный ответ UDS (NRC=0x{nrc:02X})")
                 return
 
             if not self._options_write_service.verify_answer_write_data(payload):
@@ -183,6 +233,165 @@ class AppControllerOptionsMixin(AppControllerContract):
         except Exception:
             return False
 
+    @staticmethod
+    def _is_send_success(ret) -> bool:
+        """Цель функции в единообразной проверке send_async, затем она считает успешным любой неотрицательный код."""
+        if ret is None:
+            return False
+        if isinstance(ret, bool):
+            return bool(ret)
+        try:
+            return int(ret) >= 0
+        except Exception:
+            return bool(ret)
+
+    @staticmethod
+    def _isotp_stmin_to_seconds(raw_stmin: int) -> float:
+        """Цель функции в преобразовании STmin из Flow Control, затем она возвращает задержку между CF в секундах."""
+        value = int(raw_stmin) & 0xFF
+        if value <= 0x7F:
+            return float(value) / 1000.0
+        if 0xF1 <= value <= 0xF9:
+            return float(value - 0xF0) / 10000.0
+        return 0.0
+
+    def _build_options_write_isotp_frames(self, uds_payload: bytes) -> tuple[list[int], list[list[int]]]:
+        """Цель функции в формировании ISO-TP кадрирования 0x2E, затем она возвращает FF и список CF."""
+        payload = bytes(uds_payload or b"")
+        total_len = len(payload)
+        if total_len <= 7:
+            single = [int(total_len) & 0x0F] + [int(item) & 0xFF for item in payload]
+            while len(single) < 8:
+                single.append(0xFF)
+            return single, []
+
+        first_frame = [
+            0x10 | ((total_len >> 8) & 0x0F),
+            total_len & 0xFF,
+        ]
+        first_frame.extend(int(item) & 0xFF for item in payload[:6])
+        while len(first_frame) < 8:
+            first_frame.append(0xFF)
+
+        cf_frames: list[list[int]] = []
+        sn = 1
+        index = 6
+        while index < total_len:
+            frame = [0x20 | (sn & 0x0F)]
+            chunk = payload[index:index + 7]
+            frame.extend(int(item) & 0xFF for item in chunk)
+            while len(frame) < 8:
+                frame.append(0xFF)
+            cf_frames.append(frame)
+            index += len(chunk)
+            sn = (sn + 1) & 0x0F
+            if sn <= 0:
+                sn = 1
+
+        return first_frame, cf_frames
+
+    def _reset_options_write_isotp_state(self):
+        """Цель функции в очистке состояния мультикадровой записи, затем она готовит контроллер к следующей операции."""
+        self._options_write_isotp_active = False
+        self._options_write_isotp_waiting_fc = False
+        self._options_write_isotp_cf_frames = []
+
+    def _send_options_write_consecutive_frames(self, flow_control_payload: list[int]) -> bool:
+        """Цель функции в отправке CF после FC, затем она соблюдает block-size и STmin полученные от МК."""
+        if flow_control_payload is None or len(flow_control_payload) < 3:
+            return False
+
+        flow_status = int(flow_control_payload[0]) & 0x0F
+        if flow_status == 0x1:
+            # ECU просит подождать, продолжаем ожидание следующего Flow Control.
+            self._options_write_isotp_waiting_fc = True
+            return True
+        if flow_status != 0x0:
+            return False
+
+        block_size = int(flow_control_payload[1]) & 0xFF
+        stmin_seconds = self._isotp_stmin_to_seconds(int(flow_control_payload[2]) & 0xFF)
+
+        remaining = list(self._options_write_isotp_cf_frames)
+        if len(remaining) <= 0:
+            self._options_write_isotp_waiting_fc = False
+            return True
+
+        send_count = len(remaining) if block_size == 0 else min(block_size, len(remaining))
+        target_sa = self._options_pending_target_sa
+        if target_sa is None:
+            target_sa = self._resolve_options_target_sa()
+        tx_identifier = self._build_options_tx_identifier(int(target_sa) & 0xFF)
+
+        for index in range(send_count):
+            frame = remaining[index]
+            ret = self._can.send_async(int(tx_identifier), 8, frame)
+            if not self._is_send_success(ret):
+                return False
+            if stmin_seconds > 0 and index < (send_count - 1):
+                time.sleep(stmin_seconds)
+
+        self._options_write_isotp_cf_frames = remaining[send_count:]
+        self._options_write_isotp_waiting_fc = len(self._options_write_isotp_cf_frames) > 0
+        return True
+
+    def _start_options_write_multiframe_request(
+        self,
+        parameter: UdsOptionParameter,
+        value_bytes: bytes,
+        request_origin: str,
+        append_history: bool,
+        target_sa_override: int | None = None,
+    ) -> bool:
+        """Цель функции в запуске мультикадровой записи DID, затем она отправляет FF и ожидает FC от МК."""
+        if parameter is None or not parameter.can_write:
+            return False
+
+        payload = bytes(value_bytes or b"")
+        if len(payload) <= 0:
+            return False
+
+        target_sa = self._resolve_options_target_sa() if target_sa_override is None else (int(target_sa_override) & 0xFF)
+        tx_identifier = self._build_options_tx_identifier(target_sa)
+        did_b0, did_b1 = self._options_write_service._pid_to_bytes(int(parameter.did) & 0xFFFF)
+        uds_payload = bytes([0x2E, int(did_b0) & 0xFF, int(did_b1) & 0xFF]) + payload
+        first_frame, cf_frames = self._build_options_write_isotp_frames(uds_payload)
+
+        self._options_pending_action = "write"
+        self._options_pending_did = int(parameter.did) & 0xFFFF
+        self._options_pending_target_sa = int(target_sa) & 0xFF
+        self._options_pending_write_bytes = payload
+        self._options_last_read_bytes = b""
+        self._options_request_origin = str(request_origin or "")
+        self._options_busy = True
+        self._options_status = f"Запись DID 0x{int(parameter.did) & 0xFFFF:04X} (SA 0x{int(target_sa) & 0xFF:02X})..."
+        self.optionOperationChanged.emit()
+
+        self._reset_options_isotp_state()
+        self._options_fc_retry_left = 0
+        self._options_fc_retry_timer.stop()
+        self._options_write_isotp_active = len(cf_frames) > 0
+        self._options_write_isotp_waiting_fc = len(cf_frames) > 0
+        self._options_write_isotp_cf_frames = list(cf_frames)
+
+        ret = self._can.send_async(int(tx_identifier), 8, first_frame)
+        if not self._is_send_success(ret):
+            self._finish_options_operation(False, "Не удалось отправить первый ISO-TP кадр записи DID.")
+            return False
+
+        if append_history:
+            self._append_option_history(
+                "Запись",
+                parameter,
+                "Отправлено",
+                f"SA 0x{int(target_sa) & 0xFF:02X} | мультикадровая запись",
+                "#0ea5e9",
+                value_bytes=payload,
+            )
+
+        self._touch_options_timeout()
+        return True
+
     def _touch_options_timeout(self):
         self._options_timeout_timer.start(self.OPTIONS_OPERATION_TIMEOUT_MS)
 
@@ -205,11 +414,17 @@ class AppControllerOptionsMixin(AppControllerContract):
         self._options_isotp_buffer = bytearray()
         self._options_isotp_next_sn = 1
 
-    def _start_options_read_request(self, parameter: UdsOptionParameter, request_origin: str, append_history: bool) -> bool:
+    def _start_options_read_request(
+        self,
+        parameter: UdsOptionParameter,
+        request_origin: str,
+        append_history: bool,
+        target_sa_override: int | None = None,
+    ) -> bool:
         if parameter is None or not parameter.can_read:
             return False
 
-        target_sa = self._resolve_options_target_sa()
+        target_sa = self._resolve_options_target_sa() if target_sa_override is None else (int(target_sa_override) & 0xFF)
         tx_identifier = self._build_options_tx_identifier(target_sa)
 
         self._options_pending_action = "read"
@@ -218,6 +433,7 @@ class AppControllerOptionsMixin(AppControllerContract):
         self._options_last_read_bytes = b""
         self._options_request_origin = str(request_origin or "")
         self._reset_options_isotp_state()
+        self._reset_options_write_isotp_state()
         self._options_fc_retry_left = 0
         self._options_fc_retry_timer.stop()
         self._options_busy = True
@@ -432,6 +648,22 @@ class AppControllerOptionsMixin(AppControllerContract):
         if byte_size <= 0:
             return b""
         return int(value).to_bytes(byte_size, byteorder="little", signed=False)
+
+    @staticmethod
+    def _decode_software_version_bytes(value_bytes: bytes | None) -> str:
+        """Цель функции в декодировании поля DID 0xF195, затем она возвращает строку до первого нулевого байта."""
+        if value_bytes is None:
+            return ""
+        payload = bytes(value_bytes)
+        if len(payload) <= 0:
+            return ""
+        trimmed = payload.split(b"\x00", 1)[0]
+        if len(trimmed) <= 0:
+            return ""
+        try:
+            return trimmed.decode("utf-8").strip()
+        except UnicodeDecodeError:
+            return trimmed.decode("latin-1", errors="ignore").strip()
 
     @staticmethod
     def _build_option_value_variants(value_bytes: bytes | None) -> dict[str, object]:
@@ -740,6 +972,7 @@ class AppControllerOptionsMixin(AppControllerContract):
         pending_did = int(self._options_pending_did) & 0xFFFF if self._options_pending_did is not None else None
         pending_action = str(self._options_pending_action or "")
         request_origin = str(self._options_request_origin or "")
+        pending_target_sa = self._options_pending_target_sa
 
         parameter = get_option_by_did(pending_did) if pending_did is not None else get_option_by_index(self._selected_option_index)
         action = "Чтение" if pending_action == "read" else "Запись"
@@ -758,6 +991,54 @@ class AppControllerOptionsMixin(AppControllerContract):
         if parameter is not None and request_origin != "bulk":
             self._append_option_history(action, parameter, result, details, color, value_bytes=value_bytes)
 
+        # Для DID 0xF195 синхронизируем компактный виджет версии ПО на главной форме.
+        if request_origin in ("sw_version_read", "sw_version_write"):
+            if success and pending_action == "read":
+                decoded = self._decode_software_version_bytes(value_bytes)
+                self._software_version_text = decoded if decoded else "—"
+                self._software_version_status = "Версия ПО считана по DID 0xF195."
+            elif success and pending_action == "write":
+                decoded = self._decode_software_version_bytes(value_bytes)
+                if decoded:
+                    self._software_version_text = decoded
+                self._software_version_status = "Версия ПО записана в DID 0xF195."
+            else:
+                nrc_value = None
+                upper_message = str(message or "").upper()
+                nrc_marker = "NRC=0X"
+                marker_index = upper_message.find(nrc_marker)
+                if marker_index >= 0 and len(upper_message) >= (marker_index + len(nrc_marker) + 2):
+                    nrc_hex = upper_message[marker_index + len(nrc_marker): marker_index + len(nrc_marker) + 2]
+                    try:
+                        nrc_value = int(nrc_hex, 16)
+                    except (TypeError, ValueError):
+                        nrc_value = None
+
+                if nrc_value in (0x7E, 0x7F):
+                    if (
+                        (pending_target_sa is not None)
+                        and (self._service_access_target_sa is not None)
+                        and ((int(self._service_access_target_sa) & 0xFF) == (int(pending_target_sa) & 0xFF))
+                    ):
+                        # Сбрасываем локальный флаг, чтобы оператор повторно выполнил 0x27 перед новой записью.
+                        self._service_security_unlocked = False
+                        self.serviceAccessChanged.emit()
+                    if pending_target_sa is None:
+                        self._software_version_status = (
+                            "Ошибка DID 0xF195: на МК неактивна требуемая сессия/доступ. "
+                            "Повторите 0x10 (Extended 0x03) и 0x27, затем повторите запись."
+                        )
+                    else:
+                        self._software_version_status = (
+                            f"Ошибка DID 0xF195 для SA 0x{int(pending_target_sa) & 0xFF:02X}: "
+                            "на МК неактивна требуемая сессия/доступ. "
+                            "Повторите 0x10 (Extended 0x03) и 0x27, затем повторите запись."
+                        )
+                else:
+                    self._software_version_status = f"Ошибка DID 0xF195: {str(message)}"
+            self._software_version_busy = False
+            self.softwareVersionChanged.emit()
+
         self._options_busy = False
         self._options_pending_action = ""
         self._options_pending_did = None
@@ -766,6 +1047,7 @@ class AppControllerOptionsMixin(AppControllerContract):
         self._options_last_read_bytes = b""
         self._options_request_origin = ""
         self._reset_options_isotp_state()
+        self._reset_options_write_isotp_state()
         if self._options_fc_retry_timer.isActive():
             self._options_fc_retry_timer.stop()
         self._options_fc_retry_left = 0

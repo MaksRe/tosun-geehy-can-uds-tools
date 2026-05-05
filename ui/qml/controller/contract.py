@@ -55,6 +55,7 @@ class AppControllerContract:
     progressChanged: Any
     selectedDeviceIndexChanged: Any
     serviceAccessChanged: Any
+    softwareVersionChanged: Any
     sourceAddressBusyChanged: Any
     sourceAddressOperationChanged: Any
     sourceAddressStatusChanged: Any
@@ -70,8 +71,23 @@ class AppControllerContract:
     _bootloader: Any
     _calibration_active: Any
     _calibration_backup_available: Any
+    _calibration_backup_file_path: Any
+    _calibration_backup_loaded_from_file: Any
+    _calibration_backup_node_sa: Any
+    _calibration_backup_saved_at_text: Any
+    _calibration_backup_source_text: Any
+    _calibration_backup_k0: Any
+    _calibration_backup_k1: Any
     _calibration_backup_level_0: Any
     _calibration_backup_level_100: Any
+    _calibration_backup_zero_trim: Any
+    _calibration_dump_capture_active: Any
+    _calibration_dump_capture_current_did: Any
+    _calibration_dump_capture_queue: Any
+    _calibration_dump_capture_target_sa: Any
+    _calibration_dump_capture_timeout_ms: Any
+    _calibration_dump_capture_timeout_timer: Any
+    _calibration_dump_capture_values: Any
     _calibration_backup_pending: Any
     _calibration_backup_values_pending: Any
     _calibration_captured_available: Any
@@ -275,6 +291,9 @@ class AppControllerContract:
     _options_isotp_buffer: Any
     _options_isotp_next_sn: Any
     _options_isotp_total_len: Any
+    _options_write_isotp_active: Any
+    _options_write_isotp_waiting_fc: Any
+    _options_write_isotp_cf_frames: Any
     _options_items: Any
     _options_last_read_bytes: Any
     _options_fc_retry_left: Any
@@ -301,6 +320,11 @@ class AppControllerContract:
     _options_timeout_timer: Any
     _options_value_text: Any
     _options_write_service: Any
+    _software_version_did: Any
+    _software_version_text: Any
+    _software_version_status: Any
+    _software_version_busy: Any
+    _firmware_file_version_text: Any
     _communication_control_mode_items: Any
     _selected_communication_control_mode_index: Any
     _communication_control_addressing_items: Any
@@ -313,6 +337,9 @@ class AppControllerContract:
     _communication_control_pending_target_sa: Any
     _communication_control_pending_sub_function: Any
     _communication_control_pending_suppress: Any
+    _communication_control_pending_functional: Any
+    _communication_control_expected_response_sas: Any
+    _communication_control_functional_response_sas: Any
     _communication_control_service: Any
     _communication_control_timeout_timer: Any
     _pending_programming_after_reset: Any

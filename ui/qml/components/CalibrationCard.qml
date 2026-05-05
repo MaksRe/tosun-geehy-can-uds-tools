@@ -340,19 +340,131 @@ Item {
 
                     Text {
                         Layout.fillWidth: true
-                        text: root.appController && root.appController.calibrationBackupAvailable
-                              ? ("Текущая копия узла: 0%=" + root.appController.calibrationBackupLevel0Text + ", 100%=" + root.appController.calibrationBackupLevel100Text)
-                              : "Локальная копия текущего узла не создана"
+                        text: root.appController ? root.appController.calibrationBackupSourceText : "Дамп калибровки не сохранен."
                         color: root.textSoft
                         font.pixelSize: 11
                         font.family: "Bahnschrift"
                         elide: Text.ElideRight
                     }
+                }
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: 4
+                    columnSpacing: 10
+                    rowSpacing: 4
+
+                    Text {
+                        text: "Узел:"
+                        color: root.textSoft
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                    }
+                    Text {
+                        text: root.appController ? root.appController.calibrationBackupNodeText : "-"
+                        color: root.textMain
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                    }
+                    Text {
+                        text: "Сохранен:"
+                        color: root.textSoft
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                    }
+                    Text {
+                        text: root.appController ? root.appController.calibrationBackupSavedAtText : "-"
+                        color: root.textMain
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                    }
+
+                    Text {
+                        text: "0%:"
+                        color: root.textSoft
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                    }
+                    Text {
+                        text: root.appController ? root.appController.calibrationBackupLevel0Text : "-"
+                        color: root.textMain
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                    }
+                    Text {
+                        text: "100%:"
+                        color: root.textSoft
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                    }
+                    Text {
+                        text: root.appController ? root.appController.calibrationBackupLevel100Text : "-"
+                        color: root.textMain
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                    }
+
+                    Text {
+                        text: "K1:"
+                        color: root.textSoft
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                    }
+                    Text {
+                        text: root.appController ? root.appController.calibrationBackupK1Text : "-"
+                        color: root.textMain
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                    }
+                    Text {
+                        text: "K0:"
+                        color: root.textSoft
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                    }
+                    Text {
+                        text: root.appController ? root.appController.calibrationBackupK0Text : "-"
+                        color: root.textMain
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                    }
+
+                    Text {
+                        text: "Смещение 0%:"
+                        color: root.textSoft
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                    }
+                    Text {
+                        text: root.appController ? root.appController.calibrationBackupZeroTrimText : "-"
+                        color: root.textMain
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                    }
+                    Text {
+                        text: "Файл:"
+                        color: root.textSoft
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                    }
+                    Text {
+                        text: root.appController ? root.appController.calibrationBackupFilePathText : "-"
+                        color: root.textMain
+                        font.pixelSize: 10
+                        font.family: "Bahnschrift"
+                        elide: Text.ElideMiddle
+                        Layout.fillWidth: true
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 6
 
                     FancyButton {
-                        Layout.preferredWidth: 188
+                        Layout.preferredWidth: 210
                         Layout.preferredHeight: 30
-                        text: "Создать копию (все узлы)"
+                        text: "Сохранить дамп текущего узла"
                         tone: "#0f766e"
                         toneHover: "#115e59"
                         tonePressed: "#134e4a"
@@ -361,9 +473,20 @@ Item {
                     }
 
                     FancyButton {
+                        Layout.preferredWidth: 170
+                        Layout.preferredHeight: 30
+                        text: "Загрузить дамп"
+                        tone: "#2563eb"
+                        toneHover: "#1d4ed8"
+                        tonePressed: "#1e40af"
+                        enabled: root.appController !== null
+                        onClicked: calibrationDumpFileDialog.open()
+                    }
+
+                    FancyButton {
                         Layout.preferredWidth: 182
                         Layout.preferredHeight: 30
-                        text: "Восстановить"
+                        text: "Применить дамп в МК"
                         tone: "#475569"
                         toneHover: "#334155"
                         tonePressed: "#1e293b"
@@ -2347,6 +2470,34 @@ Item {
                             Layout.fillWidth: true
                             Layout.preferredHeight: 6
                         }
+                    }
+                }
+            }
+
+            FileDialog {
+                id: calibrationDumpFileDialog
+                title: "Выберите файл дампа калибровки"
+                fileMode: FileDialog.OpenFile
+                nameFilters: ["Дамп калибровки (*.json)", "JSON файлы (*.json)", "Все файлы (*)"]
+
+                onAccepted: {
+                    if (!root.appController) {
+                        return
+                    }
+                    function asPathText(value) {
+                        if (value && value.toString) {
+                            return value.toString()
+                        }
+                        return String(value)
+                    }
+                    var chosenPath = ""
+                    if (selectedFile) {
+                        chosenPath = asPathText(selectedFile)
+                    } else if (currentFile) {
+                        chosenPath = asPathText(currentFile)
+                    }
+                    if (chosenPath.length > 0) {
+                        root.appController.loadCalibrationBackupDump(chosenPath)
                     }
                 }
             }

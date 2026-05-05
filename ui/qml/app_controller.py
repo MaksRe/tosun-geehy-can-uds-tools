@@ -139,6 +139,9 @@ class AppController(
         self._communication_control_pending_target_sa: int | None = None
         self._communication_control_pending_sub_function: int | None = None
         self._communication_control_pending_suppress = False
+        self._communication_control_pending_functional = False
+        self._communication_control_expected_response_sas: set[int] = set()
+        self._communication_control_functional_response_sas: set[int] = set()
         self._communication_control_service = ServiceCommunicationControl()
         self._transfer_byte_order_index = 0
         self._source_address_text = f"0x{UdsIdentifiers.rx.src:02X}"
@@ -265,6 +268,20 @@ class AppController(
         self._calibration_backup_available = False
         self._calibration_backup_level_0 = 0
         self._calibration_backup_level_100 = 0
+        self._calibration_backup_k1 = 0
+        self._calibration_backup_k0 = 0
+        self._calibration_backup_zero_trim = 0
+        self._calibration_backup_node_sa: int | None = None
+        self._calibration_backup_file_path = ""
+        self._calibration_backup_saved_at_text = ""
+        self._calibration_backup_source_text = "Дамп калибровки не сохранен."
+        self._calibration_backup_loaded_from_file = False
+        self._calibration_dump_capture_active = False
+        self._calibration_dump_capture_target_sa: int | None = None
+        self._calibration_dump_capture_queue: list[int] = []
+        self._calibration_dump_capture_current_did: int | None = None
+        self._calibration_dump_capture_values: dict[int, int] = {}
+        self._calibration_dump_capture_timeout_ms = 1800
         self._calibration_backup_pending = False
         self._calibration_backup_values_pending: dict[int, int] = {}
         self._calibration_backup_all_nodes_active = False
@@ -402,6 +419,9 @@ class AppController(
         self._options_isotp_total_len = 0
         self._options_isotp_buffer = bytearray()
         self._options_isotp_next_sn = 1
+        self._options_write_isotp_active = False
+        self._options_write_isotp_waiting_fc = False
+        self._options_write_isotp_cf_frames: list[list[int]] = []
         self._options_bulk_busy = False
         self._options_bulk_delay_ms = 100
         self._options_bulk_status = "Ready for bulk DID read"
@@ -410,6 +430,11 @@ class AppController(
         self._options_bulk_next_index = 0
         self._options_bulk_success_count = 0
         self._options_bulk_fail_count = 0
+        self._software_version_did = 0xF195
+        self._software_version_text = "—"
+        self._software_version_status = "Версия ПО не считана."
+        self._software_version_busy = False
+        self._firmware_file_version_text = "—"
 
         self._tx_priority_text = ""
         self._tx_pgn_text = ""
@@ -515,6 +540,10 @@ class AppController(
         self._calibration_backup_all_nodes_step_timer.timeout.connect(
             self._on_calibration_backup_all_nodes_step_timeout
         )
+        self._calibration_dump_capture_timeout_timer = QTimer(self)
+        self._calibration_dump_capture_timeout_timer.setSingleShot(True)
+        self._calibration_dump_capture_timeout_timer.setInterval(self._calibration_dump_capture_timeout_ms)
+        self._calibration_dump_capture_timeout_timer.timeout.connect(self._on_calibration_dump_capture_timeout)
 
         self._collector_poll_timer = QTimer(self)
         self._collector_poll_timer.setInterval(self._collector_poll_interval_ms)
