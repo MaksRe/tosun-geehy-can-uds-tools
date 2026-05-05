@@ -20,6 +20,10 @@ class ServiceWriteDataById:
             return pid_l, pid_h
         return pid_h, pid_l
 
+    def set_expected_pid(self, pid: int):
+        """Цель функции в фиксации ожидаемого DID, затем она обеспечивает корректную проверку ответа 0x6E."""
+        self._saved_pid = int(pid) & 0xFFFF
+
     def _parse_pid_field(self, data) -> int:
         if self._byte_order == "little":
             return (data[3] << 8) | data[2]

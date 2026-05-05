@@ -184,6 +184,16 @@ class AppControllerOptionsMixin(AppControllerContract):
                 self._finish_options_operation(False, f"Негативный ответ UDS (NRC=0x{nrc:02X})")
                 return
 
+            if len(uds_payload) > 0 and (int(uds_payload[0]) & 0xFF) == 0x6E:
+                if len(uds_payload) < 3:
+                    return
+                did = ((int(uds_payload[1]) & 0xFF) << 8) | (int(uds_payload[2]) & 0xFF)
+                expected_did = int(self._options_pending_did) & 0xFFFF if self._options_pending_did is not None else did
+                if did != expected_did:
+                    return
+                self._finish_options_operation(True, f"Запись DID 0x{did:04X} выполнена")
+                return
+
             if not self._options_write_service.verify_answer_write_data(payload):
                 return
 
@@ -362,6 +372,7 @@ class AppControllerOptionsMixin(AppControllerContract):
         self._options_pending_target_sa = int(target_sa) & 0xFF
         self._options_pending_write_bytes = payload
         self._options_last_read_bytes = b""
+        self._options_write_service.set_expected_pid(int(parameter.did) & 0xFFFF)
         self._options_request_origin = str(request_origin or "")
         self._options_busy = True
         self._options_status = f"Запись DID 0x{int(parameter.did) & 0xFFFF:04X} (SA 0x{int(target_sa) & 0xFF:02X})..."
