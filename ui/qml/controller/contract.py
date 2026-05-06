@@ -325,6 +325,14 @@ class AppControllerContract:
     _software_version_status: Any
     _software_version_busy: Any
     _firmware_file_version_text: Any
+    _supplier_did_rows: Any
+    _supplier_did_status_text: Any
+    _supplier_did_bulk_busy: Any
+    _supplier_did_bulk_queue: Any
+    _supplier_did_bulk_total: Any
+    _supplier_did_bulk_done: Any
+    _supplier_did_bulk_success: Any
+    _supplier_did_bulk_fail: Any
     _communication_control_mode_items: Any
     _selected_communication_control_mode_index: Any
     _communication_control_addressing_items: Any
@@ -359,6 +367,14 @@ class AppControllerContract:
     _programming_node_values: Any
     _programming_start_timer: Any
     _programming_target_status: Any
+    _post_program_version_write_pending: Any
+    _post_program_version_write_stage: Any
+    _post_program_version_write_target_sa: Any
+    _post_program_version_write_value: Any
+    _post_program_version_write_delay_ms: Any
+    _post_program_version_write_retry_left: Any
+    _post_program_version_write_wait_logged: Any
+    _post_program_version_write_timer: Any
     _progress_max: Any
     _progress_value: Any
     _rx_dst_text: Any

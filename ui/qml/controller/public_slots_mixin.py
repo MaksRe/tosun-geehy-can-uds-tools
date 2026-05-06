@@ -153,6 +153,274 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             return
         self.writeSoftwareVersionDid(version_text)
 
+    @staticmethod
+    def _supplier_did_definitions() -> tuple[dict[str, object], ...]:
+        """Цель функции в описании набора DID изготовителя, затем она возвращает компактный список строк для главной таблицы."""
+        return (
+            {"did": 0xF18A, "name": "Идентификатор поставщика"},
+            {"did": 0xF18B, "name": "Дата изготовления ЭБУ"},
+            {"did": 0xF18C, "name": "Серийный номер ЭБУ"},
+            {"did": 0xF191, "name": "HW номер ЭБУ (OEM)"},
+            {"did": 0xF192, "name": "HW номер ЭБУ (поставщик)"},
+            {"did": 0xF193, "name": "HW версия ЭБУ"},
+            {"did": 0xF194, "name": "SW номер ЭБУ"},
+            {"did": 0xF195, "name": "SW версия ЭБУ"},
+        )
+
+    def _init_supplier_did_rows(self):
+        """Цель функции в инициализации строк DID изготовителя, затем она подготавливает модель для QML-таблицы."""
+        rows: list[dict[str, object]] = []
+        for item in self._supplier_did_definitions():
+            did_value = int(item.get("did", 0)) & 0xFFFF
+            parameter = get_option_by_did(did_value)
+            row = {
+                "didInt": did_value,
+                "didText": f"0x{did_value:04X}",
+                "name": str(item.get("name", f"DID 0x{did_value:04X}")),
+                "value": "",
+                "busy": False,
+                "canRead": bool(parameter is not None and parameter.can_read),
+                "canWrite": bool(parameter is not None and parameter.can_write),
+                "maxBytes": int(parameter.size) if parameter is not None else 0,
+            }
+            rows.append(row)
+        self._supplier_did_rows = rows
+
+    def _find_supplier_did_row_index(self, did_value: int) -> int:
+        """Цель функции в поиске строки по DID, затем она возвращает индекс или -1 при отсутствии."""
+        target = int(did_value) & 0xFFFF
+        for index, row in enumerate(self._supplier_did_rows):
+            if int(row.get("didInt", -1)) == target:
+                return int(index)
+        return -1
+
+    def _update_supplier_did_row(self, did_value: int, **changes):
+        """Цель функции в точечном обновлении строки DID, затем она заменяет только переданные поля без потери остальных значений."""
+        index = self._find_supplier_did_row_index(did_value)
+        if index < 0:
+            return
+        updated_rows = list(self._supplier_did_rows)
+        row = dict(updated_rows[index])
+        for key, value in changes.items():
+            row[str(key)] = value
+        updated_rows[index] = row
+        self._supplier_did_rows = updated_rows
+        self.softwareVersionChanged.emit()
+
+    @staticmethod
+    def _normalize_supplier_did_text_value(value_text: str) -> str:
+        """Цель функции в нормализации текстового значения DID, затем она убирает лишние пробелы по краям строки."""
+        return str(value_text or "").strip()
+
+    def _build_supplier_did_payload(self, did_value: int, value_text: str) -> bytes:
+        """Цель функции в упаковке текста в полезные байты DID, затем она валидирует размер и добавляет нуль-терминатор."""
+        index = self._find_supplier_did_row_index(did_value)
+        if index < 0:
+            raise ValueError(f"Не найдена строка DID 0x{int(did_value) & 0xFFFF:04X}.")
+        row = self._supplier_did_rows[index]
+        max_bytes = int(row.get("maxBytes", 0))
+        if max_bytes <= 1:
+            raise ValueError(f"DID 0x{int(did_value) & 0xFFFF:04X} имеет некорректный размер.")
+
+        normalized = self._normalize_supplier_did_text_value(value_text)
+        if not normalized:
+            raise ValueError("Поле значения пустое.")
+
+        encoded = normalized.encode("utf-8")
+        if len(encoded) > (max_bytes - 1):
+            raise ValueError(
+                f"Значение для DID 0x{int(did_value) & 0xFFFF:04X} слишком длинное: максимум {max_bytes - 1} байт UTF-8."
+            )
+        return bytes(encoded) + b"\x00"
+
+    def _start_supplier_did_bulk_read_next(self):
+        """Цель функции в запуске следующего шага массового чтения DID, затем она отправляет запрос только после завершения предыдущего."""
+        if not bool(self._supplier_did_bulk_busy):
+            return
+        if bool(self._options_busy):
+            return
+
+        while len(self._supplier_did_bulk_queue) > 0:
+            did_value = int(self._supplier_did_bulk_queue.pop(0)) & 0xFFFF
+            index = self._find_supplier_did_row_index(did_value)
+            if index < 0:
+                self._supplier_did_bulk_done += 1
+                self._supplier_did_bulk_fail += 1
+                continue
+
+            row = dict(self._supplier_did_rows[index])
+            if not bool(row.get("canRead", False)):
+                self._supplier_did_bulk_done += 1
+                self._supplier_did_bulk_fail += 1
+                self._update_supplier_did_row(did_value, value="Недоступно", busy=False)
+                continue
+
+            parameter = get_option_by_did(did_value)
+            if parameter is None or (not parameter.can_read):
+                self._supplier_did_bulk_done += 1
+                self._supplier_did_bulk_fail += 1
+                self._update_supplier_did_row(did_value, value="Нет в каталоге", busy=False)
+                continue
+
+            self._update_supplier_did_row(did_value, busy=True)
+            target_sa = self._resolve_software_version_target_sa()
+            self._supplier_did_status_text = (
+                f"Чтение DID изготовителя {self._supplier_did_bulk_done + 1}/{max(1, self._supplier_did_bulk_total)}: "
+                f"0x{did_value:04X} (SA 0x{target_sa:02X})."
+            )
+            self.softwareVersionChanged.emit()
+            started = self._start_options_read_request(
+                parameter,
+                request_origin=f"supplier_did_bulk:{did_value:04X}",
+                append_history=False,
+                target_sa_override=target_sa,
+            )
+            if started:
+                return
+
+            self._supplier_did_bulk_done += 1
+            self._supplier_did_bulk_fail += 1
+            self._update_supplier_did_row(did_value, busy=False)
+
+        self._finish_supplier_did_bulk_read()
+
+    def _finish_supplier_did_bulk_read(self):
+        """Цель функции в завершении массового чтения DID изготовителя, затем она очищает очередь и публикует итоговый статус."""
+        total_count = int(self._supplier_did_bulk_total)
+        success_count = int(self._supplier_did_bulk_success)
+        fail_count = int(self._supplier_did_bulk_fail)
+        self._supplier_did_bulk_busy = False
+        self._supplier_did_bulk_queue = []
+        self._supplier_did_bulk_total = 0
+        self._supplier_did_bulk_done = 0
+        self._supplier_did_bulk_success = 0
+        self._supplier_did_bulk_fail = 0
+        self._supplier_did_status_text = (
+            f"Чтение DID изготовителя завершено. Успешно: {success_count}, ошибок: {fail_count}, всего: {total_count}."
+        )
+        self.softwareVersionChanged.emit()
+
+    @Slot()
+    def readAllSupplierDidRows(self):
+        """Цель функции в последовательном чтении всех DID изготовителя, затем она обновляет таблицу одной операцией по кнопке."""
+        if bool(self._supplier_did_bulk_busy) or bool(self._options_busy) or bool(self._options_bulk_busy):
+            self.infoMessage.emit("DID изготовителя", "Подождите завершения текущей UDS-операции.")
+            return
+        if self._programming_active or self._programming_batch_active:
+            self.infoMessage.emit("DID изготовителя", "Во время программирования чтение DID изготовителя недоступно.")
+            return
+        if not self._can.is_connect or not self._can.is_trace:
+            self.infoMessage.emit("DID изготовителя", "Сначала подключите адаптер и запустите трассировку CAN.")
+            return
+
+        self._supplier_did_bulk_queue = [
+            int(row.get("didInt", 0)) & 0xFFFF
+            for row in self._supplier_did_rows
+        ]
+        self._supplier_did_bulk_total = len(self._supplier_did_bulk_queue)
+        self._supplier_did_bulk_done = 0
+        self._supplier_did_bulk_success = 0
+        self._supplier_did_bulk_fail = 0
+        self._supplier_did_bulk_busy = True
+        self._supplier_did_status_text = "Запущено массовое чтение DID изготовителя."
+        self.softwareVersionChanged.emit()
+        self._start_supplier_did_bulk_read_next()
+
+    @Slot(int, str)
+    def writeSupplierDidValue(self, did_value, value_text):
+        """Цель функции в записи одной строки DID изготовителя, затем она отправляет 0x2E для выбранного идентификатора."""
+        did = int(did_value) & 0xFFFF
+        index = self._find_supplier_did_row_index(did)
+        if index < 0:
+            self.infoMessage.emit("DID изготовителя", f"Строка DID 0x{did:04X} не найдена.")
+            return
+        row = dict(self._supplier_did_rows[index])
+        if not bool(row.get("canWrite", False)):
+            self.infoMessage.emit("DID изготовителя", f"DID 0x{did:04X} недоступен для записи.")
+            return
+
+        if bool(self._supplier_did_bulk_busy) or bool(self._options_busy) or bool(self._options_bulk_busy):
+            self.infoMessage.emit("DID изготовителя", "Подождите завершения текущей UDS-операции.")
+            return
+        if self._programming_active or self._programming_batch_active:
+            self.infoMessage.emit("DID изготовителя", "Во время программирования запись DID изготовителя недоступна.")
+            return
+        if not self._can.is_connect or not self._can.is_trace:
+            self.infoMessage.emit("DID изготовителя", "Сначала подключите адаптер и запустите трассировку CAN.")
+            return
+
+        parameter = get_option_by_did(did)
+        if parameter is None or (not parameter.can_write):
+            self.infoMessage.emit("DID изготовителя", f"DID 0x{did:04X} недоступен для записи в каталоге параметров.")
+            return
+
+        try:
+            payload = self._build_supplier_did_payload(did, str(value_text or ""))
+        except ValueError as exc:
+            self.infoMessage.emit("DID изготовителя", str(exc))
+            return
+
+        target_sa = self._resolve_software_version_target_sa()
+        self._update_supplier_did_row(did, busy=True)
+        self._supplier_did_status_text = f"Запись DID 0x{did:04X} (SA 0x{target_sa:02X})..."
+        self.softwareVersionChanged.emit()
+        started = self._start_options_write_multiframe_request(
+            parameter,
+            payload,
+            request_origin=f"supplier_did_write:{did:04X}",
+            append_history=False,
+            target_sa_override=target_sa,
+        )
+        if not started:
+            self._update_supplier_did_row(did, busy=False)
+            self._supplier_did_status_text = f"Ошибка отправки записи DID 0x{did:04X}."
+            self.softwareVersionChanged.emit()
+            self.infoMessage.emit("DID изготовителя", f"Не удалось отправить запись DID 0x{did:04X}.")
+
+    def _handle_supplier_did_options_result(
+        self,
+        *,
+        success: bool,
+        request_origin: str,
+        pending_action: str,
+        pending_did: int | None,
+        value_bytes: bytes | None,
+        message: str,
+    ):
+        """Цель функции в обработке ответов UDS по DID изготовителя, затем она синхронизирует таблицу и продолжает массовое чтение."""
+        if not str(request_origin or "").startswith("supplier_did_"):
+            return
+
+        did = int(pending_did) & 0xFFFF if pending_did is not None else None
+        if did is not None:
+            self._update_supplier_did_row(did, busy=False)
+
+        if success and did is not None:
+            decoded_text = self._decode_software_version_bytes(value_bytes)
+            if pending_action == "read":
+                self._update_supplier_did_row(did, value=decoded_text)
+                self._supplier_did_status_text = f"Прочитан DID 0x{did:04X}."
+            elif pending_action == "write":
+                self._update_supplier_did_row(did, value=decoded_text)
+                self._supplier_did_status_text = f"Записан DID 0x{did:04X}."
+
+            if did == int(self._software_version_did):
+                self._software_version_text = decoded_text if decoded_text else "—"
+                self._software_version_status = f"DID 0x{did:04X} синхронизирован в таблице изготовителя."
+        elif did is not None:
+            self._supplier_did_status_text = f"Ошибка DID 0x{did:04X}: {str(message)}"
+
+        if str(request_origin).startswith("supplier_did_bulk:"):
+            self._supplier_did_bulk_done += 1
+            if success:
+                self._supplier_did_bulk_success += 1
+            else:
+                self._supplier_did_bulk_fail += 1
+            self.softwareVersionChanged.emit()
+            QTimer.singleShot(0, self._start_supplier_did_bulk_read_next)
+        else:
+            self.softwareVersionChanged.emit()
+
     @Slot(bool)
     def setCollectorSftpEnabled(self, enabled):
         """Цель функции в переключении SFTP-выгрузки, затем она обновляет конфиг uploader и уведомляет UI."""
@@ -654,6 +922,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         if not self._service_access_busy:
             return
         pending_action = str(self._service_access_pending_action or "")
+        auto_stage = str(getattr(self, "_post_program_version_write_stage", "") or "")
         if pending_action == "session":
             message = "Таймаут ожидания ответа на Session Control 0x10."
         elif pending_action == "security_seed":
@@ -662,6 +931,8 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             message = "Таймаут ожидания подтверждения key на Security Access 0x27."
         self._reset_service_access_state(message)
         self._append_log(message, RowColor.red)
+        if bool(getattr(self, "_post_program_version_write_pending", False)) and auto_stage in ("wait_session", "wait_security"):
+            self._finish_post_program_version_write(False, message)
 
     def _resolve_source_address_operation_target_sa(self) -> int:
         # Держим SA-операции на том же узле, где уже запускались сервисные операции 0x10/0x27.
@@ -3310,6 +3581,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
     def _start_programming_for_node(self, target_sa: int) -> bool:
         """Цель функции в запуске прошивки одного SA, затем она применяет UDS ID и выполняет автосброс при необходимости."""
         normalized_sa = int(target_sa) & 0xFF
+        self._finish_post_program_version_write(False, "Подготовка нового цикла программирования, предыдущая автозапись версии отменена.")
         self._apply_programming_target_sa(normalized_sa, "Узел подготовлен к программированию.")
 
         self._progress_value = 0

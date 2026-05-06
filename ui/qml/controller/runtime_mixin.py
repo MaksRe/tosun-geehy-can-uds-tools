@@ -7,12 +7,179 @@ from PySide6.QtGui import QColor
 
 from colors import RowColor
 from j1939.j1939_can_identifier import J1939CanIdentifier
+from uds.services.session import Session
 from uds.uds_identifiers import UdsIdentifiers
 
 from .contract import AppControllerContract
 from .workers import FirmwareLoadWorker
 
 class AppControllerRuntimeMixin(AppControllerContract):
+    def _reset_post_program_version_write_state(self):
+        """Цель функции в очистке состояния автозаписи версии, затем она снимает все промежуточные флаги цепочки."""
+        self._post_program_version_write_pending = False
+        self._post_program_version_write_stage = ""
+        self._post_program_version_write_target_sa = None
+        self._post_program_version_write_value = ""
+        self._post_program_version_write_retry_left = 0
+        self._post_program_version_write_wait_logged = False
+
+    def _finish_post_program_version_write(self, success: bool, message: str):
+        """Цель функции в завершении автозаписи версии, затем она пишет итог в лог и очищает внутреннее состояние."""
+        active = bool(self._post_program_version_write_pending)
+        target_sa = self._post_program_version_write_target_sa
+        version_text = str(self._post_program_version_write_value or "").strip()
+        if self._post_program_version_write_timer.isActive():
+            self._post_program_version_write_timer.stop()
+        self._reset_post_program_version_write_state()
+
+        if not active:
+            return
+
+        if success:
+            if target_sa is None:
+                self._append_log(
+                    f"Автозапись версии ПО после прошивки завершена: {version_text}.",
+                    RowColor.green,
+                )
+            else:
+                self._append_log(
+                    (
+                        f"Автозапись версии ПО после прошивки завершена для узла 0x{int(target_sa) & 0xFF:02X}: "
+                        f"{version_text}."
+                    ),
+                    RowColor.green,
+                )
+            return
+
+        details = str(message or "").strip()
+        if target_sa is None:
+            self._append_log(f"Автозапись версии ПО после прошивки не выполнена: {details}", RowColor.yellow)
+        else:
+            self._append_log(
+                f"Автозапись версии ПО после прошивки для узла 0x{int(target_sa) & 0xFF:02X} не выполнена: {details}",
+                RowColor.yellow,
+            )
+
+    def _schedule_post_program_version_write(self, target_sa: int | None):
+        """Цель функции в планировании автозаписи версии, затем она запускает таймер старта цепочки 0x10/0x27/0x2E."""
+        if self._programming_batch_active:
+            self._reset_post_program_version_write_state()
+            self._append_log(
+                "Групповой режим: автозапись версии после прошивки пропущена для текущего шага.",
+                RowColor.yellow,
+            )
+            return
+
+        version_text = str(self._firmware_file_version_text or "").strip()
+        if not version_text or version_text == "—":
+            self._reset_post_program_version_write_state()
+            self._append_log(
+                "Автозапись версии после прошивки пропущена: в имени BIN не найден формат версии.",
+                RowColor.yellow,
+            )
+            return
+
+        if not self._can.is_connect or not self._can.is_trace:
+            self._reset_post_program_version_write_state()
+            self._append_log(
+                "Автозапись версии после прошивки пропущена: нужна активная трассировка CAN.",
+                RowColor.yellow,
+            )
+            return
+
+        if target_sa is None:
+            target_sa = self._resolve_programming_selected_sa()
+        normalized_sa = int(target_sa) & 0xFF
+
+        self._post_program_version_write_pending = True
+        self._post_program_version_write_stage = "wait_delay"
+        self._post_program_version_write_target_sa = normalized_sa
+        self._post_program_version_write_value = version_text
+        self._post_program_version_write_retry_left = 8
+        self._post_program_version_write_wait_logged = False
+
+        if self._post_program_version_write_timer.isActive():
+            self._post_program_version_write_timer.stop()
+        self._post_program_version_write_timer.start(max(200, int(self._post_program_version_write_delay_ms)))
+        self._append_log(
+            (
+                f"Автозапись версии ПО после прошивки запланирована для узла 0x{normalized_sa:02X}: "
+                f"{version_text} (задержка {int(self._post_program_version_write_delay_ms)} мс)."
+            ),
+            RowColor.blue,
+        )
+
+    def _on_post_program_version_write_timeout(self):
+        """Цель функции в старте цепочки автозаписи версии, затем она отправляет запрос Extended Session для нужного SA."""
+        if not bool(self._post_program_version_write_pending):
+            return
+        if str(self._post_program_version_write_stage or "") != "wait_delay":
+            return
+
+        if (
+            self._programming_active
+            or self._source_address_busy
+            or self._options_busy
+            or self._options_bulk_busy
+            or self._service_access_busy
+            or self._communication_control_busy
+            or self._calibration_active
+        ):
+            self._post_program_version_write_retry_left -= 1
+            if self._post_program_version_write_retry_left <= 0:
+                self._finish_post_program_version_write(
+                    False,
+                    "UDS канал занят: не удалось запустить автозапись версии в отведенное время.",
+                )
+                return
+            if not bool(self._post_program_version_write_wait_logged):
+                self._append_log(
+                    "Автозапись версии ПО: ожидание освобождения UDS канала.",
+                    RowColor.blue,
+                )
+                self._post_program_version_write_wait_logged = True
+            self._post_program_version_write_timer.start(250)
+            return
+
+        target_sa = self._post_program_version_write_target_sa
+        if target_sa is None:
+            self._finish_post_program_version_write(False, "Не определен целевой SA для автозаписи версии.")
+            return
+
+        self._post_program_version_write_wait_logged = False
+        self._apply_programming_target_sa(int(target_sa) & 0xFF, "Автозапись версии ПО после прошивки.")
+        self._selected_service_session_index = self._service_session_index_for_value(int(Session.EXTENDED))
+        self.serviceAccessChanged.emit()
+        self._post_program_version_write_stage = "wait_session"
+        self.applySelectedServiceSession()
+        if not bool(self._service_access_busy) or str(self._service_access_pending_action or "") != "session":
+            self._finish_post_program_version_write(False, "Не удалось отправить запрос Extended Session для автозаписи версии.")
+
+    def _continue_post_program_version_after_session(self):
+        """Цель функции в продолжении автозаписи после 0x10, затем она запускает Security Access 0x27."""
+        if not bool(self._post_program_version_write_pending):
+            return
+        if str(self._post_program_version_write_stage or "") != "wait_session":
+            return
+        self._post_program_version_write_stage = "wait_security"
+        self.requestSecurityAccess()
+        if not bool(self._service_access_busy) or str(self._service_access_pending_action or "") != "security_seed":
+            self._finish_post_program_version_write(False, "Не удалось запустить Security Access для автозаписи версии.")
+
+    def _continue_post_program_version_after_security(self):
+        """Цель функции в продолжении автозаписи после 0x27, затем она отправляет запись DID 0xF195."""
+        if not bool(self._post_program_version_write_pending):
+            return
+        if str(self._post_program_version_write_stage or "") != "wait_security":
+            return
+        version_text = str(self._post_program_version_write_value or "").strip()
+        if not version_text:
+            self._finish_post_program_version_write(False, "Пустая версия ПО для записи DID 0xF195.")
+            return
+        self._post_program_version_write_stage = "wait_write"
+        self.writeSoftwareVersionDid(version_text)
+        if not bool(self._software_version_busy):
+            self._finish_post_program_version_write(False, "Не удалось запустить запись DID 0xF195.")
 
     def _on_bootloader_state(self, text, color):
         self._append_log(text, color)
@@ -34,6 +201,10 @@ class AppControllerRuntimeMixin(AppControllerContract):
         self.progressChanged.emit()
 
     def _on_programming_finished(self, success):
+        if not success:
+            self._finish_post_program_version_write(False, "Прошивка не завершилась успешно, автозапись версии отменена.")
+        elif bool(self._post_program_version_write_pending):
+            self._finish_post_program_version_write(False, "Предыдущая цепочка автозаписи версии не была завершена и отменена.")
         if self._programming_start_timer.isActive():
             self._programming_start_timer.stop()
         self._pending_programming_after_reset = False
@@ -93,6 +264,8 @@ class AppControllerRuntimeMixin(AppControllerContract):
                 self._finish_programming_batch(False, "Групповое программирование остановлено: не удалось сбросить узел.")
             return
 
+        self._schedule_post_program_version_write(current_sa)
+
         if self._programming_batch_active:
             if len(self._programming_batch_queue) > 0:
                 self._programming_batch_status = (
@@ -112,6 +285,8 @@ class AppControllerRuntimeMixin(AppControllerContract):
     def _on_trace_state_event(self):
         self._rx_time_anchor_raw = None
         self._rx_time_anchor_wall = None
+        if (not self._can.is_trace) and bool(self._post_program_version_write_pending):
+            self._finish_post_program_version_write(False, "Трассировка CAN остановлена, автозапись версии отменена.")
         if not self._can.is_trace:
             self._stop_calibration_poll_timer()
         elif self._calibration_active and (not self._calibration_waiting_session):

@@ -100,6 +100,13 @@ class AppController(
         self._programming_batch_done = 0
         self._programming_batch_delay_ms = 1200
         self._programming_batch_status = ""
+        self._post_program_version_write_pending = False
+        self._post_program_version_write_stage = ""
+        self._post_program_version_write_target_sa: int | None = None
+        self._post_program_version_write_value = ""
+        self._post_program_version_write_delay_ms = 1400
+        self._post_program_version_write_retry_left = 0
+        self._post_program_version_write_wait_logged = False
         self._debug_enabled = False
         self._firmware_loading = False
         self._service_session_items = [
@@ -435,6 +442,15 @@ class AppController(
         self._software_version_status = "Версия ПО не считана."
         self._software_version_busy = False
         self._firmware_file_version_text = "—"
+        self._supplier_did_rows: list[dict[str, object]] = []
+        self._supplier_did_status_text = "Параметры DID изготовителя не считаны."
+        self._supplier_did_bulk_busy = False
+        self._supplier_did_bulk_queue: list[int] = []
+        self._supplier_did_bulk_total = 0
+        self._supplier_did_bulk_done = 0
+        self._supplier_did_bulk_success = 0
+        self._supplier_did_bulk_fail = 0
+        self._init_supplier_did_rows()
 
         self._tx_priority_text = ""
         self._tx_pgn_text = ""
@@ -486,6 +502,9 @@ class AppController(
         self._programming_batch_step_timer.setSingleShot(True)
         self._programming_batch_step_timer.setInterval(self._programming_batch_delay_ms)
         self._programming_batch_step_timer.timeout.connect(self._on_programming_batch_step_timeout)
+        self._post_program_version_write_timer = QTimer(self)
+        self._post_program_version_write_timer.setSingleShot(True)
+        self._post_program_version_write_timer.timeout.connect(self._on_post_program_version_write_timeout)
 
         self._calibration_poll_timer = QTimer(self)
         self._calibration_poll_timer.setSingleShot(False)

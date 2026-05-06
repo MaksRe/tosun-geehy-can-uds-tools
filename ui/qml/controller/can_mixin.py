@@ -625,6 +625,13 @@ class AppControllerCanMixin(AppControllerContract):
                 f"UDS доступ: негативный ответ SID 0x{original_sid:02X}, NRC=0x{nrc:02X}, узел 0x{int(target_sa) & 0xFF:02X}.",
                 QColor("#dc2626"),
             )
+            if bool(getattr(self, "_post_program_version_write_pending", False)):
+                auto_stage = str(getattr(self, "_post_program_version_write_stage", "") or "")
+                if auto_stage in ("wait_session", "wait_security"):
+                    self._finish_post_program_version_write(
+                        False,
+                        f"Отказ UDS при подготовке автозаписи версии: SID 0x{original_sid:02X}, NRC 0x{nrc:02X}.",
+                    )
             return
 
         if self._service_access_pending_action == "session":
@@ -644,6 +651,7 @@ class AppControllerCanMixin(AppControllerContract):
                 f"UDS Session: подтверждена сессия 0x{session_value:02X} для узла 0x{int(target_sa) & 0xFF:02X}.",
                 QColor("#16a34a"),
             )
+            self._continue_post_program_version_after_session()
             return
 
         if self._service_access_pending_action == "security_seed":
@@ -689,6 +697,7 @@ class AppControllerCanMixin(AppControllerContract):
                 f"Security Access: доступ подтвержден для узла 0x{int(target_sa) & 0xFF:02X}.",
                 QColor("#16a34a"),
             )
+            self._continue_post_program_version_after_security()
 
     @staticmethod
     def _choose_tester_sa_for_node(node: dict[str, object], default_tester_sa: int) -> tuple[int, int]:

@@ -1049,6 +1049,23 @@ class AppControllerOptionsMixin(AppControllerContract):
                     self._software_version_status = f"Ошибка DID 0xF195: {str(message)}"
             self._software_version_busy = False
             self.softwareVersionChanged.emit()
+            if (
+                request_origin == "sw_version_write"
+                and pending_action == "write"
+                and bool(getattr(self, "_post_program_version_write_pending", False))
+                and str(getattr(self, "_post_program_version_write_stage", "") or "") == "wait_write"
+            ):
+                self._finish_post_program_version_write(bool(success), str(message))
+
+        if str(request_origin or "").startswith("supplier_did_"):
+            self._handle_supplier_did_options_result(
+                success=bool(success),
+                request_origin=str(request_origin),
+                pending_action=str(pending_action),
+                pending_did=pending_did,
+                value_bytes=value_bytes,
+                message=str(message),
+            )
 
         self._options_busy = False
         self._options_pending_action = ""

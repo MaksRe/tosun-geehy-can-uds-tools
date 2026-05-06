@@ -25,15 +25,8 @@ Card {
     cardBorder: root.hovered ? root.accentColor : root.baseBorder
     implicitHeight: contentColumn.implicitHeight + 24
 
-    y: root.pressed ? 1 : (root.hovered ? -2 : 0)
+    y: 0
     scale: root.pressed ? 0.992 : 1.0
-
-    Behavior on y {
-        NumberAnimation {
-            duration: 120
-            easing.type: Easing.OutCubic
-        }
-    }
 
     Behavior on scale {
         NumberAnimation {

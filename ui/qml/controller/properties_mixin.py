@@ -128,6 +128,21 @@ class AppControllerPropertiesMixin(AppControllerContract):
         """Цель функции в выдаче версии из имени BIN-файла, затем она позволяет записать ее в DID 0xF195."""
         return str(self._firmware_file_version_text)
 
+    @Property("QVariantList", notify=softwareVersionChanged)
+    def supplierDidRows(self):
+        """Цель функции в выдаче строк DID изготовителя, затем она формирует компактную таблицу на главной форме."""
+        return list(self._supplier_did_rows)
+
+    @Property(bool, notify=softwareVersionChanged)
+    def supplierDidBulkBusy(self):
+        """Цель функции в выдаче флага массового чтения DID изготовителя, затем она блокирует повторный запуск кнопки."""
+        return bool(self._supplier_did_bulk_busy)
+
+    @Property(str, notify=softwareVersionChanged)
+    def supplierDidStatusText(self):
+        """Цель функции в выдаче статуса блока DID изготовителя, затем она показывает оператору текущий шаг или итог."""
+        return str(self._supplier_did_status_text)
+
     @Property(int, notify=progressChanged)
     def progressValue(self):
         return self._progress_value

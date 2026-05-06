@@ -26,7 +26,6 @@ ApplicationWindow {
     readonly property color inputFocus: "#0ea5e9"
     readonly property var backendController: appController
     readonly property int bottomStatusBarHeight: 44
-
     property string toastTitle: ""
     property string toastText: ""
     property bool toastVisible: false
@@ -552,115 +551,185 @@ ApplicationWindow {
         spacing: 12
 
         RowLayout {
+            id: topPanelsRow
             Layout.fillWidth: true
             Layout.alignment: Qt.AlignTop
             spacing: 10
 
-            ConnectionCard {
+            ColumnLayout {
+                id: leftTopPanelsColumn
                 Layout.fillWidth: true
-                appController: window.backendController
-                cardColor: window.cardColor
-                cardBorder: window.cardBorder
-                textMain: window.textMain
-                textSoft: window.textSoft
-                inputBg: window.inputBg
-                inputBorder: window.inputBorder
-                inputFocus: window.inputFocus
-                showCardHeader: false
-                compactMode: true
+                Layout.alignment: Qt.AlignTop
+                spacing: 10
+
+                ConnectionCard {
+                    Layout.fillWidth: true
+                    appController: window.backendController
+                    cardColor: window.cardColor
+                    cardBorder: window.cardBorder
+                    textMain: window.textMain
+                    textSoft: window.textSoft
+                    inputBg: window.inputBg
+                    inputBorder: window.inputBorder
+                    inputFocus: window.inputFocus
+                    showCardHeader: false
+                    compactMode: true
+                }
+
+                ToolLauncherCard {
+                    Layout.fillWidth: true
+                    appController: window.backendController
+                    cardColor: window.cardColor
+                    cardBorder: window.cardBorder
+                    textMain: window.textMain
+                    textSoft: window.textSoft
+                    onOpenBootloaderRequested: window.raiseToolWindow(bootloaderWindow)
+                    onOpenCalibrationRequested: window.raiseToolWindow(calibrationWindow)
+                    onOpenCollectorRequested: window.raiseToolWindow(collectorWindow)
+                    onOpenOptionsRequested: window.raiseToolWindow(optionsWindow)
+                    onOpenServiceSettingsRequested: window.raiseToolWindow(serviceSettingsWindow)
+                }
             }
 
             Rectangle {
-                Layout.preferredWidth: 300
-                Layout.minimumWidth: 280
-                Layout.maximumWidth: 340
+                Layout.preferredWidth: 470
+                Layout.minimumWidth: 430
+                Layout.maximumWidth: 540
+                Layout.preferredHeight: leftTopPanelsColumn.implicitHeight
                 Layout.alignment: Qt.AlignTop
                 radius: 10
                 color: "#f9fcff"
                 border.color: "#d6e2ef"
                 border.width: 1
-                implicitHeight: versionCardColumn.implicitHeight + 14
 
                 ColumnLayout {
-                    id: versionCardColumn
+                    id: supplierDidCardColumn
                     anchors.fill: parent
-                    anchors.margins: 7
-                    spacing: 4
-
-                    Text {
-                        text: "Версия ПО · DID 0xF195"
-                        color: window.textSoft
-                        font.pixelSize: 11
-                        font.bold: true
-                        font.family: "Bahnschrift"
-                    }
+                    anchors.margins: 4
+                    spacing: 2
 
                     RowLayout {
                         Layout.fillWidth: true
-                        spacing: 6
+                        spacing: 4
 
-                        Rectangle {
+                        Text {
                             Layout.fillWidth: true
-                            radius: 7
-                            color: "#eef6ff"
-                            border.color: "#c7dff4"
-                            border.width: 1
-                            implicitHeight: versionValueText.implicitHeight + 10
-
-                            Text {
-                                id: versionValueText
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.verticalCenter: parent.verticalCenter
-                                anchors.leftMargin: 8
-                                anchors.rightMargin: 8
-                                text: window.backendController ? window.backendController.softwareVersionText : "—"
-                                color: window.textMain
-                                font.pixelSize: 13
-                                font.bold: true
-                                font.family: "Bahnschrift"
-                                elide: Text.ElideRight
-                            }
+                            text: "Параметры DID изготовителя: чтение и запись значений."
+                            color: "#4f6378"
+                            font.pixelSize: 9
+                            font.family: "Bahnschrift"
+                            elide: Text.ElideRight
                         }
 
                         FancyButton {
-                            Layout.preferredWidth: 94
-                            Layout.minimumWidth: 84
-                            Layout.preferredHeight: 30
-                            text: window.backendController && window.backendController.softwareVersionBusy ? "Чтение..." : "Прочитать"
-                            loading: window.backendController ? window.backendController.softwareVersionBusy : false
-                            fontPixelSize: 11
+                            Layout.preferredWidth: 106
+                            Layout.minimumWidth: 102
+                            Layout.preferredHeight: 20
+                            text: window.backendController && window.backendController.supplierDidBulkBusy ? "Чтение..." : "Прочитать все"
+                            loading: window.backendController ? window.backendController.supplierDidBulkBusy : false
+                            fontPixelSize: 8
                             tone: "#0284c7"
                             toneHover: "#0369a1"
                             tonePressed: "#075985"
-                            onClicked: if (window.backendController) window.backendController.readSoftwareVersionDid()
+                            onClicked: if (window.backendController) window.backendController.readAllSupplierDidRows()
                         }
                     }
 
-                    Text {
+                    Rectangle {
                         Layout.fillWidth: true
-                        text: window.backendController ? window.backendController.softwareVersionStatusText : "Ожидание контроллера."
-                        color: window.textSoft
-                        font.pixelSize: 10
-                        font.family: "Bahnschrift"
-                        elide: Text.ElideRight
+                        Layout.fillHeight: true
+                        radius: 6
+                        color: "#f4f9ff"
+                        border.color: "#d3e3f1"
+                        border.width: 1
+
+                        Column {
+                            id: supplierDidMiniTableColumn
+                            anchors.fill: parent
+                            anchors.margins: 2
+                            spacing: 0
+
+                            Repeater {
+                                model: window.backendController ? window.backendController.supplierDidRows : []
+
+                                delegate: Rectangle {
+                                    width: supplierDidMiniTableColumn.width
+                                    height: 18
+                                    radius: 0
+                                    color: index % 2 === 0 ? "#f8fbff" : "#f1f7ff"
+                                    border.color: "#e0ebf7"
+                                    border.width: 0
+
+                                    Text {
+                                        id: supplierNameText
+                                        width: 154
+                                        anchors.left: parent.left
+                                        anchors.leftMargin: 2
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: modelData.name
+                                        color: "#1f2d3d"
+                                        font.pixelSize: 10
+                                        font.bold: true
+                                        font.family: "Bahnschrift"
+                                        verticalAlignment: Text.AlignVCenter
+                                        elide: Text.ElideRight
+                                    }
+
+                                    FancyButton {
+                                        id: supplierWriteButton
+                                        width: 62
+                                        anchors.right: parent.right
+                                        anchors.rightMargin: 2
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        height: 14
+                                        text: Boolean(modelData.busy) ? "..." : "Запись"
+                                        fontPixelSize: 7
+                                        enabled: Boolean(modelData.canWrite)
+                                            && !(window.backendController ? window.backendController.supplierDidBulkBusy : false)
+                                            && !Boolean(modelData.busy)
+                                        tone: "#0ea5a4"
+                                        toneHover: "#0f8f8f"
+                                        tonePressed: "#0f766e"
+                                        onClicked: {
+                                            if (window.backendController) {
+                                                window.backendController.writeSupplierDidValue(Number(modelData.didInt), supplierValueField.text)
+                                            }
+                                        }
+                                    }
+
+                                    TextField {
+                                        id: supplierValueField
+                                        anchors.left: supplierNameText.right
+                                        anchors.leftMargin: 2
+                                        anchors.right: supplierWriteButton.left
+                                        anchors.rightMargin: 2
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        height: 14
+                                        text: String(modelData.value ? modelData.value : "")
+                                        enabled: !(window.backendController ? window.backendController.supplierDidBulkBusy : false) && !Boolean(modelData.busy)
+                                        font.pixelSize: 10
+                                        font.family: "Bahnschrift"
+                                        color: window.textMain
+                                        placeholderText: "Введите значение"
+                                        selectByMouse: true
+                                        leftPadding: 4
+                                        rightPadding: 4
+                                        topPadding: 0
+                                        bottomPadding: 0
+
+                                        background: Rectangle {
+                                            radius: 2
+                                            color: "#ffffff"
+                                            border.width: 1
+                                            border.color: supplierValueField.activeFocus ? "#8ec8ef" : "#c8d9ea"
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
-        }
-
-        ToolLauncherCard {
-            Layout.fillWidth: true
-            appController: window.backendController
-            cardColor: window.cardColor
-            cardBorder: window.cardBorder
-            textMain: window.textMain
-            textSoft: window.textSoft
-            onOpenBootloaderRequested: window.raiseToolWindow(bootloaderWindow)
-            onOpenCalibrationRequested: window.raiseToolWindow(calibrationWindow)
-            onOpenCollectorRequested: window.raiseToolWindow(collectorWindow)
-            onOpenOptionsRequested: window.raiseToolWindow(optionsWindow)
-            onOpenServiceSettingsRequested: window.raiseToolWindow(serviceSettingsWindow)
         }
 
         AppLogCard {
