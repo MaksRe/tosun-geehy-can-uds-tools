@@ -136,5 +136,14 @@ class UdsData:
         return list(cls.vars.values())[index]
 
     @classmethod
+    def get_var_by_pid(cls, pid: int) -> UdsVar | None:
+        """Цель функции в поиске параметра по DID, затем она возвращает объект UdsVar или None при отсутствии."""
+        target_pid = int(pid) & 0xFFFF
+        for var in cls.vars.values():
+            if int(var.pid) & 0xFFFF == target_pid:
+                return var
+        return None
+
+    @classmethod
     def descriptions(cls) -> list:
         return [var.description for var in cls.vars.values()]

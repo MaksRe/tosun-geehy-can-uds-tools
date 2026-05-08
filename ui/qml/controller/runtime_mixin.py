@@ -19,12 +19,53 @@ class AppControllerRuntimeMixin(AppControllerContract):
         self._post_program_version_write_pending = False
         self._post_program_version_write_stage = ""
         self._post_program_version_write_target_sa = None
+        self._post_program_version_write_primary_sa = None
+        self._post_program_version_write_fallback_used = False
         self._post_program_version_write_value = ""
         self._post_program_version_write_retry_left = 0
         self._post_program_version_write_wait_logged = False
 
+    def _switch_post_program_version_write_to_fallback_sa(self, reason: str) -> bool:
+        """Цель функции в однократном fallback автозаписи версии на SA 0x6A, затем она перепланирует цепочку на резервный адрес."""
+        if not bool(self._post_program_version_write_pending):
+            return False
+
+        current_sa = self._post_program_version_write_target_sa
+        if current_sa is None:
+            return False
+
+        fallback_sa = 0x6A
+        if bool(self._post_program_version_write_fallback_used):
+            return False
+        if (int(current_sa) & 0xFF) == fallback_sa:
+            return False
+
+        self._post_program_version_write_fallback_used = True
+        self._post_program_version_write_target_sa = fallback_sa
+        self._post_program_version_write_stage = "wait_delay"
+        self._post_program_version_write_wait_logged = False
+        self._post_program_version_write_retry_left = 0
+
+        if self._post_program_version_write_timer.isActive():
+            self._post_program_version_write_timer.stop()
+        self._post_program_version_write_timer.start(max(900, int(self._post_program_version_write_delay_ms)))
+
+        reason_text = str(reason or "").strip()
+        self._append_log(
+            (
+                f"Автозапись версии ПО: первая попытка для узла 0x{int(current_sa) & 0xFF:02X} не выполнена"
+                f"{': ' + reason_text if reason_text else '.'} "
+                f"Выполняется однократный fallback на SA 0x{fallback_sa:02X}."
+            ),
+            RowColor.yellow,
+        )
+        return True
+
     def _finish_post_program_version_write(self, success: bool, message: str):
         """Цель функции в завершении автозаписи версии, затем она пишет итог в лог и очищает внутреннее состояние."""
+        if (not bool(success)) and self._switch_post_program_version_write_to_fallback_sa(str(message)):
+            return
+
         active = bool(self._post_program_version_write_pending)
         target_sa = self._post_program_version_write_target_sa
         version_text = str(self._post_program_version_write_value or "").strip()
@@ -94,8 +135,10 @@ class AppControllerRuntimeMixin(AppControllerContract):
         self._post_program_version_write_pending = True
         self._post_program_version_write_stage = "wait_delay"
         self._post_program_version_write_target_sa = normalized_sa
+        self._post_program_version_write_primary_sa = normalized_sa
+        self._post_program_version_write_fallback_used = (normalized_sa == 0x6A)
         self._post_program_version_write_value = version_text
-        self._post_program_version_write_retry_left = 8
+        self._post_program_version_write_retry_left = max(1, int(self._post_program_version_write_max_retry_count))
         self._post_program_version_write_wait_logged = False
 
         if self._post_program_version_write_timer.isActive():
@@ -104,10 +147,23 @@ class AppControllerRuntimeMixin(AppControllerContract):
         self._append_log(
             (
                 f"Автозапись версии ПО после прошивки запланирована для узла 0x{normalized_sa:02X}: "
-                f"{version_text} (задержка {int(self._post_program_version_write_delay_ms)} мс)."
+                f"{version_text} (задержка {int(self._post_program_version_write_delay_ms)} мс, "
+                "одна попытка + fallback на SA 0x6A при неудаче)."
             ),
             RowColor.blue,
         )
+
+    def _retry_post_program_version_write_after_service_timeout(self, pending_action: str, timeout_message: str) -> bool:
+        """Цель функции в fallback после таймаута 0x10/0x27, затем она однократно переключает целевой SA на 0x6A."""
+        if not bool(self._post_program_version_write_pending):
+            return False
+
+        stage = str(self._post_program_version_write_stage or "")
+        if stage not in ("wait_session", "wait_security"):
+            return False
+
+        _ = pending_action
+        return self._switch_post_program_version_write_to_fallback_sa(str(timeout_message))
 
     def _on_post_program_version_write_timeout(self):
         """Цель функции в старте цепочки автозаписи версии, затем она отправляет запрос Extended Session для нужного SA."""
@@ -125,13 +181,6 @@ class AppControllerRuntimeMixin(AppControllerContract):
             or self._communication_control_busy
             or self._calibration_active
         ):
-            self._post_program_version_write_retry_left -= 1
-            if self._post_program_version_write_retry_left <= 0:
-                self._finish_post_program_version_write(
-                    False,
-                    "UDS канал занят: не удалось запустить автозапись версии в отведенное время.",
-                )
-                return
             if not bool(self._post_program_version_write_wait_logged):
                 self._append_log(
                     "Автозапись версии ПО: ожидание освобождения UDS канала.",

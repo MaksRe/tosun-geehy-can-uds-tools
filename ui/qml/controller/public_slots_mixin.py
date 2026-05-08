@@ -930,9 +930,13 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         else:
             message = "Таймаут ожидания подтверждения key на Security Access 0x27."
         self._reset_service_access_state(message)
-        self._append_log(message, RowColor.red)
         if bool(getattr(self, "_post_program_version_write_pending", False)) and auto_stage in ("wait_session", "wait_security"):
+            if self._retry_post_program_version_write_after_service_timeout(pending_action, message):
+                return
+            self._append_log(message, RowColor.red)
             self._finish_post_program_version_write(False, message)
+            return
+        self._append_log(message, RowColor.red)
 
     def _resolve_source_address_operation_target_sa(self) -> int:
         # Держим SA-операции на том же узле, где уже запускались сервисные операции 0x10/0x27.

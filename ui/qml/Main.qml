@@ -621,6 +621,26 @@ ApplicationWindow {
                             elide: Text.ElideRight
                         }
 
+                        FilterComboBox {
+                            id: supplierDidTargetNodeCombo
+                            Layout.preferredWidth: 136
+                            Layout.minimumWidth: 124
+                            Layout.preferredHeight: 20
+                            editable: false
+                            model: window.backendController ? window.backendController.optionsTargetNodeItems : []
+                            currentIndex: window.backendController ? window.backendController.selectedOptionsTargetNodeIndex : 0
+                            enabled: !(window.backendController ? window.backendController.supplierDidBulkBusy : false)
+                            font.pixelSize: 8
+                            font.family: "Bahnschrift"
+                            popupMinWidth: 200
+                            popupMaxWidth: 340
+                            onActivated: function(index) {
+                                if (window.backendController) {
+                                    window.backendController.setSelectedOptionsTargetNodeIndex(index)
+                                }
+                            }
+                        }
+
                         FancyButton {
                             Layout.preferredWidth: 106
                             Layout.minimumWidth: 102

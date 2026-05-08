@@ -28,24 +28,68 @@ ComboBox {
     font.family: "Consolas"
     hoverEnabled: true
 
-    contentItem: TextInput {
-        width: Math.max(0, control.width - 22)
-        height: control.availableHeight
-        leftPadding: 5
-        rightPadding: 2
-        text: control.editable ? control.editText : control.displayText
-        font: control.font
-        color: control.fieldTextColor
-        selectionColor: "#9ac3f0"
-        selectedTextColor: "#0f2742"
-        verticalAlignment: Text.AlignVCenter
-        readOnly: !control.editable
-        selectByMouse: true
-        clip: true
+    contentItem: Loader {
+        anchors.fill: parent
+        sourceComponent: control.editable ? editableContentComponent : readonlyContentComponent
+    }
 
-        onTextEdited: {
-            if (control.editable) {
-                control.editText = text
+    Component {
+        id: editableContentComponent
+
+        TextInput {
+            width: Math.max(0, control.width - 22)
+            height: control.availableHeight
+            leftPadding: 5
+            rightPadding: 2
+            text: control.editText
+            font: control.font
+            color: control.fieldTextColor
+            selectionColor: "#9ac3f0"
+            selectedTextColor: "#0f2742"
+            verticalAlignment: Text.AlignVCenter
+            readOnly: false
+            selectByMouse: true
+            clip: true
+
+            onTextEdited: control.editText = text
+        }
+    }
+
+    Component {
+        id: readonlyContentComponent
+
+        Item {
+            anchors.fill: parent
+
+            Text {
+                anchors.fill: parent
+                anchors.leftMargin: 5
+                anchors.rightMargin: 22
+                text: control.displayText
+                font: control.font
+                color: control.fieldTextColor
+                verticalAlignment: Text.AlignVCenter
+                elide: Text.ElideRight
+            }
+
+            MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                enabled: control.enabled
+                cursorShape: Qt.PointingHandCursor
+                preventStealing: true
+
+                onPressed: function(mouse) {
+                    mouse.accepted = true
+                }
+
+                onClicked: {
+                    if (control.popup.visible) {
+                        control.popup.close()
+                    } else {
+                        control.popup.open()
+                    }
+                }
             }
         }
     }
@@ -97,9 +141,14 @@ ComboBox {
         MouseArea {
             anchors.fill: parent
             hoverEnabled: true
+            enabled: control.enabled
             cursorShape: Qt.PointingHandCursor
             preventStealing: true
-            onPressed: mouse.accepted = true
+
+            onPressed: function(mouse) {
+                mouse.accepted = true
+            }
+
             onClicked: {
                 if (control.popup.visible) {
                     control.popup.close()

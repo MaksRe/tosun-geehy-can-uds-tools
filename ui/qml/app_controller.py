@@ -103,8 +103,11 @@ class AppController(
         self._post_program_version_write_pending = False
         self._post_program_version_write_stage = ""
         self._post_program_version_write_target_sa: int | None = None
+        self._post_program_version_write_primary_sa: int | None = None
+        self._post_program_version_write_fallback_used = False
         self._post_program_version_write_value = ""
         self._post_program_version_write_delay_ms = 1400
+        self._post_program_version_write_max_retry_count = 1
         self._post_program_version_write_retry_left = 0
         self._post_program_version_write_wait_logged = False
         self._debug_enabled = False

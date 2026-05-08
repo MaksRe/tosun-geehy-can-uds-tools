@@ -370,8 +370,11 @@ class AppControllerContract:
     _post_program_version_write_pending: Any
     _post_program_version_write_stage: Any
     _post_program_version_write_target_sa: Any
+    _post_program_version_write_primary_sa: Any
+    _post_program_version_write_fallback_used: Any
     _post_program_version_write_value: Any
     _post_program_version_write_delay_ms: Any
+    _post_program_version_write_max_retry_count: Any
     _post_program_version_write_retry_left: Any
     _post_program_version_write_wait_logged: Any
     _post_program_version_write_timer: Any

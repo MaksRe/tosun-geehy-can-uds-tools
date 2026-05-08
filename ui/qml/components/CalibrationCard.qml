@@ -348,112 +348,147 @@ Item {
                     }
                 }
 
-                GridLayout {
+                Rectangle {
                     Layout.fillWidth: true
-                    columns: 4
-                    columnSpacing: 10
-                    rowSpacing: 4
+                    radius: 8
+                    color: "#f3f8ff"
+                    border.color: "#d9e7f5"
+                    border.width: 1
+                    implicitHeight: backupMetaLayout.implicitHeight + 10
 
-                    Text {
-                        text: "Узел:"
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                    }
-                    Text {
-                        text: root.appController ? root.appController.calibrationBackupNodeText : "-"
-                        color: root.textMain
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                    }
-                    Text {
-                        text: "Сохранен:"
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                    }
-                    Text {
-                        text: root.appController ? root.appController.calibrationBackupSavedAtText : "-"
-                        color: root.textMain
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                    }
+                    ColumnLayout {
+                        id: backupMetaLayout
+                        anchors.fill: parent
+                        anchors.margins: 5
+                        spacing: 4
 
-                    Text {
-                        text: "0%:"
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                    }
-                    Text {
-                        text: root.appController ? root.appController.calibrationBackupLevel0Text : "-"
-                        color: root.textMain
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                    }
-                    Text {
-                        text: "100%:"
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                    }
-                    Text {
-                        text: root.appController ? root.appController.calibrationBackupLevel100Text : "-"
-                        color: root.textMain
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                    }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 14
 
-                    Text {
-                        text: "K1:"
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                    }
-                    Text {
-                        text: root.appController ? root.appController.calibrationBackupK1Text : "-"
-                        color: root.textMain
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                    }
-                    Text {
-                        text: "K0:"
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                    }
-                    Text {
-                        text: root.appController ? root.appController.calibrationBackupK0Text : "-"
-                        color: root.textMain
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                    }
+                            Text {
+                                text: "Узел: " + (root.appController ? root.appController.calibrationBackupNodeText : "-")
+                                color: root.textMain
+                                font.pixelSize: 11
+                                font.family: "Bahnschrift"
+                                font.bold: true
+                            }
 
-                    Text {
-                        text: "Смещение 0%:"
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
+                            Text {
+                                text: "Сохранен: " + (root.appController ? root.appController.calibrationBackupSavedAtText : "-")
+                                color: root.textMain
+                                font.pixelSize: 11
+                                font.family: "Bahnschrift"
+                            }
+
+                            Item { Layout.fillWidth: true }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 12
+
+                            Text {
+                                text: "0%: " + (root.appController ? root.appController.calibrationBackupLevel0Text : "-")
+                                color: root.textMain
+                                font.pixelSize: 11
+                                font.family: "Bahnschrift"
+                            }
+                            Text {
+                                text: "100%: " + (root.appController ? root.appController.calibrationBackupLevel100Text : "-")
+                                color: root.textMain
+                                font.pixelSize: 11
+                                font.family: "Bahnschrift"
+                            }
+                            Text {
+                                text: "K1: " + (root.appController ? root.appController.calibrationBackupK1Text : "-")
+                                color: root.textMain
+                                font.pixelSize: 11
+                                font.family: "Bahnschrift"
+                            }
+                            Item { Layout.fillWidth: true }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 12
+
+                            Text {
+                                text: "K0: " + (root.appController ? root.appController.calibrationBackupK0Text : "-")
+                                color: root.textMain
+                                font.pixelSize: 11
+                                font.family: "Bahnschrift"
+                            }
+                            Text {
+                                text: "Смещение 0%: " + (root.appController ? root.appController.calibrationBackupZeroTrimText : "-")
+                                color: root.textMain
+                                font.pixelSize: 11
+                                font.family: "Bahnschrift"
+                            }
+                            Item { Layout.fillWidth: true }
+                        }
                     }
-                    Text {
-                        text: root.appController ? root.appController.calibrationBackupZeroTrimText : "-"
-                        color: root.textMain
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                    }
-                    Text {
-                        text: "Файл:"
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                    }
-                    Text {
-                        text: root.appController ? root.appController.calibrationBackupFilePathText : "-"
-                        color: root.textMain
-                        font.pixelSize: 10
-                        font.family: "Bahnschrift"
-                        elide: Text.ElideMiddle
-                        Layout.fillWidth: true
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    radius: 8
+                    color: "#f7fbff"
+                    border.color: "#d9e7f5"
+                    border.width: 1
+                    implicitHeight: backupPathLayout.implicitHeight + 10
+
+                    ColumnLayout {
+                        id: backupPathLayout
+                        anchors.fill: parent
+                        anchors.margins: 5
+                        spacing: 4
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            Text {
+                                Layout.preferredWidth: 58
+                                text: "Каталог:"
+                                color: root.textSoft
+                                font.pixelSize: 11
+                                font.family: "Bahnschrift"
+                            }
+
+                            Text {
+                                id: backupDirectoryText
+                                Layout.fillWidth: true
+                                text: root.appController ? root.appController.collectorOutputDirectory : "-"
+                                color: root.textMain
+                                font.pixelSize: 10
+                                font.family: "Bahnschrift"
+                                elide: Text.ElideMiddle
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            Text {
+                                Layout.preferredWidth: 58
+                                text: "Файл:"
+                                color: root.textSoft
+                                font.pixelSize: 11
+                                font.family: "Bahnschrift"
+                            }
+
+                            Text {
+                                id: backupFilePathText
+                                Layout.fillWidth: true
+                                text: root.appController ? root.appController.calibrationBackupFilePathText : "-"
+                                color: root.textMain
+                                font.pixelSize: 10
+                                font.family: "Bahnschrift"
+                                elide: Text.ElideMiddle
+                            }
+                        }
                     }
                 }
 
@@ -2584,6 +2619,34 @@ Item {
             }
             root.syncLinearPreviewFields()
             root.rebuildFilteredTempCompSeries()
+        }
+
+        function onCalibrationBackupChanged() {
+            if (!root.appController) {
+                return
+            }
+
+            var saved0 = root.appController.calibrationBackupLevel0Text
+            var saved100 = root.appController.calibrationBackupLevel100Text
+            var savedK1 = root.appController.calibrationBackupK1Text
+            var savedK0 = root.appController.calibrationBackupK0Text
+            var savedZeroTrim = root.appController.calibrationBackupZeroTrimText
+
+            if (!custom0Field.activeFocus) {
+                custom0Field.text = (saved0 && saved0 !== "-") ? saved0 : ""
+            }
+            if (!custom100Field.activeFocus) {
+                custom100Field.text = (saved100 && saved100 !== "-") ? saved100 : ""
+            }
+            if (!tempCompK1Field.activeFocus) {
+                tempCompK1Field.text = (savedK1 && savedK1 !== "-") ? savedK1 : ""
+            }
+            if (!tempCompK0Field.activeFocus) {
+                tempCompK0Field.text = (savedK0 && savedK0 !== "-") ? savedK0 : ""
+            }
+            if (!tempCompZeroTrimField.activeFocus) {
+                tempCompZeroTrimField.text = (savedZeroTrim && savedZeroTrim !== "-") ? savedZeroTrim : ""
+            }
         }
     }
 
