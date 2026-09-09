@@ -4066,3 +4066,33 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
         clipboard.setText(report)
         self.infoMessage.emit("Проверка прибора", "Отчёт скопирован в буфер обмена.")
+
+    @Slot()
+    def startMediaWizardWatch(self):
+        """Цель функции в показе живого измерения контура вида топлива, затем она запускает частый опрос DID 0x0036."""
+        self._media_wizard_start_watch()
+
+    @Slot()
+    def stopMediaWizardWatch(self):
+        """Цель функции в остановке живого измерения, затем она прекращает опрос при закрытии окна мастера."""
+        self._media_wizard_stop_watch()
+
+    @Slot()
+    def captureMediaWizardAir(self):
+        """Цель функции в снятии опорной точки в воздухе, затем она усредняет серию и записывает DID 0x002F."""
+        self._media_wizard_capture("air")
+
+    @Slot()
+    def captureMediaWizardLiquid(self):
+        """Цель функции в снятии опорной точки в жидкости, затем она усредняет серию и записывает DID 0x0030."""
+        self._media_wizard_capture("liquid")
+
+    @Slot(bool)
+    def setMediaWizardEnabled(self, enabled):
+        """Цель функции в управлении поправкой по виду топлива, затем она пишет DID 0x002E с проверкой калибровки."""
+        self._media_wizard_set_enabled(bool(enabled))
+
+    @Slot()
+    def refreshMediaWizardSaved(self):
+        """Цель функции в чтении уже сохранённых опорных точек, затем она показывает текущее состояние прибора."""
+        self._media_wizard_refresh_saved()

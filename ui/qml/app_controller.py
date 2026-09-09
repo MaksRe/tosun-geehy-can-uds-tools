@@ -24,6 +24,7 @@ from .controller import (
     AppControllerCanMixin,
     AppControllerCollectorMixin,
     AppControllerDiagnosticsMixin,
+    AppControllerMediaWizardMixin,
     AppControllerOptionsMixin,
     AppControllerPropertiesMixin,
     AppControllerPublicSlotsMixin,
@@ -39,6 +40,7 @@ class AppController(
     AppControllerCalibrationMixin,
     AppControllerCollectorMixin,
     AppControllerDiagnosticsMixin,
+    AppControllerMediaWizardMixin,
     AppControllerCanMixin,
     AppControllerRuntimeMixin,
     QObject,
@@ -606,5 +608,8 @@ class AppController(
 
         # Проверка контуров и датчиков держит своё состояние и таймеры внутри модуля.
         self._init_diagnostics_state()
+
+        # Мастер калибровки контура вида топлива тоже держит своё состояние внутри модуля.
+        self._init_media_wizard_state()
 
         self._rebuild_can_traffic_view()

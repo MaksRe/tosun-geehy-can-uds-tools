@@ -23,6 +23,8 @@
 
 from __future__ import annotations
 
+import time
+
 from PySide6.QtCore import QTimer
 
 from uds.data_identifiers import UdsData
@@ -60,6 +62,16 @@ class AppControllerDiagnosticsMixin(AppControllerContract):
     # Границы таблицы NTC в прошивке, 0.1 °C. За ними показание недостоверно.
     DIAGNOSTICS_TEMP_MIN_X10 = -400
     DIAGNOSTICS_TEMP_MAX_X10 = 800
+
+    # Широковещательный уровень топлива J1939: PGN 0xFEFC, второй байт, шаг 0,4 %.
+    DIAGNOSTICS_J1939_FUEL_PGN = 0xFEFC
+    DIAGNOSTICS_J1939_FUEL_BYTE = 1
+    DIAGNOSTICS_J1939_FUEL_STEP = 0.4
+    # Через столько секунд без кадра считаем, что прибор перестал вещать уровень.
+    DIAGNOSTICS_J1939_TIMEOUT_S = 4.0
+    # Допуск расхождения уровня в шине и уровня по UDS, проценты.
+    DIAGNOSTICS_LEVEL_DIFF_GOOD = 0.4
+    DIAGNOSTICS_LEVEL_DIFF_WARN = 2.0
 
     def _diagnostics_static_vars(self):
         """Возвращает величины, которые читаются один раз за сеанс проверки."""
@@ -112,6 +124,9 @@ class AppControllerDiagnosticsMixin(AppControllerContract):
         self._diagnostics_cycles_done = 0
         self._diagnostics_counter_prev = {}
         self._diagnostics_counter_growing = {}
+        self._diagnostics_counter_delta = {}
+        self._diagnostics_j1939_raw = None
+        self._diagnostics_j1939_seen_s = None
         self._diagnostics_rows = []
         self._diagnostics_summary_text = "Нажмите «Начать проверку»."
         self._diagnostics_summary_color = self.DIAGNOSTICS_COLOR_IDLE
@@ -155,6 +170,9 @@ class AppControllerDiagnosticsMixin(AppControllerContract):
         self._diagnostics_missing = set()
         self._diagnostics_counter_prev = {}
         self._diagnostics_counter_growing = {}
+        self._diagnostics_counter_delta = {}
+        self._diagnostics_j1939_raw = None
+        self._diagnostics_j1939_seen_s = None
         self._diagnostics_cycles_done = 0
         self._diagnostics_pending = None
         # Сначала настройки и границы, затем первый круг меняющихся величин.
@@ -292,12 +310,72 @@ class AppControllerDiagnosticsMixin(AppControllerContract):
             previous = self._diagnostics_counter_prev.get(key)
             if previous is not None:
                 self._diagnostics_counter_growing[key] = int(value) != int(previous)
+                self._diagnostics_counter_delta[key] = int(value) - int(previous)
             self._diagnostics_counter_prev[key] = int(value)
 
         self._diagnostics_values[key] = int(value)
         self._diagnostics_status = f"Опрос идёт, круг {self._diagnostics_cycles_done + 1}."
         self._rebuild_diagnostics_rows()
         self._diagnostics_gap_timer.start(self.DIAGNOSTICS_REQUEST_GAP_MS)
+
+    def _handle_diagnostics_j1939_frame(self, parsed_id, payload):
+        """Запоминает уровень топлива, который прибор сам передаёт в шину.
+
+        Это третий, независимый источник уровня: его видит техника на машине.
+        Расхождение с ответом по UDS означает ошибку в передаче, а не в измерении.
+        """
+        if not self._diagnostics_running:
+            return
+        if not isinstance(payload, (list, tuple)) or len(payload) <= self.DIAGNOSTICS_J1939_FUEL_BYTE:
+            return
+
+        try:
+            pgn = int(parsed_id.pgn) & 0x3FFFF
+            src = int(parsed_id.src) & 0xFF
+        except Exception:
+            return
+
+        if pgn != self.DIAGNOSTICS_J1939_FUEL_PGN:
+            return
+        if src != (int(self._resolve_calibration_target_sa()) & 0xFF):
+            return
+
+        raw = int(payload[self.DIAGNOSTICS_J1939_FUEL_BYTE]) & 0xFF
+        self._diagnostics_j1939_seen_s = time.monotonic()
+        if raw == self._diagnostics_j1939_raw:
+            return
+
+        self._diagnostics_j1939_raw = raw
+        self._rebuild_diagnostics_rows()
+
+    def _diagnostics_j1939_is_fresh(self) -> bool:
+        """Сообщает, приходил ли широковещательный кадр уровня в последние секунды."""
+        if self._diagnostics_j1939_seen_s is None:
+            return False
+        return (time.monotonic() - float(self._diagnostics_j1939_seen_s)) <= self.DIAGNOSTICS_J1939_TIMEOUT_S
+
+    def _diagnostics_j1939_percent(self):
+        """Возвращает уровень из шины в процентах или None, если его нет."""
+        raw = self._diagnostics_j1939_raw
+        if raw is None or int(raw) >= 0xFE:
+            return None
+        return float(raw) * self.DIAGNOSTICS_J1939_FUEL_STEP
+
+    def _diagnostics_uds_percent(self):
+        """Возвращает уровень из ответа по UDS в процентах или None."""
+        level = self._diagnostics_value("raw_level")
+        return None if level is None else float(level) / 10.0
+
+    def _diagnostics_period_percent(self):
+        """Считает уровень напрямую из периода и границ калибровки."""
+        period = self._diagnostics_value("cur_period")
+        empty = self._diagnostics_value("empty_period")
+        full = self._diagnostics_value("full_period")
+        if period is None or empty is None or full is None:
+            return None
+        if int(full) <= int(empty) or int(period) >= 0xFFFF:
+            return None
+        return (int(period) - int(empty)) * 100.0 / (int(full) - int(empty))
 
     # ------------------------------------------------------------------ вердикты
 
@@ -393,6 +471,23 @@ class AppControllerDiagnosticsMixin(AppControllerContract):
             return "Заморожено", self.DIAGNOSTICS_COLOR_WARN, "Уровень ниже порога погружения либо значение отбраковано"
         return "Выключена", self.DIAGNOSTICS_COLOR_IDLE, "Коррекция по виду топлива не включена"
 
+    @staticmethod
+    def _diagnostics_media_state_word(state) -> str:
+        """Одно слово о состоянии коррекции для колонки значения."""
+        if state is None:
+            return "-"
+
+        state = int(state)
+        if state & 0x08:
+            return "отказ"
+        if state & 0x02:
+            return "устарело"
+        if state & 0x01:
+            return "активна"
+        if state & 0x04:
+            return "заморожена"
+        return "выключена"
+
     def _diagnostics_rf_verdict(self, rf, rf_min, rf_max):
         """Проверяет коэффициент среды на попадание в заданный коридор."""
         if rf is None:
@@ -409,12 +504,18 @@ class AppControllerDiagnosticsMixin(AppControllerContract):
     # ------------------------------------------------------------------ таблица
 
     @staticmethod
-    def _diagnostics_row(group, label, value_text, verdict, color, hint):
-        """Собирает одну строку таблицы проверки."""
+    def _diagnostics_row(group, label, value_text, detail_text, verdict, color, hint):
+        """Собирает одну строку таблицы проверки.
+
+        value_text - главное число, detail_text - его вторая, поясняющая величина
+        (перевод в пикофарады, допуск, номер параметра). Так строка остаётся
+        короткой, но по ней можно принять решение без открытия других окон.
+        """
         return {
             "group": str(group),
             "label": str(label),
             "value": str(value_text),
+            "detail": str(detail_text),
             "verdict": str(verdict),
             "color": str(color),
             "hint": str(hint),
@@ -429,6 +530,108 @@ class AppControllerDiagnosticsMixin(AppControllerContract):
             return f"{int(value)}{suffix}"
         return f"{float(value) * scale:.{digits}f}{suffix}"
 
+    @classmethod
+    def _diagnostics_picofarad_text(cls, counts) -> str:
+        """Переводит отсчёты таймера в пикофарады для второй строки значения."""
+        if counts is None:
+            return "-"
+        return f"{int(counts) / cls.DIAGNOSTICS_COUNTS_PER_PF:.2f} пФ"
+
+    def _diagnostics_counter_detail(self, key: str) -> str:
+        """Показывает прирост счётчика за круг опроса: он важнее самого числа."""
+        if self._diagnostics_value(key) is None:
+            return "-"
+        delta = self._diagnostics_counter_delta.get(key)
+        if delta is None:
+            return "прирост считается"
+        if delta == 0:
+            return "без изменений за круг"
+        return f"{delta:+d} за круг опроса"
+
+    def _diagnostics_level_verdict(self, measured, reference):
+        """Сравнивает уровень из шины с уровнем, который прибор отдаёт по запросу."""
+        if measured is None or reference is None:
+            return "Справочно", self.DIAGNOSTICS_COLOR_IDLE, "Не с чем сравнить"
+
+        difference = abs(float(measured) - float(reference))
+        if difference <= self.DIAGNOSTICS_LEVEL_DIFF_GOOD:
+            return "Совпадает", self.DIAGNOSTICS_COLOR_OK, "Шина и ответ по запросу дают одно и то же"
+        if difference <= self.DIAGNOSTICS_LEVEL_DIFF_WARN:
+            return (
+                "Небольшой разброс", self.DIAGNOSTICS_COLOR_WARN,
+                f"Расхождение {difference:.1f} %, обычно это разное время замера",
+            )
+        return (
+            "Расходится", self.DIAGNOSTICS_COLOR_BAD,
+            f"Расхождение {difference:.1f} %, проверьте пересчёт уровня в шину",
+        )
+
+    # ------------------------------------------------------------------ сборка строк
+
+    def _diagnostics_level_rows(self, group: str) -> list:
+        """Собирает три строки об уровне топлива: шина, запрос по UDS и расчёт из периода."""
+        rows = []
+
+        uds_percent = self._diagnostics_uds_percent()
+        bus_percent = self._diagnostics_j1939_percent()
+        period_percent = self._diagnostics_period_percent()
+
+        # 1. То, что видит техника на машине.
+        if self._diagnostics_j1939_raw is None:
+            bus_value, bus_detail = "-", "кадр PGN 0xFEFC не приходил"
+            if self._diagnostics_running:
+                verdict, color, hint = (
+                    "Нет кадров", self.DIAGNOSTICS_COLOR_WARN,
+                    "Прибор не передаёт уровень в шину либо выбран не тот адрес",
+                )
+            else:
+                verdict, color, hint = "-", self.DIAGNOSTICS_COLOR_IDLE, "Запустите проверку"
+        elif bus_percent is None:
+            bus_value = "недоступно"
+            bus_detail = f"байт {int(self._diagnostics_j1939_raw)}, признак «нет данных»"
+            verdict, color, hint = (
+                "Прибор не отдаёт уровень", self.DIAGNOSTICS_COLOR_BAD,
+                "В шину уходит признак недостоверности, а не число",
+            )
+        elif not self._diagnostics_j1939_is_fresh():
+            bus_value = f"{bus_percent:.1f} %"
+            bus_detail = f"байт {int(self._diagnostics_j1939_raw)}, шаг 0,4 %"
+            verdict, color, hint = (
+                "Кадры прекратились", self.DIAGNOSTICS_COLOR_WARN,
+                "Последнее значение устарело, прибор перестал вещать",
+            )
+        else:
+            bus_value = f"{bus_percent:.1f} %"
+            bus_detail = f"байт {int(self._diagnostics_j1939_raw)}, шаг 0,4 %"
+            verdict, color, hint = self._diagnostics_level_verdict(bus_percent, uds_percent)
+        rows.append(self._diagnostics_row(group, "Уровень в шине (J1939)", bus_value, bus_detail, verdict, color, hint))
+
+        # 2. То, что прибор отвечает на прямой запрос.
+        rows.append(self._diagnostics_row(
+            group, "Уровень по запросу (UDS)",
+            "-" if uds_percent is None else f"{uds_percent:.1f} %",
+            "DID 0x0018, шаг 0,1 %",
+            "Справочно", self.DIAGNOSTICS_COLOR_IDLE,
+            "Основание для сравнения: это же число прибор пересчитывает в шину",
+        ))
+
+        # 3. Независимый пересчёт из периода: показывает вклад компенсаций.
+        if period_percent is None:
+            period_detail = "нужны период и границы калибровки"
+        elif uds_percent is None:
+            period_detail = "по границам калибровки"
+        elif abs(uds_percent - period_percent) < 0.05:
+            period_detail = "поправки уровень не меняют"
+        else:
+            period_detail = f"поправки сдвинули на {uds_percent - period_percent:+.1f} %"
+        rows.append(self._diagnostics_row(
+            group, "Уровень из периода", "-" if period_percent is None else f"{period_percent:.1f} %",
+            period_detail, "Справочно", self.DIAGNOSTICS_COLOR_IDLE,
+            "Голый пересчёт без температурной поправки и без поправки на вид топлива",
+        ))
+
+        return rows
+
     def _rebuild_diagnostics_rows(self):
         """Пересобирает таблицу и общий вердикт по последним прочитанным значениям."""
         rows = []
@@ -442,45 +645,42 @@ class AppControllerDiagnosticsMixin(AppControllerContract):
         period = self._diagnostics_value("cur_period")
         verdict, color, hint = self._diagnostics_period_verdict(period, empty, full)
         rows.append(self._diagnostics_row(
-            group, "Период датчика", self._diagnostics_text(period, " отсч."), verdict, color, hint,
+            group, "Период датчика", self._diagnostics_text(period, " отсч."),
+            f"шкала {self._diagnostics_text(empty)} ... {self._diagnostics_text(full)}",
+            verdict, color, hint,
         ))
 
-        rows.append(self._diagnostics_row(
-            group, "Границы калибровки",
-            f"{self._diagnostics_text(empty)} ... {self._diagnostics_text(full)}",
-            "Справочно", self.DIAGNOSTICS_COLOR_IDLE, "Периоды, снятые для пустого и полного бака",
-        ))
-
-        rows.append(self._diagnostics_row(
-            group, "Уровень топлива",
-            self._diagnostics_text(self._diagnostics_value("raw_level"), " %", 0.1, 1),
-            "Справочно", self.DIAGNOSTICS_COLOR_IDLE, "Значение, которое прибор отдаёт в шину",
-        ))
+        rows.extend(self._diagnostics_level_rows(group))
 
         spread_max = self._diagnostics_value("main_spread_max")
         verdict, color, hint = self._diagnostics_spread_verdict(spread_max)
         rows.append(self._diagnostics_row(
-            group, "Дрожание измерения", self._diagnostics_text(spread_max, " отсч."), verdict, color, hint,
+            group, "Дрожание измерения", self._diagnostics_text(spread_max, " отсч."),
+            f"{self._diagnostics_picofarad_text(spread_max)}, порог {self.DIAGNOSTICS_SPREAD_WARN}",
+            verdict, color, hint,
         ))
 
+        main_spread = self._diagnostics_value("main_spread")
         rows.append(self._diagnostics_row(
-            group, "Размах последней серии",
-            self._diagnostics_text(self._diagnostics_value("main_spread"), " отсч."),
+            group, "Размах последней серии", self._diagnostics_text(main_spread, " отсч."),
+            self._diagnostics_picofarad_text(main_spread),
             "Справочно", self.DIAGNOSTICS_COLOR_IDLE, "Мгновенное значение, максимум за окно строкой выше",
         ))
 
         half_delta = self._diagnostics_value("main_half_delta")
         verdict, color, hint = self._diagnostics_half_delta_verdict(half_delta)
         rows.append(self._diagnostics_row(
-            group, "Симметрия заряда и разряда", self._diagnostics_text(half_delta, " отсч."), verdict, color, hint,
+            group, "Симметрия заряда и разряда", self._diagnostics_text(half_delta, " отсч."),
+            f"допуск ±{self.DIAGNOSTICS_HALF_DELTA_GOOD} отсч.",
+            verdict, color, hint,
         ))
 
         verdict, color, hint = self._diagnostics_counter_verdict(
             "main_overrun", "Дребезг есть", "Компараторы дребезжат, усильте фильтр захвата",
         )
         rows.append(self._diagnostics_row(
-            group, "Дребезг компараторов",
-            self._diagnostics_text(self._diagnostics_value("main_overrun")), verdict, color, hint,
+            group, "Дребезг компараторов", self._diagnostics_text(self._diagnostics_value("main_overrun")),
+            self._diagnostics_counter_detail("main_overrun"), verdict, color, hint,
         ))
 
         # --- Контур вида топлива ---
@@ -497,29 +697,44 @@ class AppControllerDiagnosticsMixin(AppControllerContract):
             verdict, color, hint = "Датчик сухой", self.DIAGNOSTICS_COLOR_WARN, "Показание не выше значения в воздухе"
         else:
             verdict, color, hint = "Норма", self.DIAGNOSTICS_COLOR_OK, "Контур измеряет"
+
+        if air is not None and cal is not None and int(cal) > int(air):
+            immersion = (int(media_raw) - int(air)) * 100.0 / (int(cal) - int(air)) if media_raw is not None else None
+            media_detail = "-" if immersion is None else f"{immersion:.0f} % пути от воздуха к жидкости"
+        else:
+            media_detail = "нужны обе точки калибровки"
         rows.append(self._diagnostics_row(
-            group, "Плоский конденсатор", self._diagnostics_text(media_raw, " отсч."), verdict, color, hint,
+            group, "Плоский конденсатор", self._diagnostics_text(media_raw, " отсч."),
+            media_detail, verdict, color, hint,
         ))
 
         if air is None or cal is None:
             verdict, color, hint = "-", self.DIAGNOSTICS_COLOR_IDLE, "Значения ещё не прочитаны"
+            cal_detail = "воздух и жидкость не прочитаны"
         elif int(cal) > int(air) > 0:
             verdict, color, hint = (
                 "Откалиброван", self.DIAGNOSTICS_COLOR_OK,
                 "Точка в воздухе и точка в жидкости сняты и различаются правильно",
             )
+            cal_detail = f"размах {int(cal) - int(air)} отсч."
         else:
             verdict, color, hint = (
                 "Не откалиброван", self.DIAGNOSTICS_COLOR_WARN,
                 "Снимите точку в воздухе и точку в эталонной жидкости",
             )
+            cal_detail = "жидкость должна быть больше воздуха"
         rows.append(self._diagnostics_row(
             group, "Калибровка контура",
             f"{self._diagnostics_text(air)} / {self._diagnostics_text(cal)}",
-            verdict, color, hint,
+            cal_detail, verdict, color, hint,
         ))
 
         enable = self._diagnostics_value("media_enable")
+        freeze = self._diagnostics_value("media_freeze_pct")
+        freeze_detail = (
+            "порог заморозки не прочитан" if freeze is None
+            else f"заморозка ниже {int(freeze)} % уровня"
+        )
         if enable is None:
             enable_text = "-"
             verdict, color, hint = "-", self.DIAGNOSTICS_COLOR_IDLE, "Значение ещё не прочитано"
@@ -539,44 +754,51 @@ class AppControllerDiagnosticsMixin(AppControllerContract):
             enable_text = "включена"
             verdict, color, hint = "Норма", self.DIAGNOSTICS_COLOR_OK, "Поправка на вид топлива разрешена"
         rows.append(self._diagnostics_row(
-            group, "Поправка по виду топлива", enable_text, verdict, color, hint,
+            group, "Поправка по виду топлива", enable_text, freeze_detail, verdict, color, hint,
         ))
 
         rf = self._diagnostics_value("media_rf")
-        verdict, color, hint = self._diagnostics_rf_verdict(
-            rf, self._diagnostics_value("media_rf_min"), self._diagnostics_value("media_rf_max"),
-        )
+        rf_min = self._diagnostics_value("media_rf_min")
+        rf_max = self._diagnostics_value("media_rf_max")
+        verdict, color, hint = self._diagnostics_rf_verdict(rf, rf_min, rf_max)
+        if rf_min is None or rf_max is None:
+            rf_detail = "коридор не прочитан"
+        else:
+            rf_detail = f"коридор {int(rf_min) / 1000.0:.3f} ... {int(rf_max) / 1000.0:.3f}"
         rows.append(self._diagnostics_row(
-            group, "Коэффициент среды", self._diagnostics_text(rf, "", 0.001, 3), verdict, color, hint,
+            group, "Коэффициент среды", self._diagnostics_text(rf, "", 0.001, 3), rf_detail, verdict, color, hint,
         ))
 
         state = self._diagnostics_value("media_state")
         verdict, color, hint = self._diagnostics_media_state_verdict(state)
         rows.append(self._diagnostics_row(
-            group, "Состояние коррекции",
-            "-" if state is None else f"0x{int(state) & 0xFF:02X}", verdict, color, hint,
+            group, "Состояние коррекции", self._diagnostics_media_state_word(state),
+            "-" if state is None else f"слово состояния 0x{int(state) & 0xFF:02X}",
+            verdict, color, hint,
         ))
 
         media_spread = self._diagnostics_value("media_spread_max")
         verdict, color, hint = self._diagnostics_spread_verdict(media_spread)
         rows.append(self._diagnostics_row(
-            group, "Дрожание измерения", self._diagnostics_text(media_spread, " отсч."), verdict, color, hint,
+            group, "Дрожание измерения", self._diagnostics_text(media_spread, " отсч."),
+            f"{self._diagnostics_picofarad_text(media_spread)}, порог {self.DIAGNOSTICS_SPREAD_WARN}",
+            verdict, color, hint,
         ))
 
         verdict, color, hint = self._diagnostics_counter_verdict(
             "media_overrun", "Дребезг есть", "Компараторы дребезжат, усильте фильтр захвата",
         )
         rows.append(self._diagnostics_row(
-            group, "Дребезг компараторов",
-            self._diagnostics_text(self._diagnostics_value("media_overrun")), verdict, color, hint,
+            group, "Дребезг компараторов", self._diagnostics_text(self._diagnostics_value("media_overrun")),
+            self._diagnostics_counter_detail("media_overrun"), verdict, color, hint,
         ))
 
         verdict, color, hint = self._diagnostics_counter_verdict(
             "media_rejected", "Растёт", "Коэффициент среды отбраковывается: вода, грязь или неверная калибровка",
         )
         rows.append(self._diagnostics_row(
-            group, "Отбраковка значений",
-            self._diagnostics_text(self._diagnostics_value("media_rejected")), verdict, color, hint,
+            group, "Отбраковка значений", self._diagnostics_text(self._diagnostics_value("media_rejected")),
+            self._diagnostics_counter_detail("media_rejected"), verdict, color, hint,
         ))
 
         # --- Температура ---
@@ -585,13 +807,16 @@ class AppControllerDiagnosticsMixin(AppControllerContract):
         fuel_temp = self._diagnostics_value("fuel_temp")
         verdict, color, hint = self._diagnostics_temperature_verdict(fuel_temp)
         rows.append(self._diagnostics_row(
-            group, "Датчик в топливе", self._diagnostics_text(fuel_temp, " °C", 0.1, 1), verdict, color, hint,
+            group, "Датчик в топливе", self._diagnostics_text(fuel_temp, " °C", 0.1, 1),
+            "DID 0x0019, шкала таблицы -40 ... +80 °C", verdict, color, hint,
         ))
 
         board_temp = self._diagnostics_value("board_temp")
+        board_adc = self._diagnostics_value("board_adc")
         verdict, color, hint = self._diagnostics_temperature_verdict(board_temp)
         rows.append(self._diagnostics_row(
-            group, "Датчик на плате", self._diagnostics_text(board_temp, " °C", 0.1, 1), verdict, color, hint,
+            group, "Датчик на плате", self._diagnostics_text(board_temp, " °C", 0.1, 1),
+            f"код АЦП {self._diagnostics_text(board_adc)}", verdict, color, hint,
         ))
 
         if fuel_temp is None or board_temp is None:
@@ -607,12 +832,9 @@ class AppControllerDiagnosticsMixin(AppControllerContract):
                     "Большая разница", self.DIAGNOSTICS_COLOR_WARN,
                     "Это нормально, если зонд в топливе, а плата греется снаружи",
                 )
-        rows.append(self._diagnostics_row(group, "Разница датчиков", delta_text, verdict, color, hint))
-
         rows.append(self._diagnostics_row(
-            group, "Код АЦП датчика платы",
-            self._diagnostics_text(self._diagnostics_value("board_adc")),
-            "Справочно", self.DIAGNOSTICS_COLOR_IDLE, "Нужен, если показание температуры выглядит странно",
+            group, "Разница датчиков", delta_text,
+            f"допуск ±{self.DIAGNOSTICS_TEMP_DELTA_WARN_X10 / 10.0:.1f} °C", verdict, color, hint,
         ))
 
         source = self._diagnostics_value("temp_source")
@@ -631,7 +853,9 @@ class AppControllerDiagnosticsMixin(AppControllerContract):
                 "Прежний режим", self.DIAGNOSTICS_COLOR_IDLE,
                 "Коэффициенты K1 сняты по датчику в топливе, менять источник без пересчёта нельзя",
             )
-        rows.append(self._diagnostics_row(group, "Источник компенсации", source_text, verdict, color, hint))
+        rows.append(self._diagnostics_row(
+            group, "Источник компенсации", source_text, "DID 0x003A", verdict, color, hint,
+        ))
 
         self._diagnostics_rows = rows
         self._rebuild_diagnostics_summary(rows)
@@ -689,8 +913,10 @@ class AppControllerDiagnosticsMixin(AppControllerContract):
             if group != current_group:
                 current_group = group
                 lines.append(group)
+            detail = str(row.get("detail", "")).strip()
+            detail_text = f" ({detail})" if detail and detail != "-" else ""
             lines.append(
-                f"  {row.get('label', '')}: {row.get('value', '')}"
+                f"  {row.get('label', '')}: {row.get('value', '')}{detail_text}"
                 f"  [{row.get('verdict', '')}]  {row.get('hint', '')}"
             )
 

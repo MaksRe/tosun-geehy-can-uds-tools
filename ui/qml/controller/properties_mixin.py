@@ -63,6 +63,7 @@ class AppControllerPropertiesMixin(AppControllerContract):
     optionsBulkChanged = Signal()
     optionsBulkRowsChanged = Signal()
     diagnosticsChanged = Signal()
+    mediaWizardChanged = Signal()
     softwareVersionChanged = Signal()
 
     @Property("QStringList", notify=devicesChanged)
@@ -1294,3 +1295,62 @@ class AppControllerPropertiesMixin(AppControllerContract):
     def diagnosticsReportText(self):
         """Цель функции в выдаче текстового отчёта, затем она позволяет скопировать результат проверки целиком."""
         return self._build_diagnostics_report()
+
+    @Property(bool, notify=mediaWizardChanged)
+    def mediaWizardBusy(self):
+        """Цель функции в признаке идущей операции мастера, затем она блокирует кнопки на время записи."""
+        return bool(self._media_wizard_busy)
+
+    @Property(bool, notify=mediaWizardChanged)
+    def mediaWizardWatching(self):
+        """Цель функции в признаке живого наблюдения, затем она показывает, обновляется ли показание."""
+        return bool(self._media_wizard_watching)
+
+    @Property(str, notify=mediaWizardChanged)
+    def mediaWizardStatusText(self):
+        """Цель функции в подписи о ходе работы мастера, затем она объясняет оператору текущий шаг."""
+        return str(self._media_wizard_status)
+
+    @Property(str, notify=mediaWizardChanged)
+    def mediaWizardStatusColor(self):
+        """Цель функции в цвете подписи мастера, затем она отделяет успех от предупреждения и отказа."""
+        return str(self._media_wizard_status_color)
+
+    @Property(str, notify=mediaWizardChanged)
+    def mediaWizardLiveText(self):
+        """Цель функции в живом показании плоского конденсатора, затем она позволяет дождаться устоявшегося значения."""
+        if self._media_wizard_live_raw is None:
+            return "-"
+        return f"{int(self._media_wizard_live_raw)} отсч."
+
+    @Property(str, notify=mediaWizardChanged)
+    def mediaWizardAirText(self):
+        """Цель функции в показе сохранённой точки в воздухе, затем она подтверждает первый шаг калибровки."""
+        return "-" if self._media_wizard_air is None else f"{int(self._media_wizard_air)} отсч."
+
+    @Property(str, notify=mediaWizardChanged)
+    def mediaWizardCalText(self):
+        """Цель функции в показе сохранённой точки в жидкости, затем она подтверждает второй шаг калибровки."""
+        return "-" if self._media_wizard_cal is None else f"{int(self._media_wizard_cal)} отсч."
+
+    @Property(str, notify=mediaWizardChanged)
+    def mediaWizardSpanText(self):
+        """Цель функции в показе разницы между точками, затем она сразу говорит, годится ли пара опор."""
+        return self._media_wizard_span_text()
+
+    @Property(str, notify=mediaWizardChanged)
+    def mediaWizardEnabledText(self):
+        """Цель функции в показе состояния поправки, затем она избавляет от чтения DID вручную."""
+        if self._media_wizard_enabled is None:
+            return "неизвестно"
+        return "включена" if int(self._media_wizard_enabled) == 1 else "выключена"
+
+    @Property(bool, notify=mediaWizardChanged)
+    def mediaWizardCanEnable(self):
+        """Цель функции в защите от включения поправки без калибровки, затем она гасит кнопку включения."""
+        return bool(self._media_wizard_points_are_valid())
+
+    @Property(bool, notify=calibrationStateChanged)
+    def mediaWizardWriteAllowed(self):
+        """Цель функции в признаке открытого доступа на запись, затем она объясняет, почему кнопки неактивны."""
+        return bool(self._media_wizard_write_allowed())

@@ -15,6 +15,7 @@ Card {
     signal openCalibrationRequested()
     signal openCollectorRequested()
     signal openDiagnosticsRequested()
+    signal openMediaWizardRequested()
     signal openOptionsRequested()
     signal openServiceSettingsRequested()
 
@@ -45,6 +46,16 @@ Card {
         if (root.appController.firmwarePath.length > 0)
             return "BIN выбран"
         return "BIN не выбран"
+    }
+
+    function mediaWizardStatusText() {
+        if (!root.appController)
+            return "Ожидание контроллера"
+        if (root.appController.mediaWizardBusy)
+            return "Идёт запись точки"
+        if (root.appController.mediaWizardCanEnable)
+            return "Точки сняты: " + root.appController.mediaWizardEnabledText
+        return "Опорные точки не сняты"
     }
 
     function calibrationStatusText() {
@@ -128,6 +139,22 @@ Card {
             ScenarioTile {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                title: "Вид топлива"
+                statusText: root.mediaWizardStatusText()
+                textMain: root.textMain
+                textSoft: root.textSoft
+                baseColor: "#ecfeff"
+                baseBorder: "#8ee0ea"
+                chipColor: "#e2fbff"
+                chipBorder: "#6fd2e0"
+                accentColor: "#0f766e"
+                accentColorHover: "#115e59"
+                onClicked: root.openMediaWizardRequested()
+            }
+
+            ScenarioTile {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
                 title: "Калибровка"
                 statusText: root.calibrationStatusText()
                 textMain: root.textMain
@@ -180,12 +207,12 @@ Card {
                 statusText: root.serviceSettingsStatusText()
                 textMain: root.textMain
                 textSoft: root.textSoft
-                baseColor: "#ecfeff"
-                baseBorder: "#a5f3fc"
-                chipColor: "#e6fbff"
-                chipBorder: "#8ce3ee"
-                accentColor: "#0f766e"
-                accentColorHover: "#115e59"
+                baseColor: "#f4f6fa"
+                baseBorder: "#c9d3e0"
+                chipColor: "#eef1f6"
+                chipBorder: "#bcc7d6"
+                accentColor: "#475569"
+                accentColorHover: "#334155"
                 onClicked: root.openServiceSettingsRequested()
             }
         }

@@ -68,7 +68,9 @@ class AppControllerCanMixin(AppControllerContract):
             self._handle_options_frame(identifier, payload)
             self._handle_calibration_frame(identifier, payload)
             self._handle_diagnostics_frame(identifier, payload)
+            self._handle_media_wizard_frame(identifier, payload)
             if parsed_id is not None:
+                self._handle_diagnostics_j1939_frame(parsed_id, payload)
                 self._handle_collector_frame(formatted_time, parsed_id, payload)
             # Auto-detect list rebuild is relatively heavy; avoid it during active UDS option exchange.
             if self._auto_detect_enabled and parsed_id is not None and (not self._options_busy) and (not self._options_bulk_busy):

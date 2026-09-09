@@ -57,6 +57,9 @@ class _DiagnosticsStub(Diag):
         self._diagnostics_cycles_done = 0
         self._diagnostics_counter_prev = {}
         self._diagnostics_counter_growing = {}
+        self._diagnostics_counter_delta = {}
+        self._diagnostics_j1939_raw = None
+        self._diagnostics_j1939_seen_s = None
         self._diagnostics_rows = []
         self._diagnostics_summary_text = ""
         self._diagnostics_summary_color = Diag.DIAGNOSTICS_COLOR_IDLE
@@ -64,6 +67,10 @@ class _DiagnosticsStub(Diag):
     def _is_calibration_response_identifier(self, identifier: int) -> bool:
         """В тестах любой кадр считается пришедшим от опрашиваемого прибора."""
         return True
+
+    def _resolve_calibration_target_sa(self) -> int:
+        """В тестах проверяется прибор с адресом 0x00."""
+        return 0x00
 
 
 def _verdict(result) -> str:
@@ -274,9 +281,9 @@ def test_summary_reports_worst_verdict_of_the_table():
     """Общий итог должен показывать худшее из найденного, а не среднее по прибору."""
     stub = _DiagnosticsStub()
     rows = [
-        Diag._diagnostics_row("Группа", "Хорошо", "1", "Норма", Diag.DIAGNOSTICS_COLOR_OK, ""),
-        Diag._diagnostics_row("Группа", "Внимание", "2", "Внимание", Diag.DIAGNOSTICS_COLOR_WARN, ""),
-        Diag._diagnostics_row("Группа", "Отказ", "3", "Плохо", Diag.DIAGNOSTICS_COLOR_BAD, ""),
+        Diag._diagnostics_row("Группа", "Хорошо", "1", "", "Норма", Diag.DIAGNOSTICS_COLOR_OK, ""),
+        Diag._diagnostics_row("Группа", "Внимание", "2", "", "Внимание", Diag.DIAGNOSTICS_COLOR_WARN, ""),
+        Diag._diagnostics_row("Группа", "Отказ", "3", "", "Плохо", Diag.DIAGNOSTICS_COLOR_BAD, ""),
     ]
     stub._diagnostics_values = {"cur_period": 1}
     stub._rebuild_diagnostics_summary(rows)
@@ -298,6 +305,106 @@ def test_enabled_media_correction_without_calibration_is_a_failure():
 
     row = [item for item in stub._diagnostics_rows if item["label"] == "Поправка по виду топлива"][0]
     assert row["color"] == Diag.DIAGNOSTICS_COLOR_BAD
+
+
+class _FakeIdentifier:
+    """Заглушка разобранного J1939-идентификатора."""
+
+    def __init__(self, pgn: int, src: int):
+        self.pgn = pgn
+        self.src = src
+
+
+def _level_row(stub: _DiagnosticsStub, label: str) -> dict:
+    """Возвращает строку таблицы об уровне топлива по её подписи."""
+    stub._rebuild_diagnostics_rows()
+    return [row for row in stub._diagnostics_rows if row["label"] == label][0]
+
+
+def test_bus_level_is_taken_from_pgn_fefc_second_byte():
+    """Уровень в шине лежит во втором байте PGN 0xFEFC с шагом 0,4 процента."""
+    stub = _DiagnosticsStub()
+    stub._diagnostics_values = {"raw_level": 472}
+
+    stub._handle_diagnostics_j1939_frame(_FakeIdentifier(0xFEFC, 0x00), [0xFF, 118, 0xFF, 0xFF])
+
+    assert stub._diagnostics_j1939_raw == 118
+    assert abs(stub._diagnostics_j1939_percent() - 47.2) < 0.001
+
+    row = _level_row(stub, "Уровень в шине (J1939)")
+    assert row["value"] == "47.2 %"
+    assert row["color"] == Diag.DIAGNOSTICS_COLOR_OK
+
+
+def test_bus_level_far_from_uds_answer_is_a_failure():
+    """Если в шину уходит не то, что прибор отвечает на запрос, это ошибка передачи."""
+    stub = _DiagnosticsStub()
+    stub._diagnostics_values = {"raw_level": 200}
+
+    stub._handle_diagnostics_j1939_frame(_FakeIdentifier(0xFEFC, 0x00), [0xFF, 118, 0xFF, 0xFF])
+
+    row = _level_row(stub, "Уровень в шине (J1939)")
+    assert row["color"] == Diag.DIAGNOSTICS_COLOR_BAD
+
+
+def test_bus_level_marker_of_no_data_is_reported():
+    """Значения 0xFE и 0xFF в J1939 означают «нет данных», а не 101 процент."""
+    stub = _DiagnosticsStub()
+    stub._handle_diagnostics_j1939_frame(_FakeIdentifier(0xFEFC, 0x00), [0xFF, 0xFF, 0xFF, 0xFF])
+
+    assert stub._diagnostics_j1939_percent() is None
+    row = _level_row(stub, "Уровень в шине (J1939)")
+    assert row["color"] == Diag.DIAGNOSTICS_COLOR_BAD
+
+
+def test_missing_bus_frames_are_reported_while_polling():
+    """Отсутствие широковещательных кадров тоже неисправность: технике нечего читать."""
+    stub = _DiagnosticsStub()
+    row = _level_row(stub, "Уровень в шине (J1939)")
+
+    assert row["color"] == Diag.DIAGNOSTICS_COLOR_WARN
+    assert row["value"] == "-"
+
+
+def test_frames_from_other_nodes_and_other_pgn_are_ignored():
+    """Чужой узел или другой PGN не должны подменять уровень проверяемого прибора."""
+    stub = _DiagnosticsStub()
+
+    stub._handle_diagnostics_j1939_frame(_FakeIdentifier(0xFEFC, 0x2A), [0xFF, 100, 0xFF, 0xFF])
+    stub._handle_diagnostics_j1939_frame(_FakeIdentifier(0xFDA2, 0x00), [0xFF, 100, 0xFF, 0xFF])
+
+    assert stub._diagnostics_j1939_raw is None
+
+
+def test_level_from_period_shows_contribution_of_corrections():
+    """Расчёт из периода нужен, чтобы видеть, насколько поправки сдвинули уровень."""
+    stub = _DiagnosticsStub()
+    stub._diagnostics_values = {
+        "cur_period": 7100,
+        "empty_period": 4820,
+        "full_period": 9640,
+        "raw_level": 500,
+    }
+
+    assert abs(stub._diagnostics_period_percent() - 47.3) < 0.05
+
+    row = _level_row(stub, "Уровень из периода")
+    assert row["value"] == "47.3 %"
+    # Ответ прибора 50.0 %, голый пересчёт 47.3 %, значит поправки дали +2.7 %.
+    assert "+2.7" in row["detail"]
+
+
+def test_counter_detail_shows_growth_per_cycle():
+    """Во второй строке значения счётчика показывается прирост, а не само число."""
+    stub = _DiagnosticsStub()
+    pending = [item for item in Diag._diagnostics_cycle_vars(stub) if item[0] == "main_overrun"][0]
+
+    stub._diagnostics_pending = pending
+    stub._handle_diagnostics_frame(0x18DAF101, _read_answer_frame(0x0040, [0x64, 0x00]))
+    stub._diagnostics_pending = pending
+    stub._handle_diagnostics_frame(0x18DAF101, _read_answer_frame(0x0040, [0x6E, 0x00]))
+
+    assert stub._diagnostics_counter_detail("main_overrun") == "+10 за круг опроса"
 
 
 def test_rows_cover_all_three_blocks_of_the_device():

@@ -37,6 +37,7 @@ class AppControllerContract:
     deviceInfoChanged: Any
     devicesChanged: Any
     diagnosticsChanged: Any
+    mediaWizardChanged: Any
     firmwareLoadingChanged: Any
     firmwarePathChanged: Any
     infoMessage: Any
@@ -66,9 +67,28 @@ class AppControllerContract:
     udsIdentifiersChanged: Any
 
     # Runtime state attributes initialized in AppController.__init__.
+    _media_wizard_action: Any
+    _media_wizard_air: Any
+    _media_wizard_busy: Any
+    _media_wizard_cal: Any
+    _media_wizard_enabled: Any
+    _media_wizard_gap_timer: Any
+    _media_wizard_live_raw: Any
+    _media_wizard_live_spread: Any
+    _media_wizard_pending: Any
+    _media_wizard_read_service: Any
+    _media_wizard_samples: Any
+    _media_wizard_status: Any
+    _media_wizard_status_color: Any
+    _media_wizard_timeout_timer: Any
+    _media_wizard_watching: Any
+    _media_wizard_write_service: Any
+    _diagnostics_counter_delta: Any
     _diagnostics_counter_growing: Any
     _diagnostics_counter_prev: Any
     _diagnostics_cycles_done: Any
+    _diagnostics_j1939_raw: Any
+    _diagnostics_j1939_seen_s: Any
     _diagnostics_gap_timer: Any
     _diagnostics_missing: Any
     _diagnostics_pending: Any

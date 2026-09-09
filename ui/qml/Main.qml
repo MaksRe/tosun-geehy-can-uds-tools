@@ -265,6 +265,46 @@ ApplicationWindow {
     }
 
     Window {
+        id: mediaWizardWindow
+        width: 1180
+        height: 640
+        minimumWidth: 900
+        minimumHeight: 560
+        visible: false
+        modality: Qt.NonModal
+        transientParent: window
+        title: "Калибровка контура вида топлива"
+
+        Rectangle {
+            anchors.fill: parent
+            gradient: Gradient {
+                GradientStop { position: 0.0; color: window.bgStart }
+                GradientStop { position: 1.0; color: window.bgEnd }
+            }
+        }
+
+        MediaWizardCard {
+            anchors.fill: parent
+            anchors.margins: 14
+            appController: window.backendController
+            cardColor: window.cardColor
+            cardBorder: window.cardBorder
+            textMain: window.textMain
+            textSoft: window.textSoft
+            inputBg: window.inputBg
+            inputBorder: window.inputBorder
+            inputFocus: window.inputFocus
+        }
+
+        // Живое измерение имеет смысл только при открытом окне: закрыли - прекратили опрос.
+        onVisibleChanged: {
+            if (!mediaWizardWindow.visible && window.backendController) {
+                window.backendController.stopMediaWizardWatch()
+            }
+        }
+    }
+
+    Window {
         id: calibrationWindow
         width: 1120
         height: 940
@@ -619,6 +659,7 @@ ApplicationWindow {
                     onOpenBootloaderRequested: window.raiseToolWindow(bootloaderWindow)
                     onOpenCalibrationRequested: window.raiseToolWindow(calibrationWindow)
                     onOpenDiagnosticsRequested: window.raiseToolWindow(diagnosticsWindow)
+                    onOpenMediaWizardRequested: window.raiseToolWindow(mediaWizardWindow)
                     onOpenCollectorRequested: window.raiseToolWindow(collectorWindow)
                     onOpenOptionsRequested: window.raiseToolWindow(optionsWindow)
                     onOpenServiceSettingsRequested: window.raiseToolWindow(serviceSettingsWindow)

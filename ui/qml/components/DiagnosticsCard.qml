@@ -30,6 +30,11 @@ Card {
     readonly property string colorBad: "#dc2626"
     readonly property string colorIdle: "#64748b"
 
+    // Строка, на которую сейчас наведена мышь, и её пояснение.
+    // Всплывающее окно в карточке одно, поэтому подсказки не мешают друг другу.
+    property Item hoveredRow: null
+    property string hoveredHint: ""
+
     // Пастельный фон и рамка для плашки вердикта подбираются по его цвету.
     function verdictBackground(verdictColor) {
         if (verdictColor === root.colorOk)
@@ -326,6 +331,7 @@ Card {
                         }
 
                         Rectangle {
+                            id: rowCard
                             Layout.fillWidth: true
                             // Высота строки фиксирована: подписи в одну строку с многоточием,
                             // поэтому таблица не прыгает и текст никогда не выходит за рамку.
@@ -335,13 +341,21 @@ Card {
                             border.width: 1
                             border.color: rowHover.hovered ? "#cbdcf0" : "#e2ebf5"
 
+                            // Подсказку показывает одно общее всплывающее окно карточки.
+                            // Отдельная подсказка на каждой строке приводила к тому, что
+                            // строки перехватывали её друг у друга и текст не совпадал.
                             HoverHandler {
                                 id: rowHover
+                                onHoveredChanged: {
+                                    if (rowHover.hovered) {
+                                        root.hoveredRow = rowCard
+                                        root.hoveredHint = rowBlock.modelData.label + ". " + rowBlock.modelData.hint
+                                    } else if (root.hoveredRow === rowCard) {
+                                        root.hoveredRow = null
+                                        root.hoveredHint = ""
+                                    }
+                                }
                             }
-
-                            ToolTip.visible: rowHover.hovered && rowBlock.modelData.hint.length > 0
-                            ToolTip.delay: 400
-                            ToolTip.text: rowBlock.modelData.label + ": " + rowBlock.modelData.hint
 
                             RowLayout {
                                 id: checkLayout
@@ -381,17 +395,32 @@ Card {
                                     }
                                 }
 
-                                Text {
-                                    Layout.preferredWidth: 150
-                                    Layout.minimumWidth: 80
+                                ColumnLayout {
+                                    Layout.preferredWidth: 200
+                                    Layout.minimumWidth: 110
                                     Layout.alignment: Qt.AlignVCenter
-                                    horizontalAlignment: Text.AlignRight
-                                    text: rowBlock.modelData.value
-                                    color: root.textMain
-                                    font.pixelSize: 14
-                                    font.bold: true
-                                    font.family: "Bahnschrift"
-                                    elide: Text.ElideRight
+                                    spacing: 1
+
+                                    Text {
+                                        Layout.fillWidth: true
+                                        horizontalAlignment: Text.AlignRight
+                                        text: rowBlock.modelData.value
+                                        color: root.textMain
+                                        font.pixelSize: 14
+                                        font.bold: true
+                                        font.family: "Bahnschrift"
+                                        elide: Text.ElideRight
+                                    }
+
+                                    Text {
+                                        Layout.fillWidth: true
+                                        horizontalAlignment: Text.AlignRight
+                                        text: rowBlock.modelData.detail
+                                        color: root.textSoft
+                                        font.pixelSize: 11
+                                        font.family: "Bahnschrift"
+                                        elide: Text.ElideRight
+                                    }
                                 }
 
                                 Rectangle {
@@ -460,6 +489,18 @@ Card {
                 Layout.fillWidth: true
             }
         }
+    }
+
+    // Одно всплывающее окно на всю карточку: держится под наведённой строкой.
+    ToolTip {
+        id: rowToolTip
+        parent: root.hoveredRow
+        visible: root.hoveredRow !== null && root.hoveredHint.length > 0
+        text: root.hoveredHint
+        delay: 450
+        timeout: 8000
+        x: 12
+        y: parent ? parent.height + 4 : 0
     }
 
     Connections {
