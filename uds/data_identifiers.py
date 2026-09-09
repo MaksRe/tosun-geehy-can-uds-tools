@@ -25,7 +25,7 @@ class UdsData:
         "empty_fuel_tank"   : UdsVar(0x0012, 2, "Пустой бак"),
         "full_fuel_tank"    : UdsVar(0x0013, 2, "Полный бак"),
         "curr_fuel_tank"    : UdsVar(0x0014, 2, "Текущий уровень"),
-        "fingerprint"       : UdsVar(0x1500, 2, "Отпечаток пальцев"),
+        "fingerprint"       : UdsVar(0x0015, 2, "Отпечаток пальцев"),
         "type_session"      : UdsVar(0x0016, 1, "Тип сессии"),
         "k_fuel_level"      : UdsVar(0x0017, 2, "Коэффициент фильтра"),
         "raw_fuel_level"    : UdsVar(0x0018, 2, "Сырые данные уровня топлива"),
@@ -49,6 +49,35 @@ class UdsData:
         "fuel_temp_comp_k1_heat_seg4_x100": UdsVar(0x002B, 2, "K1 нагрева S4 x100"),
         "fuel_temp_comp_k1_heat_seg5_x100": UdsVar(0x002C, 2, "K1 нагрева S5 x100"),
         "fuel_zero_trim_count": UdsVar(0x002D, 2, "Эксплуатационная подгонка 0% (zero trim), count"),
+
+        # Коррекция шкалы по виду топлива: настройки, чтение и запись.
+        "fuel_media_comp_enable": UdsVar(0x002E, 1, "Коррекция по виду топлива: 0 выкл, 1 вкл"),
+        "fuel_media_flatcap_air_count": UdsVar(0x002F, 2, "Плоский конденсатор в воздухе, count"),
+        "fuel_media_flatcap_cal_count": UdsVar(0x0030, 2, "Плоский конденсатор в эталонной жидкости, count"),
+        "fuel_media_h0_ratio_x1000": UdsVar(0x0031, 2, "Отношение h0/(h100-h0) x1000"),
+        "fuel_media_rf_min_x1000": UdsVar(0x0032, 2, "Нижний предел коэффициента среды x1000"),
+        "fuel_media_rf_max_x1000": UdsVar(0x0033, 2, "Верхний предел коэффициента среды x1000"),
+        "fuel_media_freeze_level_pct": UdsVar(0x0034, 1, "Уровень (%), ниже которого R_F замораживается"),
+        "fuel_media_rf_last_x1000": UdsVar(0x0039, 2, "Последний сохранённый R_F x1000"),
+        "fuel_temp_comp_source": UdsVar(0x003A, 1, "Источник температуры компенсации: 0 топливо, 1 плата"),
+
+        # Коррекция по виду топлива: телеметрия из ОЗУ, только чтение.
+        "fuel_media_rf_x1000": UdsVar(0x0035, 2, "Текущий коэффициент среды R_F x1000"),
+        "fuel_media_flatcap_raw": UdsVar(0x0036, 2, "Сырое измерение плоского конденсатора, count"),
+        "fuel_media_state": UdsVar(0x0037, 1, "Состояние коррекции: активна, устарело, заморожено, отказ"),
+        "fuel_media_rejected_cnt": UdsVar(0x0038, 2, "Счётчик отбракованных значений R_F"),
+
+        # Второй датчик температуры, только чтение.
+        "raw_board_temperature": UdsVar(0x003B, 2, "Температура платы, 0.1 °C"),
+        "board_temperature_adc": UdsVar(0x003C, 2, "Сырой код АЦП датчика платы"),
+
+        # Качество измерения ёмкостных контуров, только чтение.
+        "cap_main_burst_spread": UdsVar(0x003D, 2, "Размах последней серии, основной контур, count"),
+        "cap_main_spread_max": UdsVar(0x003E, 2, "Максимум размаха за окно, основной контур, count"),
+        "cap_main_half_delta": UdsVar(0x003F, 2, "Асимметрия половин заряда и разряда, count"),
+        "cap_main_overrun_cnt": UdsVar(0x0040, 2, "Перезахваты основного контура"),
+        "cap_media_spread_max": UdsVar(0x0041, 2, "Максимум размаха за окно, контур вида топлива, count"),
+        "cap_media_overrun_cnt": UdsVar(0x0042, 2, "Перезахваты контура вида топлива"),
 
         "vmecusndid"        : UdsVar(0xF188, 18, "Номер ПО ЭБУ изготовителя ТС"),
         "vmecusvndid"       : UdsVar(0xF189, 32, "Номер версии ПО ЭБУ изготовителя ТС"),
@@ -101,6 +130,31 @@ class UdsData:
     fuel_temp_comp_k1_heat_seg4_x100 = vars.get("fuel_temp_comp_k1_heat_seg4_x100")
     fuel_temp_comp_k1_heat_seg5_x100 = vars.get("fuel_temp_comp_k1_heat_seg5_x100")
     fuel_zero_trim_count = vars.get("fuel_zero_trim_count")
+
+    fuel_media_comp_enable = vars.get("fuel_media_comp_enable")
+    fuel_media_flatcap_air_count = vars.get("fuel_media_flatcap_air_count")
+    fuel_media_flatcap_cal_count = vars.get("fuel_media_flatcap_cal_count")
+    fuel_media_h0_ratio_x1000 = vars.get("fuel_media_h0_ratio_x1000")
+    fuel_media_rf_min_x1000 = vars.get("fuel_media_rf_min_x1000")
+    fuel_media_rf_max_x1000 = vars.get("fuel_media_rf_max_x1000")
+    fuel_media_freeze_level_pct = vars.get("fuel_media_freeze_level_pct")
+    fuel_media_rf_last_x1000 = vars.get("fuel_media_rf_last_x1000")
+    fuel_temp_comp_source = vars.get("fuel_temp_comp_source")
+
+    fuel_media_rf_x1000 = vars.get("fuel_media_rf_x1000")
+    fuel_media_flatcap_raw = vars.get("fuel_media_flatcap_raw")
+    fuel_media_state = vars.get("fuel_media_state")
+    fuel_media_rejected_cnt = vars.get("fuel_media_rejected_cnt")
+
+    raw_board_temperature = vars.get("raw_board_temperature")
+    board_temperature_adc = vars.get("board_temperature_adc")
+
+    cap_main_burst_spread = vars.get("cap_main_burst_spread")
+    cap_main_spread_max = vars.get("cap_main_spread_max")
+    cap_main_half_delta = vars.get("cap_main_half_delta")
+    cap_main_overrun_cnt = vars.get("cap_main_overrun_cnt")
+    cap_media_spread_max = vars.get("cap_media_spread_max")
+    cap_media_overrun_cnt = vars.get("cap_media_overrun_cnt")
 
     vmecusndid          = vars.get("vmecusndid")
     vmecusvndid         = vars.get("vmecusvndid")
