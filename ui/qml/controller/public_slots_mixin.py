@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 
 from PySide6.QtCore import QCoreApplication, QTimer, Slot
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QGuiApplication
 
 from colors import RowColor
 from uds.data_identifiers import UdsData
@@ -1499,6 +1499,10 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         if self._programming_active:
             self.infoMessage.emit("Калибровка", "Дождитесь завершения операции программирования.")
             return
+
+        # Проверка прибора опрашивает те же DID, параллельный обмен путал бы ответы.
+        if self._diagnostics_running:
+            self._stop_diagnostics_poll("Проверка остановлена: начата калибровка.")
 
         self._configure_calibration_uds_services()
         calibration_target_sa = self._resolve_calibration_target_sa()
@@ -4029,3 +4033,36 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
         self._options_bulk_delay_ms = bounded
         self.optionsBulkChanged.emit()
+
+    @Slot()
+    def toggleDiagnostics(self):
+        """Цель функции в управлении проверкой одной кнопкой, затем она запускает или останавливает круговой опрос."""
+        if self._diagnostics_running:
+            self.stopDiagnostics()
+            return
+        self.startDiagnostics()
+
+    @Slot()
+    def startDiagnostics(self):
+        """Цель функции в запуске проверки контуров и датчиков, затем она начинает круговой опрос выбранного прибора."""
+        self._start_diagnostics_poll()
+
+    @Slot()
+    def stopDiagnostics(self):
+        """Цель функции в остановке проверки, затем она гасит таймеры и оставляет последние показания на экране."""
+        if not self._diagnostics_running:
+            return
+        self._stop_diagnostics_poll("Проверка остановлена. Показания на экране от последнего круга опроса.")
+
+    @Slot()
+    def copyDiagnosticsReport(self):
+        """Цель функции в передаче отчёта о проверке коллегам, затем она кладёт готовый текст в буфер обмена."""
+        report = self._build_diagnostics_report()
+
+        clipboard = QGuiApplication.clipboard()
+        if clipboard is None:
+            self.infoMessage.emit("Проверка прибора", "Буфер обмена недоступен.")
+            return
+
+        clipboard.setText(report)
+        self.infoMessage.emit("Проверка прибора", "Отчёт скопирован в буфер обмена.")

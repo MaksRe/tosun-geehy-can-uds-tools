@@ -36,6 +36,7 @@ class AppControllerContract:
     debugEnabledChanged: Any
     deviceInfoChanged: Any
     devicesChanged: Any
+    diagnosticsChanged: Any
     firmwareLoadingChanged: Any
     firmwarePathChanged: Any
     infoMessage: Any
@@ -65,6 +66,21 @@ class AppControllerContract:
     udsIdentifiersChanged: Any
 
     # Runtime state attributes initialized in AppController.__init__.
+    _diagnostics_counter_growing: Any
+    _diagnostics_counter_prev: Any
+    _diagnostics_cycles_done: Any
+    _diagnostics_gap_timer: Any
+    _diagnostics_missing: Any
+    _diagnostics_pending: Any
+    _diagnostics_queue: Any
+    _diagnostics_read_service: Any
+    _diagnostics_rows: Any
+    _diagnostics_running: Any
+    _diagnostics_status: Any
+    _diagnostics_summary_color: Any
+    _diagnostics_summary_text: Any
+    _diagnostics_timeout_timer: Any
+    _diagnostics_values: Any
     _auto_detect_enabled: Any
     _auto_reset_before_programming: Any
     _auto_reset_delay_ms: Any

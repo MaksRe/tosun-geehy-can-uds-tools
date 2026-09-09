@@ -232,6 +232,39 @@ ApplicationWindow {
     }
 
     Window {
+        id: diagnosticsWindow
+        width: 1180
+        height: 900
+        minimumWidth: 980
+        minimumHeight: 700
+        visible: false
+        modality: Qt.NonModal
+        transientParent: window
+        title: "Проверка прибора"
+
+        Rectangle {
+            anchors.fill: parent
+            gradient: Gradient {
+                GradientStop { position: 0.0; color: window.bgStart }
+                GradientStop { position: 1.0; color: window.bgEnd }
+            }
+        }
+
+        DiagnosticsCard {
+            anchors.fill: parent
+            anchors.margins: 14
+            appController: window.backendController
+            cardColor: window.cardColor
+            cardBorder: window.cardBorder
+            textMain: window.textMain
+            textSoft: window.textSoft
+            inputBg: window.inputBg
+            inputBorder: window.inputBorder
+            inputFocus: window.inputFocus
+        }
+    }
+
+    Window {
         id: calibrationWindow
         width: 1120
         height: 940
@@ -585,6 +618,7 @@ ApplicationWindow {
                     textSoft: window.textSoft
                     onOpenBootloaderRequested: window.raiseToolWindow(bootloaderWindow)
                     onOpenCalibrationRequested: window.raiseToolWindow(calibrationWindow)
+                    onOpenDiagnosticsRequested: window.raiseToolWindow(diagnosticsWindow)
                     onOpenCollectorRequested: window.raiseToolWindow(collectorWindow)
                     onOpenOptionsRequested: window.raiseToolWindow(optionsWindow)
                     onOpenServiceSettingsRequested: window.raiseToolWindow(serviceSettingsWindow)

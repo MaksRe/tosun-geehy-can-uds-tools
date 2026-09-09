@@ -62,6 +62,7 @@ class AppControllerPropertiesMixin(AppControllerContract):
     optionsTargetNodeChanged = Signal()
     optionsBulkChanged = Signal()
     optionsBulkRowsChanged = Signal()
+    diagnosticsChanged = Signal()
     softwareVersionChanged = Signal()
 
     @Property("QStringList", notify=devicesChanged)
@@ -1250,3 +1251,46 @@ class AppControllerPropertiesMixin(AppControllerContract):
     def calibrationTempCompChartRevision(self):
         """Цель функции в выдаче версии графика температурной компенсации, затем она позволяет QML пропускать лишние перерисовки."""
         return int(self._calibration_temp_comp_chart_revision)
+
+    @Property(bool, notify=diagnosticsChanged)
+    def diagnosticsRunning(self):
+        """Цель функции в признаке идущей проверки, затем она позволяет QML показать нужную кнопку."""
+        return bool(self._diagnostics_running)
+
+    @Property(str, notify=diagnosticsChanged)
+    def diagnosticsActionText(self):
+        """Цель функции в подписи кнопки запуска, затем она переключает текст по состоянию проверки."""
+        return "Остановить проверку" if self._diagnostics_running else "Начать проверку"
+
+    @Property(str, notify=diagnosticsChanged)
+    def diagnosticsStatusText(self):
+        """Цель функции в показе хода опроса, затем она возвращает последнее сообщение диагностики."""
+        return str(self._diagnostics_status)
+
+    @Property(str, notify=diagnosticsChanged)
+    def diagnosticsSummaryText(self):
+        """Цель функции в общем вердикте по прибору, затем она возвращает худшую из найденных оценок."""
+        return str(self._diagnostics_summary_text)
+
+    @Property(str, notify=diagnosticsChanged)
+    def diagnosticsSummaryColor(self):
+        """Цель функции в цвете общего вердикта, затем она возвращает готовый код цвета для QML."""
+        return str(self._diagnostics_summary_color)
+
+    @Property("QVariantList", notify=diagnosticsChanged)
+    def diagnosticsRows(self):
+        """Цель функции в передаче таблицы проверки в QML, затем она возвращает готовые строки с вердиктами."""
+        return self._diagnostics_rows
+
+    @Property(str, notify=diagnosticsChanged)
+    def diagnosticsCyclesText(self):
+        """Цель функции в показе числа завершённых кругов опроса, затем она поясняет достоверность счётчиков."""
+        cycles = int(self._diagnostics_cycles_done)
+        if cycles <= 0:
+            return "Кругов опроса: 0"
+        return f"Кругов опроса: {cycles}"
+
+    @Property(str, notify=diagnosticsChanged)
+    def diagnosticsReportText(self):
+        """Цель функции в выдаче текстового отчёта, затем она позволяет скопировать результат проверки целиком."""
+        return self._build_diagnostics_report()

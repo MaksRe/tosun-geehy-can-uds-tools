@@ -26,9 +26,16 @@ Rectangle {
     implicitHeight: 28
     implicitWidth: labelText.implicitWidth + 16
 
+    // Текст занимает всю ширину чипа и обрезается многоточием: длинный статус
+    // больше не вылезает за рамку, когда чип растянут по ширине карточки.
     Text {
         id: labelText
-        anchors.centerIn: parent
+        anchors.fill: parent
+        anchors.leftMargin: 8
+        anchors.rightMargin: 8
+        horizontalAlignment: Text.AlignHCenter
+        verticalAlignment: Text.AlignVCenter
+        elide: Text.ElideRight
         text: root.label
         color: root.textColor
         font.pixelSize: 12

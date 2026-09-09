@@ -14,8 +14,26 @@ Card {
     signal openBootloaderRequested()
     signal openCalibrationRequested()
     signal openCollectorRequested()
+    signal openDiagnosticsRequested()
     signal openOptionsRequested()
     signal openServiceSettingsRequested()
+
+    // На плитке нужен короткий итог: подробности живут в самом окне проверки.
+    function diagnosticsStatusText() {
+        if (!root.appController)
+            return "Ожидание контроллера"
+        if (root.appController.diagnosticsRunning)
+            return "Проверка идёт"
+
+        var verdictColor = root.appController.diagnosticsSummaryColor
+        if (verdictColor === "#16a34a")
+            return "Прибор в норме"
+        if (verdictColor === "#d97706")
+            return "Есть замечания"
+        if (verdictColor === "#dc2626")
+            return "Найден отказ"
+        return "Проверка не запускалась"
+    }
 
     function bootloaderStatusText() {
         if (!root.appController)
@@ -71,9 +89,25 @@ Card {
 
         GridLayout {
             Layout.fillWidth: true
-            columns: width > 1260 ? 5 : (width > 900 ? 3 : 2)
+            columns: width > 1100 ? 3 : 2
             columnSpacing: 10
             rowSpacing: 10
+
+            ScenarioTile {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                title: "Проверка прибора"
+                statusText: root.diagnosticsStatusText()
+                textMain: root.textMain
+                textSoft: root.textSoft
+                baseColor: "#eef2ff"
+                baseBorder: "#c0cbf5"
+                chipColor: "#e8ecff"
+                chipBorder: "#a5b4fc"
+                accentColor: "#4f46e5"
+                accentColorHover: "#4338ca"
+                onClicked: root.openDiagnosticsRequested()
+            }
 
             ScenarioTile {
                 Layout.fillWidth: true

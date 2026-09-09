@@ -23,6 +23,7 @@ from .controller import (
     AppControllerCalibrationMixin,
     AppControllerCanMixin,
     AppControllerCollectorMixin,
+    AppControllerDiagnosticsMixin,
     AppControllerOptionsMixin,
     AppControllerPropertiesMixin,
     AppControllerPublicSlotsMixin,
@@ -37,6 +38,7 @@ class AppController(
     AppControllerOptionsMixin,
     AppControllerCalibrationMixin,
     AppControllerCollectorMixin,
+    AppControllerDiagnosticsMixin,
     AppControllerCanMixin,
     AppControllerRuntimeMixin,
     QObject,
@@ -601,5 +603,8 @@ class AppController(
         self._options_bulk_step_timer = QTimer(self)
         self._options_bulk_step_timer.setSingleShot(True)
         self._options_bulk_step_timer.timeout.connect(self._on_options_bulk_step_tick)
+
+        # Проверка контуров и датчиков держит своё состояние и таймеры внутри модуля.
+        self._init_diagnostics_state()
 
         self._rebuild_can_traffic_view()
