@@ -99,6 +99,18 @@ UDS_OPTIONS: list[UdsOptionParameter] = [
                        "Растущий счётчик означает дребезг компараторов"),
     UdsOptionParameter(0x0041, 2, "Максимум размаха за окно, контур вида топлива, count", AccessMode.READ),
     UdsOptionParameter(0x0042, 2, "Перезахваты контура вида топлива", AccessMode.READ),
+
+    # Ступень температурной компенсации платы. Нулевые коэффициенты означают,
+    # что ступень выключена и прибор работает как прежде.
+    UdsOptionParameter(0x0043, 2, "K1 ступени платы, основной контур, count/°C x100", AccessMode.READ_WRITE,
+                       "Снимать на стенде по температуре платы, не по температуре топлива"),
+    UdsOptionParameter(0x0044, 2, "K0 ступени платы, основной контур, count", AccessMode.READ_WRITE),
+    UdsOptionParameter(0x0045, 2, "K1 ступени платы, контур вида топлива, count/°C x100", AccessMode.READ_WRITE),
+    UdsOptionParameter(0x0046, 2, "K0 ступени платы, контур вида топлива, count", AccessMode.READ_WRITE),
+    UdsOptionParameter(0x0047, 2, "Период после ступени платы, основной контур", AccessMode.READ,
+                       "Показывает вклад ступени платы отдельно от ступени трубки"),
+    UdsOptionParameter(0x0048, 2, "Температура ступени трубки, 0.1 °C", AccessMode.READ,
+                       "Значение со знаком, источник задаётся параметром 0x003A"),
     UdsOptionParameter(0xF188, 18, "Номер ПО ЭБУ", AccessMode.READ_WRITE),
     UdsOptionParameter(0xF189, 32, "Версия ПО ЭБУ", AccessMode.READ_WRITE),
     UdsOptionParameter(0xF18A, 32, "Поставщик системы и адрес", AccessMode.READ_WRITE),
