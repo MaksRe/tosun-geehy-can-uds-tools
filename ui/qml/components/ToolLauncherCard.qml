@@ -15,8 +15,6 @@ Card {
     signal openCalibrationRequested()
     signal openCollectorRequested()
     signal openDiagnosticsRequested()
-    signal openMediaWizardRequested()
-    signal openProfileRequested()
     signal openOptionsRequested()
     signal openServiceSettingsRequested()
 
@@ -49,29 +47,15 @@ Card {
         return "BIN не выбран"
     }
 
-    function profileStatusText() {
-        if (!root.appController)
-            return "Ожидание контроллера"
-        if (root.appController.profileBusy)
-            return "Идёт обмен с прибором"
-        return root.appController.profileDeviceStatusText
-    }
-
-    function mediaWizardStatusText() {
-        if (!root.appController)
-            return "Ожидание контроллера"
-        if (root.appController.mediaWizardBusy)
-            return "Идёт запись точки"
-        if (root.appController.mediaWizardCanEnable)
-            return "Точки сняты: " + root.appController.mediaWizardEnabledText
-        return "Опорные точки не сняты"
-    }
-
+    // Плитка ведёт в общее окно калибровки: уровень бака, вид топлива и
+    // температурный профиль теперь разделы одного окна.
     function calibrationStatusText() {
         if (!root.appController)
             return "Ожидание контроллера"
         if (root.appController.calibrationActive)
             return "Сценарий активен"
+        if (root.appController.profileBusy || root.appController.mediaWizardBusy)
+            return "Идёт обмен с прибором"
         return root.appController.calibrationSelectedNodeText || "Калибровка не запущена"
     }
 
@@ -109,7 +93,7 @@ Card {
 
         GridLayout {
             Layout.fillWidth: true
-            columns: width > 1100 ? 4 : 2
+            columns: width > 1100 ? 3 : 2
             columnSpacing: 10
             rowSpacing: 10
 
@@ -143,38 +127,6 @@ Card {
                 accentColor: "#d97706"
                 accentColorHover: "#b45309"
                 onClicked: root.openBootloaderRequested()
-            }
-
-            ScenarioTile {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                title: "Вид топлива"
-                statusText: root.mediaWizardStatusText()
-                textMain: root.textMain
-                textSoft: root.textSoft
-                baseColor: "#ecfeff"
-                baseBorder: "#8ee0ea"
-                chipColor: "#e2fbff"
-                chipBorder: "#6fd2e0"
-                accentColor: "#0f766e"
-                accentColorHover: "#115e59"
-                onClicked: root.openMediaWizardRequested()
-            }
-
-            ScenarioTile {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                title: "Темп. профиль"
-                statusText: root.profileStatusText()
-                textMain: root.textMain
-                textSoft: root.textSoft
-                baseColor: "#fff1f5"
-                baseBorder: "#f0b6c8"
-                chipColor: "#ffe8ef"
-                chipBorder: "#e79bb2"
-                accentColor: "#be123c"
-                accentColorHover: "#9f1239"
-                onClicked: root.openProfileRequested()
             }
 
             ScenarioTile {

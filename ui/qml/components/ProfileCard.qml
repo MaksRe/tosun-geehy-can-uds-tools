@@ -25,6 +25,8 @@ Card {
     property color inputBg: "#f6faff"
     property color inputBorder: "#c8d9ea"
     property color inputFocus: "#0ea5e9"
+    // В общем окне калибровки выбор прибора стоит в шапке, один на все разделы.
+    property bool showNodeControls: true
 
     signal saveProfileRequested()
     signal loadProfileRequested()
@@ -71,6 +73,7 @@ Card {
 
             FancyComboBox {
                 id: nodeSelector
+                visible: root.showNodeControls
                 Layout.preferredWidth: 220
                 Layout.preferredHeight: 36
                 model: root.appController ? root.appController.calibrationNodeOptions : []

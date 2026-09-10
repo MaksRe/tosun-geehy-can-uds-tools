@@ -291,86 +291,11 @@ ApplicationWindow {
     }
 
     Window {
-        id: profileWindow
-        width: 1280
-        height: 760
-        minimumWidth: 1040
-        minimumHeight: 620
-        visible: false
-        modality: Qt.NonModal
-        transientParent: window
-        title: "Температурный профиль"
-
-        Rectangle {
-            anchors.fill: parent
-            gradient: Gradient {
-                GradientStop { position: 0.0; color: window.bgStart }
-                GradientStop { position: 1.0; color: window.bgEnd }
-            }
-        }
-
-        ProfileCard {
-            anchors.fill: parent
-            anchors.margins: 14
-            appController: window.backendController
-            cardColor: window.cardColor
-            cardBorder: window.cardBorder
-            textMain: window.textMain
-            textSoft: window.textSoft
-            inputBg: window.inputBg
-            inputBorder: window.inputBorder
-            inputFocus: window.inputFocus
-            onSaveProfileRequested: profileSaveDialog.open()
-            onLoadProfileRequested: profileLoadDialog.open()
-        }
-    }
-
-    Window {
-        id: mediaWizardWindow
-        width: 1180
-        height: 640
-        minimumWidth: 900
-        minimumHeight: 560
-        visible: false
-        modality: Qt.NonModal
-        transientParent: window
-        title: "Калибровка контура вида топлива"
-
-        Rectangle {
-            anchors.fill: parent
-            gradient: Gradient {
-                GradientStop { position: 0.0; color: window.bgStart }
-                GradientStop { position: 1.0; color: window.bgEnd }
-            }
-        }
-
-        MediaWizardCard {
-            anchors.fill: parent
-            anchors.margins: 14
-            appController: window.backendController
-            cardColor: window.cardColor
-            cardBorder: window.cardBorder
-            textMain: window.textMain
-            textSoft: window.textSoft
-            inputBg: window.inputBg
-            inputBorder: window.inputBorder
-            inputFocus: window.inputFocus
-        }
-
-        // Живое измерение имеет смысл только при открытом окне: закрыли - прекратили опрос.
-        onVisibleChanged: {
-            if (!mediaWizardWindow.visible && window.backendController) {
-                window.backendController.stopMediaWizardWatch()
-            }
-        }
-    }
-
-    Window {
         id: calibrationWindow
-        width: 1120
-        height: 940
-        minimumWidth: 960
-        minimumHeight: 760
+        width: 1480
+        height: 980
+        minimumWidth: 1180
+        minimumHeight: 780
         visible: false
         modality: Qt.NonModal
         transientParent: window
@@ -384,7 +309,7 @@ ApplicationWindow {
             }
         }
 
-        CalibrationCard {
+        CalibrationHubCard {
             anchors.fill: parent
             anchors.margins: 14
             appController: window.backendController
@@ -395,6 +320,8 @@ ApplicationWindow {
             inputBg: window.inputBg
             inputBorder: window.inputBorder
             inputFocus: window.inputFocus
+            onSaveProfileRequested: profileSaveDialog.open()
+            onLoadProfileRequested: profileLoadDialog.open()
         }
     }
 
@@ -720,8 +647,6 @@ ApplicationWindow {
                     onOpenBootloaderRequested: window.raiseToolWindow(bootloaderWindow)
                     onOpenCalibrationRequested: window.raiseToolWindow(calibrationWindow)
                     onOpenDiagnosticsRequested: window.raiseToolWindow(diagnosticsWindow)
-                    onOpenMediaWizardRequested: window.raiseToolWindow(mediaWizardWindow)
-                    onOpenProfileRequested: window.raiseToolWindow(profileWindow)
                     onOpenCollectorRequested: window.raiseToolWindow(collectorWindow)
                     onOpenOptionsRequested: window.raiseToolWindow(optionsWindow)
                     onOpenServiceSettingsRequested: window.raiseToolWindow(serviceSettingsWindow)

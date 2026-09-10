@@ -24,6 +24,9 @@ Card {
     property color inputBg: "#f6faff"
     property color inputBorder: "#c8d9ea"
     property color inputFocus: "#0ea5e9"
+    // В общем окне калибровки выбор прибора и кнопка запуска стоят в шапке,
+    // одни на все разделы. Внутри раздела они были бы вторыми такими же.
+    property bool showNodeControls: true
 
     readonly property bool writeAllowed: root.appController ? root.appController.mediaWizardWriteAllowed : false
     readonly property bool busy: root.appController ? root.appController.mediaWizardBusy : false
@@ -68,6 +71,7 @@ Card {
 
             FancyComboBox {
                 id: nodeSelector
+                visible: root.showNodeControls
                 Layout.preferredWidth: 240
                 Layout.preferredHeight: 36
                 model: root.appController ? root.appController.calibrationNodeOptions : []
@@ -99,7 +103,9 @@ Card {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 42
-            visible: !root.writeAllowed
+            // В общем окне калибровки то же самое написано в шапке, одним местом
+            // на все разделы. Второе предупреждение только отвлекает.
+            visible: !root.writeAllowed && root.showNodeControls
             radius: 10
             color: "#fdf3e3"
             border.width: 1
@@ -110,7 +116,7 @@ Card {
                 anchors.leftMargin: 12
                 anchors.rightMargin: 12
                 verticalAlignment: Text.AlignVCenter
-                text: "Запись закрыта. Нажмите «Начать калибровку» в окне калибровки: она открывает прибору доступ на запись."
+                text: "Запись закрыта. Нажмите «Начать калибровку»: она открывает прибору доступ на запись."
                 color: "#92400e"
                 font.pixelSize: 12
                 font.family: "Bahnschrift"

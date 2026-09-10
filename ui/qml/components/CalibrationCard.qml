@@ -15,6 +15,9 @@ Item {
     property color inputBg: "#f7fbff"
     property color inputBorder: "#c8d9ea"
     property color inputFocus: "#0ea5e9"
+    // В общем окне калибровки выбор прибора и кнопка запуска стоят в шапке,
+    // одни на все разделы. Внутри раздела они были бы вторыми такими же.
+    property bool showNodeControls: true
     readonly property int contentPadding: 10
     readonly property int tempCompScrollBarWidth: 16
     readonly property int advancedParamColumnWidth: 232
@@ -219,6 +222,7 @@ Item {
 
                     FancyComboBox {
                         id: nodeSelector
+                        visible: root.showNodeControls
                         Layout.fillWidth: true
                         Layout.preferredHeight: 32
                         model: root.appController ? root.appController.calibrationNodeOptions : []
@@ -238,11 +242,22 @@ Item {
                         Layout.preferredWidth: 184
                         Layout.preferredHeight: 32
                         text: root.appController ? root.appController.calibrationActionText : "Начать калибровку"
+                        visible: root.showNodeControls
                         tone: root.appController && root.appController.calibrationActive ? "#ef4444" : "#16a34a"
                         toneHover: root.appController && root.appController.calibrationActive ? "#dc2626" : "#15803d"
                         tonePressed: root.appController && root.appController.calibrationActive ? "#b91c1c" : "#166534"
                         enabled: root.appController !== null
                         onClicked: if (root.appController) root.appController.toggleCalibration()
+                    }
+
+                    // Подпись нужна, потому что в общем окне калибровки слева от поля
+                    // больше нет выбора прибора, и поле осталось без пояснения.
+                    Text {
+                        text: "Интервал опроса, мс"
+                        color: root.textSoft
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                        Layout.alignment: Qt.AlignVCenter
                     }
 
                     FancyTextField {

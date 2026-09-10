@@ -400,6 +400,21 @@ class AppControllerCalibrationMixin(AppControllerContract):
         except Exception:
             return int(UdsIdentifiers.tx.identifier)
 
+    def _set_calibration_session_ready(self, ready: bool):
+        """Меняет признак готовности сессии и сообщает об этом окнам.
+
+        Раньше признак менялся присваиванием, и окна о нём не узнавали. Из-за
+        этого в окне калибровки вида топлива предупреждение «запись закрыта»
+        оставалось висеть после запуска калибровки, а кнопки сохранения так и
+        не становились доступными, хотя обмен уже шёл.
+        """
+        value = bool(ready)
+        if bool(self._calibration_session_ready) == value:
+            return
+
+        self._calibration_session_ready = value
+        self.calibrationStateChanged.emit()
+
     def _resolve_calibration_target_sa(self) -> int:
         if self._calibration_target_node_sa is not None:
             return int(self._calibration_target_node_sa) & 0xFF
@@ -555,7 +570,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
             status=message,
         )
         self._calibration_waiting_session = False
-        self._calibration_session_ready = False
+        self._set_calibration_session_ready(False)
         self._stop_calibration_poll_timer()
         self._calibration_write_verify_pending = {}
         self.calibrationVerificationChanged.emit()
@@ -575,7 +590,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
         self._reset_calibration_temp_comp_zero_trim_verify_state()
         self._calibration_runtime_target_sa = None
         self._calibration_waiting_session = False
-        self._calibration_session_ready = False
+        self._set_calibration_session_ready(False)
         self._stop_calibration_poll_timer()
         self._calibration_write_verify_pending = {}
         self.calibrationVerificationChanged.emit()
@@ -605,7 +620,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
             status=message,
         )
         self._calibration_waiting_session = False
-        self._calibration_session_ready = False
+        self._set_calibration_session_ready(False)
         self._calibration_write_verify_pending = {}
         self._calibration_restore_active = False
         self._calibration_restore_current_did = None
@@ -4322,7 +4337,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 current_action = str(self._calibration_sequence_waiting_action or "")
                 self._finish_calibration_sequence_wait(current_action if current_action else None)
                 self._calibration_waiting_session = False
-                self._calibration_session_ready = False
+                self._set_calibration_session_ready(False)
                 if current_action == "deactivate_session":
                     self._append_log("Калибровка: возврат в default-сессию выполнен.", RowColor.green)
                     self._finish_calibration_deactivation("Калибровка завершена. Security Access закрыт, активна default-сессия.")
@@ -4336,7 +4351,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
             if payload[1] == 0x7F and len(payload) >= 4 and payload[2] == 0x10:
                 self._calibration_waiting_session = False
                 self._stop_calibration_poll_timer()
-                self._calibration_session_ready = False
+                self._set_calibration_session_ready(False)
                 self._calibration_write_verify_pending = {}
                 self.calibrationVerificationChanged.emit()
                 if self._calibration_active:
@@ -4570,7 +4585,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 self._schedule_calibration_sequence_action("read_level_100")
             elif self._calibration_sequence_waiting_action == "read_level_100" and did == int(UdsData.full_fuel_tank.pid):
                 self._finish_calibration_sequence_wait("read_level_100")
-                self._calibration_session_ready = True
+                self._set_calibration_session_ready(True)
                 self._start_calibration_poll_timer()
                 self._request_calibration_runtime_snapshot()
                 self._append_log(
@@ -4771,7 +4786,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
             self._append_log(f"Калибровка: ошибка восстановления DID 0x{int(did):04X}.", RowColor.red)
 
     def _reset_calibration_wizard_state(self):
-        self._calibration_session_ready = False
+        self._set_calibration_session_ready(False)
         self._calibration_level0_written = False
         self._calibration_level100_written = False
         self._calibration_verify0_ok = False

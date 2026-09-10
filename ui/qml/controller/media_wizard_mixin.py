@@ -98,7 +98,7 @@ class AppControllerMediaWizardMixin(AppControllerContract):
             return True
 
         self._media_wizard_set_status(
-            "Сначала нажмите «Начать калибровку» в окне калибровки: без неё прибор запись не примет.",
+            "Сначала нажмите «Начать калибровку» в шапке окна: без неё прибор запись не примет.",
             self.MEDIA_WIZARD_COLOR_WARN,
         )
         return False
