@@ -108,6 +108,13 @@ class UdsData:
         "fuel_tank_immersion_x1000": UdsVar(0x005A, 2, "Погружённая доля x1000"),
         "fuel_tank_full_main_pred": UdsVar(0x005B, 2, "Предсказанное показание для отметки 100 %"),
 
+        # Целостность температурного профиля: сумма пишется последней.
+        "fuel_measurement_algorithm_id": UdsVar(0x005C, 2, "Алгоритм измерения при снятии коэффициентов"),
+        "fuel_thermal_profile_generation": UdsVar(0x005D, 2, "Номер поколения температурного профиля"),
+        "fuel_thermal_profile_crc": UdsVar(0x005E, 2, "Записанная контрольная сумма профиля"),
+        "fuel_thermal_profile_crc_actual": UdsVar(0x005F, 2, "Сумма, посчитанная прибором сейчас"),
+        "fuel_thermal_profile_status": UdsVar(0x0060, 1, "Состояние температурного профиля"),
+
         "vmecusndid"        : UdsVar(0xF188, 18, "Номер ПО ЭБУ изготовителя ТС"),
         "vmecusvndid"       : UdsVar(0xF189, 32, "Номер версии ПО ЭБУ изготовителя ТС"),
         "ssiddid"           : UdsVar(0xF18A, 32, "Название поставщика системы и информация об адресе"),
@@ -211,6 +218,12 @@ class UdsData:
     fuel_tank_a_count = vars.get("fuel_tank_a_count")
     fuel_tank_immersion_x1000 = vars.get("fuel_tank_immersion_x1000")
     fuel_tank_full_main_pred = vars.get("fuel_tank_full_main_pred")
+
+    fuel_measurement_algorithm_id = vars.get("fuel_measurement_algorithm_id")
+    fuel_thermal_profile_generation = vars.get("fuel_thermal_profile_generation")
+    fuel_thermal_profile_crc = vars.get("fuel_thermal_profile_crc")
+    fuel_thermal_profile_crc_actual = vars.get("fuel_thermal_profile_crc_actual")
+    fuel_thermal_profile_status = vars.get("fuel_thermal_profile_status")
 
     vmecusndid          = vars.get("vmecusndid")
     vmecusvndid         = vars.get("vmecusvndid")

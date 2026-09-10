@@ -149,6 +149,18 @@ UDS_OPTIONS: list[UdsOptionParameter] = [
     UdsOptionParameter(0x005A, 2, "Погружённая доля x1000", AccessMode.READ),
     UdsOptionParameter(0x005B, 2, "Предсказанное показание для отметки 100 %", AccessMode.READ,
                        "Для сверки с независимым измерением, отметку не заменяет"),
+
+    # Целостность температурного профиля. Таблицы пишутся по одной, и обрыв
+    # связи оставил бы смесь старых и новых значений. Сумма пишется последней.
+    UdsOptionParameter(0x005C, 2, "Алгоритм измерения при снятии коэффициентов", AccessMode.READ_WRITE,
+                       "Не совпал с прошивкой - таблицы профиля не применяются"),
+    UdsOptionParameter(0x005D, 2, "Номер поколения температурного профиля", AccessMode.READ_WRITE),
+    UdsOptionParameter(0x005E, 2, "Записанная контрольная сумма профиля", AccessMode.READ_WRITE,
+                       "Писать последней, после всех таблиц"),
+    UdsOptionParameter(0x005F, 2, "Сумма, посчитанная прибором сейчас", AccessMode.READ,
+                       "Расхождение с записанной означает недописанный профиль"),
+    UdsOptionParameter(0x0060, 1, "Состояние температурного профиля", AccessMode.READ,
+                       "Биты: 0 заполнен, 1 сумма сходится, 2 алгоритм совпадает, 3 применяется"),
     UdsOptionParameter(0xF188, 18, "Номер ПО ЭБУ", AccessMode.READ_WRITE),
     UdsOptionParameter(0xF189, 32, "Версия ПО ЭБУ", AccessMode.READ_WRITE),
     UdsOptionParameter(0xF18A, 32, "Поставщик системы и адрес", AccessMode.READ_WRITE),
