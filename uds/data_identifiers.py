@@ -86,6 +86,8 @@ class UdsData:
         "fuel_board_comp_k0_media_count": UdsVar(0x0046, 2, "K0 ступени платы, контур вида топлива"),
         "fuel_board_stage_period": UdsVar(0x0047, 2, "Период после ступени платы, основной контур"),
         "fuel_tube_stage_temperature": UdsVar(0x0048, 2, "Температура ступени трубки, 0.1 °C"),
+        "fuel_board_comp_ka_main_ppm": UdsVar(0x0049, 2, "Множитель ступени платы, основной контур, ppm/°C"),
+        "fuel_board_comp_ka_media_ppm": UdsVar(0x004A, 2, "Множитель ступени платы, контур вида топлива, ppm/°C"),
 
         "vmecusndid"        : UdsVar(0xF188, 18, "Номер ПО ЭБУ изготовителя ТС"),
         "vmecusvndid"       : UdsVar(0xF189, 32, "Номер версии ПО ЭБУ изготовителя ТС"),
@@ -170,6 +172,8 @@ class UdsData:
     fuel_board_comp_k0_media_count = vars.get("fuel_board_comp_k0_media_count")
     fuel_board_stage_period = vars.get("fuel_board_stage_period")
     fuel_tube_stage_temperature = vars.get("fuel_tube_stage_temperature")
+    fuel_board_comp_ka_main_ppm = vars.get("fuel_board_comp_ka_main_ppm")
+    fuel_board_comp_ka_media_ppm = vars.get("fuel_board_comp_ka_media_ppm")
 
     vmecusndid          = vars.get("vmecusndid")
     vmecusvndid         = vars.get("vmecusvndid")
