@@ -123,8 +123,16 @@ UDS_OPTIONS: list[UdsOptionParameter] = [
                        "7 пар: сдвиг в отсчётах и растяжение в ppm"),
     UdsOptionParameter(0x004D, 28, "Таблица ступени платы, контур вида топлива", AccessMode.READ_WRITE,
                        "7 пар: сдвиг в отсчётах и растяжение в ppm"),
-    UdsOptionParameter(0x004E, 1, "Источник поправки ступени платы", AccessMode.READ,
-                       "Биты: 0 основной по таблице, 1 вид топлива по таблице, 2 сетка узлов неверна"),
+    UdsOptionParameter(0x004E, 1, "Что сейчас работает в обеих ступенях", AccessMode.READ,
+                       "Биты: 0 и 1 таблицы платы, 2 сетка узлов неверна, 3 и 4 приведение трубки"),
+
+    # Таблицы ступени трубки: приводят оба контура к общей шкале до расчёта
+    # коэффициента среды. Пока оба ряда контура нулевые, приведение выключено.
+    UdsOptionParameter(0x004F, 14, "Ступень трубки: основной контур на воздухе", AccessMode.READ_WRITE,
+                       "7 значений в тех же узлах температуры"),
+    UdsOptionParameter(0x0050, 14, "Ступень трубки: основной контур в опорной жидкости", AccessMode.READ_WRITE),
+    UdsOptionParameter(0x0051, 14, "Ступень трубки: контур вида топлива на воздухе", AccessMode.READ_WRITE),
+    UdsOptionParameter(0x0052, 14, "Ступень трубки: контур вида топлива в опорной жидкости", AccessMode.READ_WRITE),
     UdsOptionParameter(0xF188, 18, "Номер ПО ЭБУ", AccessMode.READ_WRITE),
     UdsOptionParameter(0xF189, 32, "Версия ПО ЭБУ", AccessMode.READ_WRITE),
     UdsOptionParameter(0xF18A, 32, "Поставщик системы и адрес", AccessMode.READ_WRITE),

@@ -92,6 +92,10 @@ class UdsData:
         "fuel_board_lut_main": UdsVar(0x004C, 28, "Таблица ступени платы, основной контур"),
         "fuel_board_lut_media": UdsVar(0x004D, 28, "Таблица ступени платы, контур вида топлива"),
         "fuel_board_stage_mode": UdsVar(0x004E, 1, "Источник поправки ступени платы"),
+        "fuel_tube_lut_air_main": UdsVar(0x004F, 14, "Ступень трубки: основной контур на воздухе"),
+        "fuel_tube_lut_full_main": UdsVar(0x0050, 14, "Ступень трубки: основной контур в жидкости"),
+        "fuel_tube_lut_air_media": UdsVar(0x0051, 14, "Ступень трубки: контур вида топлива на воздухе"),
+        "fuel_tube_lut_full_media": UdsVar(0x0052, 14, "Ступень трубки: контур вида топлива в жидкости"),
 
         "vmecusndid"        : UdsVar(0xF188, 18, "Номер ПО ЭБУ изготовителя ТС"),
         "vmecusvndid"       : UdsVar(0xF189, 32, "Номер версии ПО ЭБУ изготовителя ТС"),
@@ -182,6 +186,10 @@ class UdsData:
     fuel_board_lut_main = vars.get("fuel_board_lut_main")
     fuel_board_lut_media = vars.get("fuel_board_lut_media")
     fuel_board_stage_mode = vars.get("fuel_board_stage_mode")
+    fuel_tube_lut_air_main = vars.get("fuel_tube_lut_air_main")
+    fuel_tube_lut_full_main = vars.get("fuel_tube_lut_full_main")
+    fuel_tube_lut_air_media = vars.get("fuel_tube_lut_air_media")
+    fuel_tube_lut_full_media = vars.get("fuel_tube_lut_full_media")
 
     vmecusndid          = vars.get("vmecusndid")
     vmecusvndid         = vars.get("vmecusvndid")
