@@ -142,6 +142,56 @@ def test_unknown_file_is_rejected(tmp_path: Path):
     assert not stub._profile_load_file(str(path))
 
 
+def test_next_step_is_not_sent_inside_the_previous_answer():
+    """Следующий запрос обязан уходить отдельным тактом, а не изнутри ответа.
+
+    Ответ приходит внутрь завершения предыдущей операции окна параметров, и всё,
+    что отправлено оттуда, тут же затирается уборкой состояния обмена. Из-за
+    этого второй запрос уходил в шину, ответа на него никто не ждал, и чтение
+    профиля висело вечно.
+    """
+    stub = _ProfileStub()
+    sent: list[str] = []
+    stub._start_options_read_request = (
+        lambda parameter, request_origin, append_history: sent.append(request_origin) or True
+    )
+
+    assert stub._profile_read_from_device()
+    assert len(sent) == 1, "первый запрос уходит сразу"
+
+    before = len(stub._profile_queue)
+    stub._handle_profile_options_result(
+        success=True, request_origin=sent[0], pending_action="read",
+        pending_did=0x004B, value_bytes=bytes(14), message="ok")
+
+    assert len(sent) == 1, "второй запрос не должен уходить изнутри ответа"
+    assert len(stub._profile_queue) == before - 1, "очередь обязана продвинуться"
+    assert stub._profile_busy, "очередь не закончена, окно остаётся занятым"
+
+    # Продолжение приходит отдельным тактом. В проверках цикла событий нет,
+    # поэтому вызываем обработчик таймера вручную.
+    stub._on_profile_step_timeout()
+    assert len(sent) == 2, "следующий запрос уходит отдельным тактом"
+
+
+def test_failed_step_stops_the_queue():
+    """Отказ прибора обязан прерывать очередь, а не оставлять окно в ожидании."""
+    stub = _ProfileStub()
+    stub._start_options_read_request = lambda *args, **kwargs: True
+
+    assert stub._profile_read_from_device()
+    stub._handle_profile_options_result(
+        success=False, request_origin="profile_nodes", pending_action="read",
+        pending_did=0x004B, value_bytes=None, message="таймаут")
+
+    assert not stub._profile_busy
+    assert stub._profile_queue == []
+
+    # Даже если такт продолжения уже был назначен, он ничего не отправит.
+    stub._on_profile_step_timeout()
+    assert stub._profile_queue == []
+
+
 def test_write_order_puts_checksum_last():
     """Сумма пишется последней: пока её нет, недописанный профиль в работу не попадёт."""
     stub = _ProfileStub()

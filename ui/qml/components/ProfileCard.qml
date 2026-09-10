@@ -310,7 +310,10 @@ Card {
                                 required property string modelData
 
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: 28
+                                // Высота считается от текста: при жёстком значении
+                                // меньше содержимого рамка обрезала цифры сверху и снизу.
+                                Layout.preferredHeight: Math.max(30, implicitHeight)
+                                padding: 5
                                 text: modelData
                                 readOnly: !tableRow.modelData.editable
                                 horizontalAlignment: Text.AlignHCenter

@@ -27,6 +27,8 @@ import json
 import pathlib
 import struct
 
+from PySide6.QtCore import QTimer
+
 from uds.options_catalog import get_option_by_did
 
 # Признак происхождения запроса: по нему ответы окна параметров попадают сюда.
@@ -90,6 +92,18 @@ class AppControllerProfileMixin:
         self._profile_status = "Профиль не прочитан."
         self._profile_status_color = "#64748b"
         self._profile_file_path = ""
+
+        # Следующая операция очереди отправляется не сразу, а следующим тактом.
+        # Причина: ответ приходит внутрь завершения предыдущей операции, и всё,
+        # что отправлено оттуда, тут же затирается уборкой состояния обмена.
+        # Из-за этого второй запрос уходил в шину, но ответа на него уже никто
+        # не ждал, и чтение профиля висело вечно.
+        # Таймер без родителя: модуль подмешивается и в контроллер, и в проверки,
+        # где объекта Qt нет вовсе. Ссылку держит сам контроллер.
+        self._profile_step_timer = QTimer()
+        self._profile_step_timer.setSingleShot(True)
+        self._profile_step_timer.setInterval(40)
+        self._profile_step_timer.timeout.connect(self._on_profile_step_timeout)
 
     # ------------------------------------------------------------------ контрольная сумма
 
@@ -171,6 +185,7 @@ class AppControllerProfileMixin:
         """Отправляет следующую операцию очереди."""
         if not self._profile_queue:
             self._profile_busy = False
+            self._profile_step_timer.stop()
             self._profile_set_status("Готово.", "#16a34a")
             return True
 
@@ -193,9 +208,16 @@ class AppControllerProfileMixin:
 
         return True
 
+    def _on_profile_step_timeout(self):
+        """Отправляет следующую операцию очереди отдельным тактом."""
+        if not self._profile_busy:
+            return
+        self._profile_send_next()
+
     def _profile_finish_with_error(self, reason: str):
         self._profile_busy = False
         self._profile_queue = []
+        self._profile_step_timer.stop()
         self._profile_set_status(f"Операция прервана: {reason}", "#dc2626")
 
     def _handle_profile_options_result(self, *, success: bool, request_origin: str,
@@ -210,14 +232,19 @@ class AppControllerProfileMixin:
 
         if not success:
             did = int(pending_did) & 0xFFFF if pending_did is not None else 0
-            self._profile_finish_with_error(f"0x{did:04X} - {message}")
+            hint = ""
+            if name == self.PROFILE_TABLES[0][0]:
+                # Первая же таблица не читается: чаще всего в приборе прошивка,
+                # в которой температурного профиля ещё нет.
+                hint = " Похоже, в приборе старая прошивка без температурного профиля."
+            self._profile_finish_with_error(f"0x{did:04X} - {message}.{hint}")
             return
 
         if pending_action == "read":
             self._profile_store_read(name, bytes(value_bytes or b""))
 
         self._profile_queue.pop(0)
-        self._profile_send_next()
+        self._profile_step_timer.start()
 
     def _profile_store_read(self, name: str, payload: bytes):
         """Раскладывает прочитанные байты по таблицам и служебным полям."""
