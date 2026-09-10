@@ -114,6 +114,17 @@ UDS_OPTIONS: list[UdsOptionParameter] = [
     UdsOptionParameter(0x0049, 2, "Множитель ступени платы, основной контур, ppm/°C", AccessMode.READ_WRITE,
                        "Убирает растяжение показаний при нагреве, ноль означает без поправки"),
     UdsOptionParameter(0x004A, 2, "Множитель ступени платы, контур вида топлива, ppm/°C", AccessMode.READ_WRITE),
+
+    # Температурные таблицы ступени платы. Семь узлов, между ними прямая.
+    # Пока таблица канала нулевая, работают одиночные коэффициенты выше.
+    UdsOptionParameter(0x004B, 14, "Температуры узлов таблицы ступени платы, 7 x 0.1 °C", AccessMode.READ_WRITE,
+                       "Строго по возрастанию, иначе таблицы не применяются"),
+    UdsOptionParameter(0x004C, 28, "Таблица ступени платы, основной контур", AccessMode.READ_WRITE,
+                       "7 пар: сдвиг в отсчётах и растяжение в ppm"),
+    UdsOptionParameter(0x004D, 28, "Таблица ступени платы, контур вида топлива", AccessMode.READ_WRITE,
+                       "7 пар: сдвиг в отсчётах и растяжение в ppm"),
+    UdsOptionParameter(0x004E, 1, "Источник поправки ступени платы", AccessMode.READ,
+                       "Биты: 0 основной по таблице, 1 вид топлива по таблице, 2 сетка узлов неверна"),
     UdsOptionParameter(0xF188, 18, "Номер ПО ЭБУ", AccessMode.READ_WRITE),
     UdsOptionParameter(0xF189, 32, "Версия ПО ЭБУ", AccessMode.READ_WRITE),
     UdsOptionParameter(0xF18A, 32, "Поставщик системы и адрес", AccessMode.READ_WRITE),
