@@ -248,8 +248,18 @@ Card {
             ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
             ColumnLayout {
+                id: tableBody
                 width: tableScroll.availableWidth
                 spacing: 4
+
+                // Ширина колонки считается один раз и применяется и к шапке, и к
+                // ячейкам. Если позволить им растягиваться самим, шапка получит
+                // ширину по длине своего текста, а ячейки одинаковую, и подписи
+                // разъедутся с колонками.
+                readonly property int titleWidth: 250
+                readonly property int columnCount: 7
+                readonly property real columnWidth:
+                    Math.max(58, (width - titleWidth - 4 * columnCount) / columnCount)
 
                 // Шапка: температуры узлов.
                 RowLayout {
@@ -257,7 +267,7 @@ Card {
                     spacing: 4
 
                     Text {
-                        Layout.preferredWidth: 250
+                        Layout.preferredWidth: tableBody.titleWidth
                         text: "Величина"
                         color: root.textSoft
                         font.pixelSize: 11
@@ -270,7 +280,8 @@ Card {
 
                         Text {
                             required property string modelData
-                            Layout.fillWidth: true
+                            Layout.preferredWidth: tableBody.columnWidth
+                            Layout.fillWidth: false
                             horizontalAlignment: Text.AlignHCenter
                             text: modelData
                             color: root.textSoft
@@ -293,7 +304,7 @@ Card {
                         spacing: 4
 
                         Text {
-                            Layout.preferredWidth: 250
+                            Layout.preferredWidth: tableBody.titleWidth
                             text: tableRow.modelData.title
                             color: root.textMain
                             font.pixelSize: 12
@@ -309,7 +320,8 @@ Card {
                                 required property int index
                                 required property string modelData
 
-                                Layout.fillWidth: true
+                                Layout.preferredWidth: tableBody.columnWidth
+                                Layout.fillWidth: false
                                 // Высота считается от текста: при жёстком значении
                                 // меньше содержимого рамка обрезала цифры сверху и снизу.
                                 Layout.preferredHeight: Math.max(30, implicitHeight)
