@@ -133,6 +133,22 @@ UDS_OPTIONS: list[UdsOptionParameter] = [
     UdsOptionParameter(0x0050, 14, "Ступень трубки: основной контур в опорной жидкости", AccessMode.READ_WRITE),
     UdsOptionParameter(0x0051, 14, "Ступень трубки: контур вида топлива на воздухе", AccessMode.READ_WRITE),
     UdsOptionParameter(0x0052, 14, "Ступень трубки: контур вида топлива в опорной жидкости", AccessMode.READ_WRITE),
+
+    # Модель уровня по двум контурам. Прежняя модель верна только тогда, когда
+    # обе отметки бака сняты на одном и том же топливе.
+    UdsOptionParameter(0x0053, 1, "Модель расчёта уровня: 0 прежняя, 1 по двум контурам", AccessMode.READ_WRITE,
+                       "Включать только после записи отметок вместе с показанием среды"),
+    UdsOptionParameter(0x0054, 2, "Вид топлива при снятии отметки 0 %", AccessMode.READ_WRITE),
+    UdsOptionParameter(0x0055, 2, "Вид топлива при снятии отметки 100 %", AccessMode.READ_WRITE),
+    UdsOptionParameter(0x0056, 2, "Доля длины трубки для отметки 0 %, тысячные", AccessMode.READ_WRITE,
+                       "Задаётся при монтаже, по двум отметкам не выводится"),
+    UdsOptionParameter(0x0057, 2, "Доля длины трубки для отметки 100 %, тысячные", AccessMode.READ_WRITE),
+    UdsOptionParameter(0x0058, 2, "Отношение чувствительностей K x1000", AccessMode.READ,
+                       "Считается по отметкам, ноль означает неполную калибровку"),
+    UdsOptionParameter(0x0059, 2, "Показание при нулевом погружении A", AccessMode.READ),
+    UdsOptionParameter(0x005A, 2, "Погружённая доля x1000", AccessMode.READ),
+    UdsOptionParameter(0x005B, 2, "Предсказанное показание для отметки 100 %", AccessMode.READ,
+                       "Для сверки с независимым измерением, отметку не заменяет"),
     UdsOptionParameter(0xF188, 18, "Номер ПО ЭБУ", AccessMode.READ_WRITE),
     UdsOptionParameter(0xF189, 32, "Версия ПО ЭБУ", AccessMode.READ_WRITE),
     UdsOptionParameter(0xF18A, 32, "Поставщик системы и адрес", AccessMode.READ_WRITE),

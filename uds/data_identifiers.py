@@ -97,6 +97,17 @@ class UdsData:
         "fuel_tube_lut_air_media": UdsVar(0x0051, 14, "Ступень трубки: контур вида топлива на воздухе"),
         "fuel_tube_lut_full_media": UdsVar(0x0052, 14, "Ступень трубки: контур вида топлива в жидкости"),
 
+        # Модель уровня по двум контурам: отметки бака вместе с показанием среды.
+        "fuel_tank_model": UdsVar(0x0053, 1, "Модель расчёта уровня"),
+        "fuel_tank_zero_media_count": UdsVar(0x0054, 2, "Вид топлива при снятии отметки 0 %"),
+        "fuel_tank_full_media_count": UdsVar(0x0055, 2, "Вид топлива при снятии отметки 100 %"),
+        "fuel_tank_h0_x1000": UdsVar(0x0056, 2, "Доля длины трубки для отметки 0 %"),
+        "fuel_tank_h100_x1000": UdsVar(0x0057, 2, "Доля длины трубки для отметки 100 %"),
+        "fuel_tank_k_x1000": UdsVar(0x0058, 2, "Отношение чувствительностей K x1000"),
+        "fuel_tank_a_count": UdsVar(0x0059, 2, "Показание при нулевом погружении A"),
+        "fuel_tank_immersion_x1000": UdsVar(0x005A, 2, "Погружённая доля x1000"),
+        "fuel_tank_full_main_pred": UdsVar(0x005B, 2, "Предсказанное показание для отметки 100 %"),
+
         "vmecusndid"        : UdsVar(0xF188, 18, "Номер ПО ЭБУ изготовителя ТС"),
         "vmecusvndid"       : UdsVar(0xF189, 32, "Номер версии ПО ЭБУ изготовителя ТС"),
         "ssiddid"           : UdsVar(0xF18A, 32, "Название поставщика системы и информация об адресе"),
@@ -190,6 +201,16 @@ class UdsData:
     fuel_tube_lut_full_main = vars.get("fuel_tube_lut_full_main")
     fuel_tube_lut_air_media = vars.get("fuel_tube_lut_air_media")
     fuel_tube_lut_full_media = vars.get("fuel_tube_lut_full_media")
+
+    fuel_tank_model = vars.get("fuel_tank_model")
+    fuel_tank_zero_media_count = vars.get("fuel_tank_zero_media_count")
+    fuel_tank_full_media_count = vars.get("fuel_tank_full_media_count")
+    fuel_tank_h0_x1000 = vars.get("fuel_tank_h0_x1000")
+    fuel_tank_h100_x1000 = vars.get("fuel_tank_h100_x1000")
+    fuel_tank_k_x1000 = vars.get("fuel_tank_k_x1000")
+    fuel_tank_a_count = vars.get("fuel_tank_a_count")
+    fuel_tank_immersion_x1000 = vars.get("fuel_tank_immersion_x1000")
+    fuel_tank_full_main_pred = vars.get("fuel_tank_full_main_pred")
 
     vmecusndid          = vars.get("vmecusndid")
     vmecusvndid         = vars.get("vmecusvndid")
