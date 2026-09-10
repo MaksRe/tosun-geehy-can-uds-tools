@@ -1296,6 +1296,11 @@ class AppControllerPropertiesMixin(AppControllerContract):
         """Цель функции в выдаче текстового отчёта, затем она позволяет скопировать результат проверки целиком."""
         return self._build_diagnostics_report()
 
+    @Property(str, notify=collectorStateChanged)
+    def collectorReferenceNote(self):
+        """Цель функции в выдаче пометки оператора, затем она показывает, что подключено к прибору в камере."""
+        return str(self._collector_reference_note)
+
     @Property(bool, notify=mediaWizardChanged)
     def mediaWizardBusy(self):
         """Цель функции в признаке идущей операции мастера, затем она блокирует кнопки на время записи."""

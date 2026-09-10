@@ -10,6 +10,23 @@ CSV_READ_ENCODING = "utf-8-sig"
 class CollectorCsvManager:
     """Writes collector values to a single per-node CSV file."""
 
+    # Порядок колонок: сначала то, что нужно для температурной калибровки, затем
+    # расчётный уровень. Обе температуры названы полностью, иначе их невозможно
+    # различить в журнале камеры. Список один на весь класс, чтобы заголовок
+    # нельзя было обновить в одном месте и забыть в другом.
+    _COLUMNS: tuple[str, ...] = (
+        "Время",
+        "Эталон",
+        "Период основного контура",
+        "Период контура вида топлива",
+        "Температура топлива (°C)",
+        "Температура платы (°C)",
+        "Топливо (%)",
+        "Топл.(J1939)",
+        "Топливо из периода (%)",
+    )
+
+
     def __init__(self, node_hex: str, session_dir: Path):
         self._node_hex = str(node_hex).lower()
         session_dir.mkdir(parents=True, exist_ok=True)
@@ -23,17 +40,7 @@ class CollectorCsvManager:
         self._k1_known = False
         self._k0_known = False
 
-        self._init_csv(
-            self._csv_path,
-            (
-                "Время",
-                "Период",
-                "Температура (°C)",
-                "Топливо (%)",
-                "Топл.(J1939)",
-                "Топливо из периода (%)",
-            ),
-        )
+        self._init_csv(self._csv_path, self._COLUMNS)
         self._update_metadata_if_needed(0, 0, empty_known=False, full_known=False)
 
     @staticmethod
@@ -60,10 +67,11 @@ class CollectorCsvManager:
         full_text = str(int(self._full_ticks)) if self._full_known else "не получено"
         k1_text = str(int(self._k1_x100)) if self._k1_known else "не получено"
         k0_text = str(int(self._k0_count)) if self._k0_known else "не получено"
-        return [
-            [f"Узел {self._node_hex}", "", "", "", "", ""],
-            [f"Калибровка: empty={empty_text}; full={full_text}; k1={k1_text}; k0={k0_text}", "", "", "", formula, ""],
-        ]
+        width = len(self._COLUMNS)
+        title_row = [f"Узел {self._node_hex}"] + [""] * (width - 1)
+        calibration_row = [f"Калибровка: empty={empty_text}; full={full_text}; k1={k1_text}; k0={k0_text}"]
+        calibration_row += [""] * (width - 2) + [formula]
+        return [title_row, calibration_row]
 
     @staticmethod
     def _looks_like_header_or_meta(row: list[str]) -> bool:
@@ -96,7 +104,7 @@ class CollectorCsvManager:
             writer = csv.writer(file, delimiter=";")
             for meta_row in self._metadata_rows():
                 writer.writerow(meta_row)
-            writer.writerow(("Время", "Период", "Температура (°C)", "Топливо (%)", "Топл.(J1939)", "Топливо из периода (%)"))
+            writer.writerow(self._COLUMNS)
             for row in data_rows:
                 writer.writerow(row)
 
@@ -144,6 +152,9 @@ class CollectorCsvManager:
         period_ticks: int,
         temperature_c: float,
         fuel_percent: float,
+        board_temperature_c: float | None = None,
+        media_ticks: int | None = None,
+        reference_note: str = "",
         fuel_j1939_percent: float | None = None,
         fuel_from_period_x10: int | None = None,
         empty_ticks: int = 0,
@@ -162,8 +173,11 @@ class CollectorCsvManager:
         fuel_from_period_percent = float(fuel_from_period_x10) / 10.0
         row = (
             self._format_value(str(measurement_time)),
+            self._format_value(str(reference_note)),
             self._format_value(int(period_ticks)),
+            self._format_value(int(media_ticks)) if media_ticks is not None else "",
             self._format_value(float(temperature_c)),
+            self._format_value(float(board_temperature_c)) if board_temperature_c is not None else "",
             self._format_value(float(fuel_percent)),
             self._format_value(float(fuel_j1939_percent)) if fuel_j1939_percent is not None else "",
             self._format_value(float(fuel_from_period_percent)),
@@ -174,19 +188,24 @@ class CollectorCsvManager:
 class CollectorCombinedCsvManager:
     """Writes one combined CSV with shared time column and per-node metrics."""
 
-    _NODE_METRIC_LABELS: tuple[str, str, str, str, str] = (
-        "Период",
+    # Порядок метрик на узел. Обе температуры названы полностью: в журнале
+    # камеры их иначе не различить. Период контура вида топлива нужен для
+    # расчёта коэффициентов, без него прогон в камере бесполезен.
+    _NODE_METRIC_LABELS: tuple[str, ...] = (
+        "Период основного контура",
+        "Период контура вида топлива",
+        "Температура топлива (°C)",
+        "Температура платы (°C)",
         "Топливо (%)",
         "Топл.(J1939)",
-        "Температура (°C)",
         "Топливо из периода (%)",
     )
 
     def __init__(self, session_dir: Path, file_name: str = "all_nodes.csv"):
         session_dir.mkdir(parents=True, exist_ok=True)
         self._csv_path = session_dir / str(file_name)
-        self._header: list[str] = ["Время"]
-        self._node_columns: dict[str, tuple[str, str, str, str, str]] = {}
+        self._header: list[str] = ["Время", "Эталон"]
+        self._node_columns: dict[str, tuple[str, ...]] = {}
         self._node_calibration: dict[str, tuple[int, int, bool, bool, int, int, bool, bool]] = {}
         self._ordered_nodes: list[str] = []
         self._init_csv()
@@ -207,14 +226,10 @@ class CollectorCombinedCsvManager:
         return str(value)
 
     @staticmethod
-    def _column_names_for_node(node_hex: str) -> tuple[str, str, str, str, str]:
+    def _column_names_for_node(node_hex: str) -> tuple[str, ...]:
         normalized = CollectorCombinedCsvManager._normalize_node_hex(node_hex)
-        return (
-            f"{normalized} Период",
-            f"{normalized} Топливо (%)",
-            f"{normalized} Топл.(J1939)",
-            f"{normalized} Температура (°C)",
-            f"{normalized} Топливо из периода (%)",
+        return tuple(
+            f"{normalized} {label}" for label in CollectorCombinedCsvManager._NODE_METRIC_LABELS
         )
 
     @staticmethod
@@ -257,13 +272,13 @@ class CollectorCombinedCsvManager:
         return False
 
     def _group_header_row(self) -> list[str]:
-        row: list[str] = ["Время"]
+        row: list[str] = ["Время", ""]
         for node_hex in self._ordered_nodes:
-            row.extend([f"Узел {node_hex}", "", "", "", ""])
+            row.extend([f"Узел {node_hex}"] + [""] * (len(self._NODE_METRIC_LABELS) - 1))
         return row
 
     def _calibration_row(self) -> list[str]:
-        row: list[str] = [""]
+        row: list[str] = ["", ""]
         formula = "Топливо из периода (%)=((Период-empty)*100)/(full-empty)"
         for node_hex in self._ordered_nodes:
             empty_ticks, full_ticks, empty_known, full_known, k1_x100, k0_count, k1_known, k0_known = self._node_calibration.get(
@@ -273,14 +288,25 @@ class CollectorCombinedCsvManager:
             full_text = str(int(full_ticks)) if full_known else "не получено"
             k1_text = str(int(k1_x100)) if k1_known else "не получено"
             k0_text = str(int(k0_count)) if k0_known else "не получено"
-            row.extend([f"empty={empty_text}", f"full={full_text}", f"k1={k1_text}", f"k0={k0_text}", formula])
+            calibration = [f"empty={empty_text}", f"full={full_text}", f"k1={k1_text}", f"k0={k0_text}"]
+            calibration += [""] * (len(self._NODE_METRIC_LABELS) - len(calibration) - 1) + [formula]
+            row.extend(calibration)
         return row
 
     def _columns_header_row(self) -> list[str]:
-        row: list[str] = [""]
+        # Пометка эталона общая на всю запись, поэтому стоит один раз рядом со
+        # временем, а не повторяется для каждого узла.
+        row: list[str] = ["", "Эталон"]
         for _ in self._ordered_nodes:
             row.extend(list(self._NODE_METRIC_LABELS))
         return row
+
+    @staticmethod
+    def _is_columns_header_row(row: list[str]) -> bool:
+        """Точный признак строки колонок: пустое время и пометка эталона следом."""
+        if len(row) < 2:
+            return False
+        return str(row[0]).strip() == "" and str(row[1]).strip().casefold() == "эталон"
 
     def _read_existing_rows(self, header: list[str]) -> list[dict[str, str]]:
         if not self._csv_path.exists():
@@ -296,6 +322,9 @@ class CollectorCombinedCsvManager:
         while start_index < len(rows):
             first_cell = rows[start_index][0] if len(rows[start_index]) > 0 else ""
             joined = ";".join(str(cell) for cell in rows[start_index]).casefold()
+            if self._is_columns_header_row(rows[start_index]):
+                start_index += 1
+                continue
             if self._is_header_like(first_cell, allow_node=True) or self._is_header_like(joined, allow_node=True):
                 start_index += 1
                 continue
@@ -386,7 +415,8 @@ class CollectorCombinedCsvManager:
             new_nodes.append(normalized)
         self._expand_header_for_new_nodes(new_nodes)
 
-    def append_snapshot(self, measurement_time: str, nodes_snapshot: dict[str, dict[str, object]]):
+    def append_snapshot(self, measurement_time: str, nodes_snapshot: dict[str, dict[str, object]],
+                        reference_note: str = ""):
         if len(nodes_snapshot) == 0:
             return
 
@@ -407,19 +437,30 @@ class CollectorCombinedCsvManager:
             self._write_full_file(existing_rows)
         row: dict[str, str] = {column: "" for column in self._header}
         row["Время"] = self._format_value(str(measurement_time))
+        row["Эталон"] = self._format_value(str(reference_note))
 
         for node_hex in self._ordered_nodes:
             metrics = normalized_snapshot.get(node_hex)
             if metrics is None:
                 continue
-            period_column, fuel_column, fuel_j1939_column, temperature_column, fuel_period_x10_column = self._node_columns[node_hex]
+            (period_column, media_column, temperature_column, board_temperature_column,
+             fuel_column, fuel_j1939_column, fuel_period_x10_column) = self._node_columns[node_hex]
+
             row[period_column] = self._format_value(self._as_int(metrics.get("period", 0)))
+            row[media_column] = (
+                self._format_value(self._as_int(metrics.get("mediaRaw", 0)))
+                if self._as_bool(metrics.get("mediaRawKnown", False)) else ""
+            )
+            row[temperature_column] = self._format_value(self._as_float(metrics.get("temperature", 0.0)))
+            row[board_temperature_column] = (
+                self._format_value(self._as_float(metrics.get("boardTemperature", 0.0)))
+                if self._as_bool(metrics.get("boardTemperatureKnown", False)) else ""
+            )
             row[fuel_column] = self._format_value(self._as_float(metrics.get("fuel", 0.0)))
             if self._as_bool(metrics.get("fuelJ1939Known", False)):
                 row[fuel_j1939_column] = self._format_value(self._as_float(metrics.get("fuelJ1939", 0.0)))
             else:
                 row[fuel_j1939_column] = ""
-            row[temperature_column] = self._format_value(self._as_float(metrics.get("temperature", 0.0)))
             row[fuel_period_x10_column] = self._format_value(self._resolve_fuel_period_percent(metrics))
 
         with self._csv_path.open("a", newline="", encoding=CSV_WRITE_ENCODING) as file:

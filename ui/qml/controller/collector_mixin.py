@@ -856,6 +856,19 @@ class AppControllerCollectorMixin(AppControllerContract):
                 {
                     "node": f"0x{int(node_sa) & 0xFF:02X}",
                     "period": str(int(node.get("period", 0))),
+                    # Показания второго контура и второго датчика видны сразу на
+                    # экране: если прибор их не отдаёт, это надо заметить до
+                    # выезда в камеру, а не по пустым колонкам в файле.
+                    "mediaRaw": (
+                        str(int(node.get("mediaRaw", 0)))
+                        if bool(node.get("mediaRawKnown", False))
+                        else "-"
+                    ),
+                    "boardTemperature": (
+                        f"{float(node.get('boardTemperature', 0.0)):.1f}"
+                        if bool(node.get("boardTemperatureKnown", False))
+                        else "-"
+                    ),
                     "fuelLevel": f"{float(node.get('fuelLevel', 0.0)):.1f}",
                     "fuelJ1939": (
                         f"{float(node.get('fuelJ1939', 0.0)):.1f}"
@@ -886,6 +899,17 @@ class AppControllerCollectorMixin(AppControllerContract):
             measurement_time=str(timestamp),
             period_ticks=int(node.get("period", 0)),
             temperature_c=float(node.get("temperature", 0.0)),
+            board_temperature_c=(
+                float(node.get("boardTemperature", 0.0))
+                if bool(node.get("boardTemperatureKnown", False))
+                else None
+            ),
+            media_ticks=(
+                int(node.get("mediaRaw", 0))
+                if bool(node.get("mediaRawKnown", False))
+                else None
+            ),
+            reference_note=str(self._collector_reference_note),
             fuel_percent=float(node.get("fuelLevel", 0.0)),
             fuel_j1939_percent=(
                 float(node.get("fuelJ1939", 0.0))
@@ -917,6 +941,10 @@ class AppControllerCollectorMixin(AppControllerContract):
                 "fuelJ1939": float(node.get("fuelJ1939", 0.0)),
                 "fuelJ1939Known": bool(node.get("fuelJ1939Known", False)),
                 "temperature": float(node.get("temperature", 0.0)),
+                "boardTemperature": float(node.get("boardTemperature", 0.0)),
+                "boardTemperatureKnown": bool(node.get("boardTemperatureKnown", False)),
+                "mediaRaw": int(node.get("mediaRaw", 0)),
+                "mediaRawKnown": bool(node.get("mediaRawKnown", False)),
                 "fuelPeriodX10": int(node.get("fuelLevelX10", int(round(float(node.get("fuelLevel", 0.0)) * 10.0)))),
                 "emptyPeriod": int(node.get("emptyPeriod", 0)),
                 "fullPeriod": int(node.get("fullPeriod", 0)),
@@ -939,6 +967,7 @@ class AppControllerCollectorMixin(AppControllerContract):
         manager.append_snapshot(
             measurement_time=str(timestamp),
             nodes_snapshot=snapshot,
+            reference_note=str(self._collector_reference_note),
         )
 
     def _handle_collector_frame(self, timestamp: str, parsed_id: J1939CanIdentifier, payload: list[int]):
@@ -1093,6 +1122,20 @@ class AppControllerCollectorMixin(AppControllerContract):
             node["temperatureCount"] = int(node.get("temperatureCount", 0)) + 1
             self._append_collector_csv(node_sa, node, timestamp)
             has_trend_update = True
+            nodes_changed = True
+        elif did == int(UdsData.raw_board_temperature.pid):
+            # Температура платы нужна для первой ступени калибровки: она
+            # описывает дрейф электроники, а не свойства топлива.
+            bits = max(8, int(UdsData.raw_board_temperature.size) * 8)
+            signed_value = self._decode_signed(value, bits)
+            node["boardTemperature"] = signed_value / 10.0
+            node["boardTemperatureKnown"] = True
+            nodes_changed = True
+        elif did == int(UdsData.fuel_media_flatcap_raw.pid):
+            # Показание контура вида топлива нужно для второй ступени и для
+            # расчёта коэффициента среды.
+            node["mediaRaw"] = int(value)
+            node["mediaRawKnown"] = True
             nodes_changed = True
         elif did == int(UdsData.fuel_temp_comp_k1_x100.pid):
             bits = max(8, int(UdsData.fuel_temp_comp_k1_x100.size) * 8)

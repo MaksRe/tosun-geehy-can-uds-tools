@@ -343,11 +343,21 @@ class AppController(
         self._collector_session_dir: Path | None = None
         self._collector_csv_managers: dict[int, CollectorCsvManager] = {}
         self._collector_combined_csv_manager: CollectorCombinedCsvManager | None = None
+        # Для температурной калибровки в камере нужны обе температуры и оба
+        # контура: по одной температуре и одному контуру коэффициенты не
+        # считаются. Поэтому в журнал пишутся все четыре величины.
         self._collector_poll_vars = [
             UdsData.curr_fuel_tank,
             UdsData.raw_fuel_level,
             UdsData.raw_temperature,
+            UdsData.raw_board_temperature,
+            UdsData.fuel_media_flatcap_raw,
         ]
+
+        # Пометка оператора: что сейчас подключено к прибору в камере.
+        # Записывается в каждую строку журнала, чтобы потом было понятно,
+        # к какому эталону относится строка.
+        self._collector_reference_note = ""
         self._collector_poll_node_index = 0
         self._collector_poll_phase = 0
         self._collector_pending_requests: dict[tuple[int, int], dict[str, float | int | str]] = {}

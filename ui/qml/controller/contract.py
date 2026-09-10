@@ -83,6 +83,7 @@ class AppControllerContract:
     _media_wizard_timeout_timer: Any
     _media_wizard_watching: Any
     _media_wizard_write_service: Any
+    _collector_reference_note: Any
     _diagnostics_counter_delta: Any
     _diagnostics_counter_growing: Any
     _diagnostics_counter_prev: Any

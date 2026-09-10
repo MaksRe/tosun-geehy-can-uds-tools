@@ -4067,6 +4067,16 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         clipboard.setText(report)
         self.infoMessage.emit("Проверка прибора", "Отчёт скопирован в буфер обмена.")
 
+    @Slot(str)
+    def setCollectorReferenceNote(self, note):
+        """Цель функции в пометке текущего состояния стенда, затем она попадает в каждую строку журнала."""
+        text = str(note).strip()
+        if text == self._collector_reference_note:
+            return
+
+        self._collector_reference_note = text
+        self.collectorStateChanged.emit()
+
     @Slot()
     def startMediaWizardWatch(self):
         """Цель функции в показе живого измерения контура вида топлива, затем она запускает частый опрос DID 0x0036."""

@@ -210,6 +210,31 @@ Card {
                     }
 
                     Text {
+                        text: "Эталон"
+                        color: root.textSoft
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                        Layout.alignment: Qt.AlignVCenter
+                    }
+
+                    // Пометка идёт в каждую строку журнала. Без неё в записи из
+                    // камеры невозможно понять, к какому эталонному конденсатору
+                    // относится строка, и коэффициенты потом не посчитать.
+                    FancyTextField {
+                        id: referenceNoteField
+                        Layout.preferredWidth: 150
+                        Layout.preferredHeight: 30
+                        text: root.appController ? root.appController.collectorReferenceNote : ""
+                        placeholderText: "что подключено"
+                        textColor: root.textMain
+                        bgColor: root.inputBg
+                        borderColor: root.inputBorder
+                        focusBorderColor: root.inputFocus
+                        onAccepted: if (root.appController) root.appController.setCollectorReferenceNote(text)
+                        onEditingFinished: if (root.appController) root.appController.setCollectorReferenceNote(text)
+                    }
+
+                    Text {
                         text: "Шаг, мс"
                         color: root.textSoft
                         font.pixelSize: 11
@@ -371,7 +396,11 @@ Card {
                         z: 1
                         clip: true
                         spacing: 4
-                        readonly property real columnWidth: Math.max(52, Math.floor((width - 22) / 9))
+                        // Число колонок задано одним местом: при добавлении новой
+                        // легко забыть поправить делитель, и последние колонки уезжают
+                        // за край без всякого предупреждения.
+                        readonly property int columnCount: 11
+                        readonly property real columnWidth: Math.max(52, Math.floor((width - 22) / columnCount))
 
                         Text {
                             Layout.fillWidth: true
@@ -390,6 +419,24 @@ Card {
                                 model: [
                                     { "label": "Узел" },
                                     { "label": "Период" },
+                                    {
+                                        "label": "Вид топл.",
+                                        "infoTitle": "Колонка «Вид топл.»",
+                                        "infoText": "Показание второго измерительного контура, плоского конденсатора (DID 0x0036).
+
+Нужно для расчёта коэффициента среды и для температурной калибровки.
+
+Прочерк означает, что прибор это значение не отдаёт: скорее всего в нём старая прошивка."
+                                    },
+                                    {
+                                        "label": "Темп. платы",
+                                        "infoTitle": "Колонка «Темп. платы»",
+                                        "infoText": "Температура терморезистора на плате (DID 0x003B).
+
+Описывает нагрев электроники, а не топлива. Нужна для первой ступени температурной калибровки.
+
+Прочерк означает, что прибор это значение не отдаёт: скорее всего в нём старая прошивка."
+                                    },
                                     {
                                         "label": "Топливо",
                                         "infoTitle": "Колонка «Топливо»",
@@ -503,6 +550,8 @@ Card {
 
                                     Text { Layout.preferredWidth: tableArea.columnWidth; text: modelData.node; color: root.textMain; font.pixelSize: 11; font.family: "Bahnschrift"; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
                                     Text { Layout.preferredWidth: tableArea.columnWidth; text: modelData.period; color: root.textMain; font.pixelSize: 11; font.family: "Bahnschrift"; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
+                                    Text { Layout.preferredWidth: tableArea.columnWidth; text: modelData.mediaRaw; color: root.textMain; font.pixelSize: 11; font.family: "Bahnschrift"; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
+                                    Text { Layout.preferredWidth: tableArea.columnWidth; text: modelData.boardTemperature; color: root.textMain; font.pixelSize: 11; font.family: "Bahnschrift"; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
                                     Text { Layout.preferredWidth: tableArea.columnWidth; text: modelData.fuelLevel; color: root.textMain; font.pixelSize: 11; font.family: "Bahnschrift"; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
                                     Text { Layout.preferredWidth: tableArea.columnWidth; text: modelData.fuelJ1939; color: root.textMain; font.pixelSize: 11; font.family: "Bahnschrift"; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
                                     Text { Layout.preferredWidth: tableArea.columnWidth; text: modelData.fuelFromPeriod; color: root.textMain; font.pixelSize: 11; font.family: "Bahnschrift"; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
