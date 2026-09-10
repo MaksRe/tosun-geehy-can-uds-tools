@@ -5,6 +5,7 @@ from .contract import AppControllerContract
 from .diagnostics_mixin import AppControllerDiagnosticsMixin
 from .media_wizard_mixin import AppControllerMediaWizardMixin
 from .options_mixin import AppControllerOptionsMixin
+from .profile_mixin import AppControllerProfileMixin
 from .properties_mixin import AppControllerPropertiesMixin
 from .public_slots_mixin import AppControllerPublicSlotsMixin
 from .runtime_mixin import AppControllerRuntimeMixin
@@ -18,6 +19,7 @@ __all__ = [
     "AppControllerDiagnosticsMixin",
     "AppControllerMediaWizardMixin",
     "AppControllerOptionsMixin",
+    "AppControllerProfileMixin",
     "AppControllerPropertiesMixin",
     "AppControllerPublicSlotsMixin",
     "AppControllerRuntimeMixin",

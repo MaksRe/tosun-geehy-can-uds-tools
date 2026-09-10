@@ -16,6 +16,7 @@ Card {
     signal openCollectorRequested()
     signal openDiagnosticsRequested()
     signal openMediaWizardRequested()
+    signal openProfileRequested()
     signal openOptionsRequested()
     signal openServiceSettingsRequested()
 
@@ -46,6 +47,14 @@ Card {
         if (root.appController.firmwarePath.length > 0)
             return "BIN выбран"
         return "BIN не выбран"
+    }
+
+    function profileStatusText() {
+        if (!root.appController)
+            return "Ожидание контроллера"
+        if (root.appController.profileBusy)
+            return "Идёт обмен с прибором"
+        return root.appController.profileDeviceStatusText
     }
 
     function mediaWizardStatusText() {
@@ -100,7 +109,7 @@ Card {
 
         GridLayout {
             Layout.fillWidth: true
-            columns: width > 1100 ? 3 : 2
+            columns: width > 1100 ? 4 : 2
             columnSpacing: 10
             rowSpacing: 10
 
@@ -150,6 +159,22 @@ Card {
                 accentColor: "#0f766e"
                 accentColorHover: "#115e59"
                 onClicked: root.openMediaWizardRequested()
+            }
+
+            ScenarioTile {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                title: "Темп. профиль"
+                statusText: root.profileStatusText()
+                textMain: root.textMain
+                textSoft: root.textSoft
+                baseColor: "#fff1f5"
+                baseBorder: "#f0b6c8"
+                chipColor: "#ffe8ef"
+                chipBorder: "#e79bb2"
+                accentColor: "#be123c"
+                accentColorHover: "#9f1239"
+                onClicked: root.openProfileRequested()
             }
 
             ScenarioTile {

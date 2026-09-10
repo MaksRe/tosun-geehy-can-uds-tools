@@ -64,6 +64,7 @@ class AppControllerPropertiesMixin(AppControllerContract):
     optionsBulkRowsChanged = Signal()
     diagnosticsChanged = Signal()
     mediaWizardChanged = Signal()
+    profileChanged = Signal()
     softwareVersionChanged = Signal()
 
     @Property("QStringList", notify=devicesChanged)
@@ -1295,6 +1296,58 @@ class AppControllerPropertiesMixin(AppControllerContract):
     def diagnosticsReportText(self):
         """Цель функции в выдаче текстового отчёта, затем она позволяет скопировать результат проверки целиком."""
         return self._build_diagnostics_report()
+
+    @Property("QVariantList", notify=profileChanged)
+    def profileRows(self):
+        """Цель функции в передаче таблиц профиля в окно, затем она отдаёт по строке на каждую величину."""
+        return self._profile_rows()
+
+    @Property("QStringList", notify=profileChanged)
+    def profileNodeTitles(self):
+        """Цель функции в подписях колонок, затем она показывает температуры узлов."""
+        return [f"{value / 10:.0f} °C" for value in self._profile_values["nodes"]]
+
+    @Property(bool, notify=profileChanged)
+    def profileBusy(self):
+        """Цель функции в признаке идущего обмена, затем она блокирует кнопки на время записи."""
+        return bool(self._profile_busy)
+
+    @Property(str, notify=profileChanged)
+    def profileStatusText(self):
+        """Цель функции в подписи о ходе работы, затем она объясняет оператору текущий шаг."""
+        return str(self._profile_status)
+
+    @Property(str, notify=profileChanged)
+    def profileStatusColor(self):
+        """Цель функции в цвете подписи, затем она отделяет успех от предупреждения и отказа."""
+        return str(self._profile_status_color)
+
+    @Property(str, notify=profileChanged)
+    def profileCrcText(self):
+        """Цель функции в показе суммы, затем она позволяет сверить её с прибором до записи."""
+        return f"0x{self._profile_calc_crc():04X}"
+
+    @Property(str, notify=profileChanged)
+    def profileDeviceCrcText(self):
+        """Цель функции в показе суммы из прибора, затем она выявляет недописанный профиль."""
+        if self._profile_device_crc is None:
+            return "не читалась"
+        return f"0x{int(self._profile_device_crc):04X}"
+
+    @Property(str, notify=profileChanged)
+    def profileDeviceStatusText(self):
+        """Цель функции в расшифровке состояния профиля в приборе, затем она называет причину отказа."""
+        return self._profile_device_status_text()
+
+    @Property(str, notify=profileChanged)
+    def profileGenerationText(self):
+        """Цель функции в показе поколения профиля, затем она даёт прослеживаемость записей."""
+        return str(int(self._profile_generation))
+
+    @Property(str, notify=profileChanged)
+    def profileFilePath(self):
+        """Цель функции в показе последнего файла профиля, затем она напоминает, откуда взяты таблицы."""
+        return str(self._profile_file_path)
 
     @Property(str, notify=collectorStateChanged)
     def collectorReferenceNote(self):

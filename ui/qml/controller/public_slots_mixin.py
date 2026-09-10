@@ -4067,6 +4067,31 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         clipboard.setText(report)
         self.infoMessage.emit("Проверка прибора", "Отчёт скопирован в буфер обмена.")
 
+    @Slot()
+    def readProfileFromDevice(self):
+        """Цель функции в чтении температурного профиля, затем она забирает все таблицы и состояние."""
+        self._profile_read_from_device()
+
+    @Slot()
+    def writeProfileToDevice(self):
+        """Цель функции в записи профиля, затем она пишет таблицы, а сумму в самую последнюю очередь."""
+        self._profile_write_to_device()
+
+    @Slot(str)
+    def saveProfileToFile(self, path):
+        """Цель функции в сохранении профиля, затем она даёт откат и перенос на другой прибор."""
+        self._profile_save_file(self._to_local_path(path))
+
+    @Slot(str)
+    def loadProfileFromFile(self, path):
+        """Цель функции в загрузке профиля, затем она принимает и свой файл, и расчёт по журналу камеры."""
+        self._profile_load_file(self._to_local_path(path))
+
+    @Slot(int, int, str)
+    def setProfileCell(self, row, column, text):
+        """Цель функции в правке одного значения таблицы, затем она пересчитывает контрольную сумму."""
+        self._profile_set_cell(int(row), int(column), str(text))
+
     @Slot(str)
     def setCollectorReferenceNote(self, note):
         """Цель функции в пометке текущего состояния стенда, затем она попадает в каждую строку журнала."""

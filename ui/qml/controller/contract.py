@@ -37,6 +37,7 @@ class AppControllerContract:
     deviceInfoChanged: Any
     devicesChanged: Any
     diagnosticsChanged: Any
+    profileChanged: Any
     mediaWizardChanged: Any
     firmwareLoadingChanged: Any
     firmwarePathChanged: Any
@@ -84,6 +85,17 @@ class AppControllerContract:
     _media_wizard_watching: Any
     _media_wizard_write_service: Any
     _collector_reference_note: Any
+    _profile_algorithm_id: Any
+    _profile_busy: Any
+    _profile_device_crc: Any
+    _profile_device_crc_actual: Any
+    _profile_device_status: Any
+    _profile_file_path: Any
+    _profile_generation: Any
+    _profile_queue: Any
+    _profile_status: Any
+    _profile_status_color: Any
+    _profile_values: Any
     _diagnostics_counter_delta: Any
     _diagnostics_counter_growing: Any
     _diagnostics_counter_prev: Any

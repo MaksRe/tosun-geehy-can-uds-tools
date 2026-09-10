@@ -26,6 +26,7 @@ from .controller import (
     AppControllerDiagnosticsMixin,
     AppControllerMediaWizardMixin,
     AppControllerOptionsMixin,
+    AppControllerProfileMixin,
     AppControllerPropertiesMixin,
     AppControllerPublicSlotsMixin,
     AppControllerRuntimeMixin,
@@ -41,6 +42,7 @@ class AppController(
     AppControllerCollectorMixin,
     AppControllerDiagnosticsMixin,
     AppControllerMediaWizardMixin,
+    AppControllerProfileMixin,
     AppControllerCanMixin,
     AppControllerRuntimeMixin,
     QObject,
@@ -621,5 +623,8 @@ class AppController(
 
         # Мастер калибровки контура вида топлива тоже держит своё состояние внутри модуля.
         self._init_media_wizard_state()
+
+        # Окно температурного профиля держит таблицы и сумму внутри модуля.
+        self._init_profile_state()
 
         self._rebuild_can_traffic_view()

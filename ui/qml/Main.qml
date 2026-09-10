@@ -264,6 +264,67 @@ ApplicationWindow {
         }
     }
 
+    FileDialog {
+        id: profileSaveDialog
+        title: "Сохранить температурный профиль"
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "json"
+        nameFilters: ["Профиль (*.json)", "Все файлы (*)"]
+
+        onAccepted: {
+            if (window.backendController) {
+                window.backendController.saveProfileToFile(selectedFile.toString())
+            }
+        }
+    }
+
+    FileDialog {
+        id: profileLoadDialog
+        title: "Загрузить температурный профиль"
+        nameFilters: ["Профиль или расчёт по журналу (*.json)", "Все файлы (*)"]
+
+        onAccepted: {
+            if (window.backendController) {
+                window.backendController.loadProfileFromFile(selectedFile.toString())
+            }
+        }
+    }
+
+    Window {
+        id: profileWindow
+        width: 1280
+        height: 760
+        minimumWidth: 1040
+        minimumHeight: 620
+        visible: false
+        modality: Qt.NonModal
+        transientParent: window
+        title: "Температурный профиль"
+
+        Rectangle {
+            anchors.fill: parent
+            gradient: Gradient {
+                GradientStop { position: 0.0; color: window.bgStart }
+                GradientStop { position: 1.0; color: window.bgEnd }
+            }
+        }
+
+        ProfileCard {
+            anchors.fill: parent
+            anchors.margins: 14
+            appController: window.backendController
+            cardColor: window.cardColor
+            cardBorder: window.cardBorder
+            textMain: window.textMain
+            textSoft: window.textSoft
+            inputBg: window.inputBg
+            inputBorder: window.inputBorder
+            inputFocus: window.inputFocus
+            onSaveProfileRequested: profileSaveDialog.open()
+            onLoadProfileRequested: profileLoadDialog.open()
+        }
+    }
+
     Window {
         id: mediaWizardWindow
         width: 1180
@@ -660,6 +721,7 @@ ApplicationWindow {
                     onOpenCalibrationRequested: window.raiseToolWindow(calibrationWindow)
                     onOpenDiagnosticsRequested: window.raiseToolWindow(diagnosticsWindow)
                     onOpenMediaWizardRequested: window.raiseToolWindow(mediaWizardWindow)
+                    onOpenProfileRequested: window.raiseToolWindow(profileWindow)
                     onOpenCollectorRequested: window.raiseToolWindow(collectorWindow)
                     onOpenOptionsRequested: window.raiseToolWindow(optionsWindow)
                     onOpenServiceSettingsRequested: window.raiseToolWindow(serviceSettingsWindow)

@@ -1057,6 +1057,16 @@ class AppControllerOptionsMixin(AppControllerContract):
             ):
                 self._finish_post_program_version_write(bool(success), str(message))
 
+        if str(request_origin or "").startswith("profile_"):
+            self._handle_profile_options_result(
+                success=bool(success),
+                request_origin=str(request_origin),
+                pending_action=str(pending_action),
+                pending_did=pending_did,
+                value_bytes=value_bytes,
+                message=str(message),
+            )
+
         if str(request_origin or "").startswith("supplier_did_"):
             self._handle_supplier_did_options_result(
                 success=bool(success),
