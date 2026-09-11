@@ -903,7 +903,6 @@ class AppControllerCollectorMixin(AppControllerContract):
                 if bool(node.get("mediaRawKnown", False))
                 else None
             ),
-            reference_note=str(self._collector_reference_note),
             fuel_percent=float(node.get("fuelLevel", 0.0)),
             fuel_j1939_percent=(
                 float(node.get("fuelJ1939", 0.0))
@@ -953,7 +952,6 @@ class AppControllerCollectorMixin(AppControllerContract):
         manager.append_snapshot(
             measurement_time=str(timestamp),
             nodes_snapshot=snapshot,
-            reference_note=str(self._collector_reference_note),
         )
 
     def _handle_collector_frame(self, timestamp: str, parsed_id: J1939CanIdentifier, payload: list[int]):

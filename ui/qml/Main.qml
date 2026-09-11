@@ -290,6 +290,46 @@ ApplicationWindow {
         }
     }
 
+    FileDialog {
+        id: chamberSaveDialog
+        title: "Сохранить журнал прогона"
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "csv"
+        nameFilters: ["Журнал прогона (*.csv)", "Все файлы (*)"]
+
+        onAccepted: {
+            if (window.backendController) {
+                window.backendController.saveChamberLog(selectedFile.toString())
+            }
+        }
+    }
+
+    FileDialog {
+        id: chamberLoadDialog
+        title: "Загрузить журнал прогона"
+        nameFilters: ["Журнал прогона (*.csv)", "Все файлы (*)"]
+
+        onAccepted: {
+            if (window.backendController) {
+                window.backendController.loadChamberLog(selectedFile.toString())
+            }
+        }
+    }
+
+    FileDialog {
+        id: chamberTablesDialog
+        title: "Выгрузить посчитанные таблицы"
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "json"
+        nameFilters: ["Расчёт по прогону (*.json)", "Все файлы (*)"]
+
+        onAccepted: {
+            if (window.backendController) {
+                window.backendController.exportChamberTables(selectedFile.toString())
+            }
+        }
+    }
+
     Window {
         id: calibrationWindow
         width: 1480
@@ -322,6 +362,9 @@ ApplicationWindow {
             inputFocus: window.inputFocus
             onSaveProfileRequested: profileSaveDialog.open()
             onLoadProfileRequested: profileLoadDialog.open()
+            onSaveChamberLogRequested: chamberSaveDialog.open()
+            onLoadChamberLogRequested: chamberLoadDialog.open()
+            onExportChamberTablesRequested: chamberTablesDialog.open()
         }
     }
 

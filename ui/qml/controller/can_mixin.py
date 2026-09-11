@@ -69,6 +69,7 @@ class AppControllerCanMixin(AppControllerContract):
             self._handle_calibration_frame(identifier, payload)
             self._handle_diagnostics_frame(identifier, payload)
             self._handle_media_wizard_frame(identifier, payload)
+            self._handle_chamber_frame(identifier, payload)
             if parsed_id is not None:
                 self._handle_diagnostics_j1939_frame(parsed_id, payload)
                 self._handle_collector_frame(formatted_time, parsed_id, payload)

@@ -210,31 +210,6 @@ Card {
                     }
 
                     Text {
-                        text: "Эталон"
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                        Layout.alignment: Qt.AlignVCenter
-                    }
-
-                    // Пометка идёт в каждую строку журнала. Без неё в записи из
-                    // камеры невозможно понять, к какому эталонному конденсатору
-                    // относится строка, и коэффициенты потом не посчитать.
-                    FancyTextField {
-                        id: referenceNoteField
-                        Layout.preferredWidth: 150
-                        Layout.preferredHeight: 30
-                        text: root.appController ? root.appController.collectorReferenceNote : ""
-                        placeholderText: "что подключено"
-                        textColor: root.textMain
-                        bgColor: root.inputBg
-                        borderColor: root.inputBorder
-                        focusBorderColor: root.inputFocus
-                        onAccepted: if (root.appController) root.appController.setCollectorReferenceNote(text)
-                        onEditingFinished: if (root.appController) root.appController.setCollectorReferenceNote(text)
-                    }
-
-                    Text {
                         text: "Шаг, мс"
                         color: root.textSoft
                         font.pixelSize: 11

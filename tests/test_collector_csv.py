@@ -1,11 +1,11 @@
 """Проверки журнала коллектора.
 
-Журнал из климатической камеры это единственный источник данных для расчёта
-температурных коэффициентов. Прогон в камере длится часами и не переделывается,
-поэтому ошибка в записи стоит дороже любой другой.
+Коллектор наблюдает за шиной и пишет всё, что передают узлы. Журнал разбирают
+потом, иногда через недели, и переснять его нельзя, поэтому ошибка в записи
+стоит дороже любой другой.
 
-Тесты закрепляют три вещи: в журнал попадают все величины, нужные для расчёта;
-заголовок совпадает с данными по числу колонок; при появлении нового узла файл
+Тесты закрепляют три вещи: в журнал попадают все величины узла; заголовок
+совпадает с данными по числу колонок; при появлении нового узла файл
 переписывается без потери и без задвоения строк.
 """
 
@@ -51,7 +51,7 @@ def _node_snapshot(node_hex: str, period: int, media: int, fuel_temp: float, boa
 
 
 def test_node_csv_records_everything_needed_for_calibration(tmp_path: Path):
-    """Для расчёта коэффициентов нужны оба контура, обе температуры и пометка эталона."""
+    """В журнале обязаны быть оба контура и обе температуры."""
     manager = CollectorCsvManager("0x2a", tmp_path)
     manager.append_metric(
         measurement_time="12:00:01.500",
@@ -60,7 +60,6 @@ def test_node_csv_records_everything_needed_for_calibration(tmp_path: Path):
         fuel_percent=47.3,
         board_temperature_c=29.8,
         media_ticks=2415,
-        reference_note="эталон 300 пФ",
         fuel_j1939_percent=47.2,
         fuel_from_period_x10=473,
         empty_ticks=4820,
@@ -73,15 +72,14 @@ def test_node_csv_records_everything_needed_for_calibration(tmp_path: Path):
     header = rows[-2]
     data = rows[-1]
 
-    assert header[:6] == [
-        "Время", "Эталон", "Период основного контура", "Период контура вида топлива",
+    assert header[:5] == [
+        "Время", "Период основного контура", "Период контура вида топлива",
         "Температура топлива (°C)", "Температура платы (°C)",
     ]
-    assert data[1] == "эталон 300 пФ"
-    assert data[2] == "7100"
-    assert data[3] == "2415"
-    assert data[4] == "21,3"
-    assert data[5] == "29,8"
+    assert data[1] == "7100"
+    assert data[2] == "2415"
+    assert data[3] == "21,3"
+    assert data[4] == "29,8"
 
 
 def test_node_csv_header_matches_data_width(tmp_path: Path):
@@ -90,7 +88,7 @@ def test_node_csv_header_matches_data_width(tmp_path: Path):
     manager.append_metric(
         measurement_time="12:00:01.500", period_ticks=7100, temperature_c=21.3,
         fuel_percent=47.3, board_temperature_c=29.8, media_ticks=2415,
-        reference_note="воздух", empty_ticks=4820, full_ticks=9640,
+        empty_ticks=4820, full_ticks=9640,
         empty_known=True, full_known=True,
     )
 
@@ -105,24 +103,23 @@ def test_missing_values_leave_empty_cells(tmp_path: Path):
     manager.append_metric(
         measurement_time="12:00:01.500", period_ticks=7100, temperature_c=21.3,
         fuel_percent=47.3, board_temperature_c=None, media_ticks=None,
-        reference_note="", empty_ticks=4820, full_ticks=9640,
+        empty_ticks=4820, full_ticks=9640,
         empty_known=True, full_known=True,
     )
 
     data = _read_rows(tmp_path / "0x2a.csv")[-1]
-    assert data[3] == ""
-    assert data[5] == ""
+    assert data[2] == ""
+    assert data[4] == ""
 
 
 def test_combined_csv_keeps_rows_when_new_node_appears(tmp_path: Path):
     """Появление второго узла переписывает файл, и прежние строки терять нельзя."""
     manager = CollectorCombinedCsvManager(tmp_path)
-    manager.append_snapshot("12:00:01.5", _node_snapshot("0x2a", 7100, 2415, 21.3, 29.8),
-                            reference_note="эталон 300 пФ")
+    manager.append_snapshot("12:00:01.5", _node_snapshot("0x2a", 7100, 2415, 21.3, 29.8))
 
     snapshot = _node_snapshot("0x2a", 7104, 2402, -38.7, -35.1)
     snapshot.update(_node_snapshot("0x2b", 7050, 2390, -38.5, -35.0))
-    manager.append_snapshot("12:00:03.5", snapshot, reference_note="эталон 600 пФ")
+    manager.append_snapshot("12:00:03.5", snapshot)
 
     rows = _read_rows(tmp_path / "all_nodes.csv")
     times = [row[0] for row in rows if row and row[0].startswith("12:")]
@@ -139,24 +136,9 @@ def test_combined_csv_does_not_duplicate_header(tmp_path: Path):
     manager.append_snapshot("12:00:03.5", snapshot)
 
     rows = _read_rows(tmp_path / "all_nodes.csv")
-    header_rows = [row for row in rows if len(row) > 1 and row[1].strip().casefold() == "эталон"]
+    header_rows = [row for row in rows
+                   if len(row) > 1 and row[1].strip().casefold() == "период основного контура"]
     assert len(header_rows) == 1, "строка колонок записана больше одного раза"
-
-
-@pytest.mark.parametrize("note", ["эталон 300 пФ", "Эталон", "без эталона, трубка"])
-def test_reference_note_with_that_word_is_not_taken_for_header(tmp_path: Path, note: str):
-    """Пометка оператора может содержать слово «эталон», и строка обязана уцелеть."""
-    manager = CollectorCombinedCsvManager(tmp_path)
-    manager.append_snapshot("12:00:01.5", _node_snapshot("0x2a", 7100, 2415, 21.3, 29.8),
-                            reference_note=note)
-
-    snapshot = _node_snapshot("0x2a", 7104, 2402, -38.7, -35.1)
-    snapshot.update(_node_snapshot("0x2b", 7050, 2390, -38.5, -35.0))
-    manager.append_snapshot("12:00:03.5", snapshot, reference_note=note)
-
-    rows = _read_rows(tmp_path / "all_nodes.csv")
-    times = [row[0] for row in rows if row and row[0].startswith("12:")]
-    assert times == ["12:00:01.5", "12:00:03.5"]
 
 
 def test_combined_csv_columns_are_aligned(tmp_path: Path):
@@ -164,7 +146,7 @@ def test_combined_csv_columns_are_aligned(tmp_path: Path):
     manager = CollectorCombinedCsvManager(tmp_path)
     snapshot = _node_snapshot("0x2a", 7100, 2415, 21.3, 29.8)
     snapshot.update(_node_snapshot("0x2b", 7050, 2390, 21.1, 29.5))
-    manager.append_snapshot("12:00:01.5", snapshot, reference_note="воздух")
+    manager.append_snapshot("12:00:01.5", snapshot)
 
     rows = _read_rows(tmp_path / "all_nodes.csv")
     data_width = len([row for row in rows if row and row[0].startswith("12:")][0])

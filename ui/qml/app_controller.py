@@ -22,6 +22,7 @@ from ui.qml.collector_sftp_uploader import CollectorSftpConfig, CollectorSftpUpl
 from .controller import (
     AppControllerCalibrationMixin,
     AppControllerCanMixin,
+    AppControllerChamberMixin,
     AppControllerCollectorMixin,
     AppControllerDiagnosticsMixin,
     AppControllerMediaWizardMixin,
@@ -43,6 +44,7 @@ class AppController(
     AppControllerDiagnosticsMixin,
     AppControllerMediaWizardMixin,
     AppControllerProfileMixin,
+    AppControllerChamberMixin,
     AppControllerCanMixin,
     AppControllerRuntimeMixin,
     QObject,
@@ -299,7 +301,6 @@ class AppController(
         # Пометка оператора: что сейчас подключено к прибору в камере.
         # Записывается в каждую строку журнала, чтобы потом было понятно,
         # к какому эталону относится строка.
-        self._collector_reference_note = ""
         self._collector_poll_node_index = 0
         self._collector_poll_phase = 0
         self._collector_pending_requests: dict[tuple[int, int], dict[str, float | int | str]] = {}
@@ -546,5 +547,7 @@ class AppController(
 
         # Окно температурного профиля держит таблицы и сумму внутри модуля.
         self._init_profile_state()
+        # Прогон в камере пользуется таблицами профиля, поэтому идёт после него.
+        self._init_chamber_state()
 
         self._rebuild_can_traffic_view()

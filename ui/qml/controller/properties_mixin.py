@@ -65,6 +65,7 @@ class AppControllerPropertiesMixin(AppControllerContract):
     diagnosticsChanged = Signal()
     mediaWizardChanged = Signal()
     profileChanged = Signal()
+    chamberChanged = Signal()
     softwareVersionChanged = Signal()
 
     @Property("QStringList", notify=devicesChanged)
@@ -858,6 +859,51 @@ class AppControllerPropertiesMixin(AppControllerContract):
         """Цель функции в выдаче текстового отчёта, затем она позволяет скопировать результат проверки целиком."""
         return self._build_diagnostics_report()
 
+    @Property(str, notify=chamberChanged)
+    def chamberLabel(self):
+        """Цель функции в показе текущей пометки, затем окно не теряет её при обновлении."""
+        return str(self._chamber_label)
+
+    @Property(bool, notify=chamberChanged)
+    def chamberBusy(self):
+        """Цель функции в признаке идущего замера, затем она блокирует кнопки на это время."""
+        return bool(self._chamber_busy)
+
+    @Property(str, notify=chamberChanged)
+    def chamberStatusText(self):
+        """Цель функции в подписи о ходе работы, затем она объясняет оператору текущий шаг."""
+        return str(self._chamber_status)
+
+    @Property(str, notify=chamberChanged)
+    def chamberStatusColor(self):
+        """Цель функции в цвете подписи, затем она отделяет успех от предупреждения и отказа."""
+        return str(self._chamber_status_color)
+
+    @Property(int, notify=chamberChanged)
+    def chamberPointCount(self):
+        """Цель функции в счётчике снятых точек, затем оператор видит объём прогона."""
+        return len(self._chamber_points)
+
+    @Property("QVariantList", notify=chamberChanged)
+    def chamberRows(self):
+        """Цель функции в показе журнала прогона, затем она отдаёт последние точки сверху."""
+        return self._chamber_rows()
+
+    @Property("QVariantList", notify=chamberChanged)
+    def chamberCoverageRows(self):
+        """Цель функции в показе полноты прогона, затем она называет, чего не хватает по узлам."""
+        return self._chamber_coverage_rows()
+
+    @Property("QStringList", notify=chamberChanged)
+    def chamberReportLines(self):
+        """Цель функции в перечислении недостающих данных, затем она объясняет отказ расчёта."""
+        return [str(item) for item in self._chamber_report]
+
+    @Property(str, notify=chamberChanged)
+    def chamberFilePath(self):
+        """Цель функции в показе пути журнала прогона, затем оператор видит, куда он сохранён."""
+        return str(self._chamber_file_path)
+
     @Property("QVariantList", notify=profileChanged)
     def profileRows(self):
         """Цель функции в передаче таблиц профиля в окно, затем она отдаёт по строке на каждую величину."""
@@ -909,11 +955,6 @@ class AppControllerPropertiesMixin(AppControllerContract):
     def profileFilePath(self):
         """Цель функции в показе последнего файла профиля, затем она напоминает, откуда взяты таблицы."""
         return str(self._profile_file_path)
-
-    @Property(str, notify=collectorStateChanged)
-    def collectorReferenceNote(self):
-        """Цель функции в выдаче пометки оператора, затем она показывает, что подключено к прибору в камере."""
-        return str(self._collector_reference_note)
 
     @Property(bool, notify=mediaWizardChanged)
     def mediaWizardBusy(self):

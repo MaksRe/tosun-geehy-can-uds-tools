@@ -1,5 +1,6 @@
 from .calibration_mixin import AppControllerCalibrationMixin
 from .can_mixin import AppControllerCanMixin
+from .chamber_mixin import AppControllerChamberMixin
 from .collector_mixin import AppControllerCollectorMixin
 from .contract import AppControllerContract
 from .diagnostics_mixin import AppControllerDiagnosticsMixin
@@ -14,6 +15,7 @@ from .workers import FirmwareLoadWorker, UdsOptionProxy
 __all__ = [
     "AppControllerCalibrationMixin",
     "AppControllerCanMixin",
+    "AppControllerChamberMixin",
     "AppControllerCollectorMixin",
     "AppControllerContract",
     "AppControllerDiagnosticsMixin",

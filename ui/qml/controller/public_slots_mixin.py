@@ -3034,20 +3034,54 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         """Цель функции в загрузке профиля, затем она принимает и свой файл, и расчёт по журналу камеры."""
         self._profile_load_file(self._to_local_path(path))
 
+    @Slot(str)
+    def setChamberLabel(self, note):
+        """Цель функции в пометке того, что сейчас подключено к прибору, затем она попадает в снятую точку."""
+        value = str(note).strip()
+        if value == self._chamber_label:
+            return
+        self._chamber_label = value
+        self.chamberChanged.emit()
+
+    @Slot()
+    def captureChamberPoint(self):
+        """Цель функции в снятии одной точки прогона, затем она усредняет несколько замеров подряд."""
+        self._chamber_capture_point()
+
+    @Slot()
+    def removeLastChamberPoint(self):
+        """Цель функции в отмене последней точки, затем она убирает замер с неверной пометкой."""
+        self._chamber_remove_last_point()
+
+    @Slot()
+    def clearChamberPoints(self):
+        """Цель функции в очистке журнала прогона, затем она готовит окно к новому прогону."""
+        self._chamber_clear_points()
+
+    @Slot()
+    def computeChamberTables(self):
+        """Цель функции в расчёте обеих ступеней по снятым точкам, затем она сразу заполняет таблицы профиля."""
+        self._chamber_compute_tables()
+
+    @Slot(str)
+    def saveChamberLog(self, path):
+        """Цель функции в сохранении журнала прогона, затем прерванный прогон можно продолжить."""
+        self._chamber_save_file(self._to_local_path(path))
+
+    @Slot(str)
+    def loadChamberLog(self, path):
+        """Цель функции в загрузке журнала прогона, затем расчёт можно повторить без прибора."""
+        self._chamber_load_file(self._to_local_path(path))
+
+    @Slot(str)
+    def exportChamberTables(self, path):
+        """Цель функции в сохранении посчитанных таблиц отдельным файлом, затем их можно перенести на другой прибор."""
+        self._chamber_export_tables(self._to_local_path(path))
+
     @Slot(int, int, str)
     def setProfileCell(self, row, column, text):
         """Цель функции в правке одного значения таблицы, затем она пересчитывает контрольную сумму."""
         self._profile_set_cell(int(row), int(column), str(text))
-
-    @Slot(str)
-    def setCollectorReferenceNote(self, note):
-        """Цель функции в пометке текущего состояния стенда, затем она попадает в каждую строку журнала."""
-        text = str(note).strip()
-        if text == self._collector_reference_note:
-            return
-
-        self._collector_reference_note = text
-        self.collectorStateChanged.emit()
 
     @Slot()
     def startMediaWizardWatch(self):

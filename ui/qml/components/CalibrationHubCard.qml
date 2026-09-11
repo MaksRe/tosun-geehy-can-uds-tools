@@ -33,6 +33,9 @@ Card {
 
     signal saveProfileRequested()
     signal loadProfileRequested()
+    signal saveChamberLogRequested()
+    signal loadChamberLogRequested()
+    signal exportChamberTablesRequested()
 
     property int currentSection: 0
 
@@ -55,9 +58,15 @@ Card {
                 : "Опорные точки не сняты"
         }
 
-        if (root.appController.profileBusy)
-            return "Идёт обмен с прибором"
-        return root.appController.profileDeviceStatusText
+        if (index === 2) {
+            if (root.appController.profileBusy)
+                return "Идёт обмен с прибором"
+            return root.appController.profileDeviceStatusText
+        }
+
+        if (root.appController.chamberBusy)
+            return "Идёт замер точки"
+        return "Снято точек: " + root.appController.chamberPointCount
     }
 
     cardColor: "#ffffff"
@@ -170,6 +179,10 @@ Card {
                         {
                             "title": "Температурный профиль",
                             "hint": "Таблицы из климатической камеры"
+                        },
+                        {
+                            "title": "Прогон в камере",
+                            "hint": "Снятие точек и расчёт таблиц"
                         }
                     ]
 
@@ -278,6 +291,20 @@ Card {
                     inputFocus: root.inputFocus
                     onSaveProfileRequested: root.saveProfileRequested()
                     onLoadProfileRequested: root.loadProfileRequested()
+                }
+
+                ChamberCard {
+                    appController: root.appController
+                    cardColor: root.cardColor
+                    cardBorder: root.cardBorder
+                    textMain: root.textMain
+                    textSoft: root.textSoft
+                    inputBg: root.inputBg
+                    inputBorder: root.inputBorder
+                    inputFocus: root.inputFocus
+                    onSaveLogRequested: root.saveChamberLogRequested()
+                    onLoadLogRequested: root.loadChamberLogRequested()
+                    onExportTablesRequested: root.exportChamberTablesRequested()
                 }
             }
         }

@@ -84,7 +84,6 @@ class AppControllerContract:
     _media_wizard_timeout_timer: Any
     _media_wizard_watching: Any
     _media_wizard_write_service: Any
-    _collector_reference_note: Any
     _profile_algorithm_id: Any
     _profile_busy: Any
     _profile_device_crc: Any
@@ -96,6 +95,22 @@ class AppControllerContract:
     _profile_status: Any
     _profile_status_color: Any
     _profile_values: Any
+    _chamber_read_service: Any
+    _chamber_label: Any
+    _chamber_points: Any
+    _chamber_busy: Any
+    _chamber_status: Any
+    _chamber_status_color: Any
+    _chamber_report: Any
+    _chamber_file_path: Any
+    _chamber_queue: Any
+    _chamber_pending: Any
+    _chamber_sample: Any
+    _chamber_samples: Any
+    _chamber_samples_left: Any
+    _chamber_gap_timer: Any
+    _chamber_timeout_timer: Any
+    chamberChanged: Any
     _diagnostics_counter_delta: Any
     _diagnostics_counter_growing: Any
     _diagnostics_counter_prev: Any
