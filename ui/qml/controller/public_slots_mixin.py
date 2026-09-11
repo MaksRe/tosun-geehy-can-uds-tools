@@ -3020,6 +3020,11 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._profile_read_from_device()
 
     @Slot()
+    def verifyProfileOnDevice(self):
+        """Цель функции в сверке записанного профиля, затем она читает его обратно и называет расхождения."""
+        self._profile_verify_on_device()
+
+    @Slot()
     def writeProfileToDevice(self):
         """Цель функции в записи профиля, затем она пишет таблицы, а сумму в самую последнюю очередь."""
         self._profile_write_to_device()
@@ -3057,6 +3062,20 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
     def clearChamberPoints(self):
         """Цель функции в очистке журнала прогона, затем она готовит окно к новому прогону."""
         self._chamber_clear_points()
+
+    @Slot(bool)
+    def setChamberRehearsal(self, enabled):
+        """Цель функции в включении репетиции, затем температура берётся из поля, а не из прибора."""
+        value = bool(enabled)
+        if value == self._chamber_rehearsal:
+            return
+        self._chamber_rehearsal = value
+        self.chamberChanged.emit()
+
+    @Slot(str)
+    def setChamberRehearsalTemperature(self, text):
+        """Цель функции в задании подставной температуры репетиции, затем точки попадают в нужный узел."""
+        self._chamber_set_rehearsal_temperature(text)
 
     @Slot(bool)
     def setChamberExtendLiquid(self, enabled):

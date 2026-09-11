@@ -240,3 +240,75 @@ def test_cell_edit_changes_the_value_and_the_crc():
     assert stub._profile_set_cell(1, 3, "-42")
     assert stub._profile_values["board_main"][6] == -42
     assert stub._profile_calc_crc() != before
+
+
+def _device_answer(stub) -> dict:
+    """Собирает то, что вернул бы прибор при точной записи профиля."""
+    answer = {name: list(stub._profile_values[name])
+              for name, _did, _title, _width in stub.PROFILE_TABLES}
+    answer["algorithm"] = 1
+    answer["generation"] = int(stub._profile_generation)
+    answer["crc"] = stub._profile_calc_crc()
+    answer["crc_actual"] = stub._profile_calc_crc()
+    answer["status"] = 0
+    return answer
+
+
+def test_verification_passes_when_the_device_holds_the_same_tables():
+    """Если в приборе лежит ровно то, что на экране, проверка обязана пройти без замечаний."""
+    stub = _ProfileStub()
+    stub._profile_values["board_main"][0] = 5
+    stub._profile_verify = _device_answer(stub)
+    stub._profile_finish_verify()
+
+    assert stub._profile_verify_report == []
+    assert "пройдена" in stub._profile_status
+
+
+def test_verification_names_the_cell_that_differs():
+    """Расхождение должно называть таблицу и узел, а не просто «не совпало»."""
+    stub = _ProfileStub()
+    stub._profile_values["tube_air_main"] = [4800, 4810, 4820, 4830, 4840, 4850, 4860]
+    answer = _device_answer(stub)
+    answer["tube_air_main"][2] = 0
+    stub._profile_verify = answer
+    stub._profile_finish_verify()
+
+    assert len(stub._profile_verify_report) >= 1
+    assert any("Трубка, основной на воздухе" in item and "0 °C" in item
+               for item in stub._profile_verify_report)
+    assert "не пройдена" in stub._profile_status
+
+
+def test_verification_catches_a_checksum_that_did_not_reach_the_device():
+    """Недописанная сумма это самый опасный случай: таблицы есть, а в работу не идут."""
+    stub = _ProfileStub()
+    stub._profile_values["board_main"][0] = 5
+    answer = _device_answer(stub)
+    answer["crc"] = 0
+    stub._profile_verify = answer
+    stub._profile_finish_verify()
+
+    assert any("сумма профиля" in item for item in stub._profile_verify_report)
+
+
+def test_verification_does_not_touch_the_tables_on_screen():
+    """Проверка обязана только сравнивать: иначе сравнивать было бы уже не с чем."""
+    stub = _ProfileStub()
+    stub._profile_values["tube_air_main"] = [4800, 4810, 4820, 4830, 4840, 4850, 4860]
+    expected = list(stub._profile_values["tube_air_main"])
+
+    stub._profile_verify = {}
+    stub._profile_store_read("tube_air_main", bytes(14))
+
+    assert stub._profile_values["tube_air_main"] == expected
+    assert stub._profile_verify["tube_air_main"] == [0] * 7
+
+
+def test_verification_state_is_cleared_after_an_error():
+    """После обрыва проверка не должна остаться включённой, иначе чтение перестанет работать."""
+    stub = _ProfileStub()
+    stub._profile_verify = {}
+    stub._profile_finish_with_error("таймаут")
+
+    assert stub._profile_verify is None

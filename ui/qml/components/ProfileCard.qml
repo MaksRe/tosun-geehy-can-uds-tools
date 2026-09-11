@@ -111,6 +111,18 @@ Card {
                 enabled: root.appController !== null && !root.busy
                 onClicked: if (root.appController) root.appController.writeProfileToDevice()
             }
+
+            FancyButton {
+                Layout.preferredWidth: 150
+                Layout.preferredHeight: 36
+                text: "Проверить запись"
+                tone: "#7c3aed"
+                toneHover: "#6d28d9"
+                tonePressed: "#5b21b6"
+                toolTipText: "Читает профиль обратно и сверяет с таблицами на экране, называя каждый несовпавший узел"
+                enabled: root.appController !== null && !root.busy
+                onClicked: if (root.appController) root.appController.verifyProfileOnDevice()
+            }
         }
 
         // --- Работа с файлом ---
@@ -233,6 +245,46 @@ Card {
                         font.pixelSize: 13
                         font.family: "Bahnschrift"
                         elide: Text.ElideRight
+                    }
+                }
+            }
+        }
+
+        // --- Расхождения после проверки записи ---
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: verifyLayout.implicitHeight + 16
+            visible: root.appController && root.appController.profileVerifyReport.length > 0
+            radius: 10
+            color: "#fef2f2"
+            border.width: 1
+            border.color: "#fca5a5"
+
+            ColumnLayout {
+                id: verifyLayout
+                anchors.fill: parent
+                anchors.margins: 8
+                spacing: 2
+
+                Text {
+                    text: "Что не совпало с прибором"
+                    color: "#b91c1c"
+                    font.pixelSize: 12
+                    font.bold: true
+                    font.family: "Bahnschrift"
+                }
+
+                Repeater {
+                    model: root.appController ? root.appController.profileVerifyReport : []
+
+                    Text {
+                        required property string modelData
+                        Layout.fillWidth: true
+                        text: "- " + modelData
+                        color: "#b91c1c"
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                        wrapMode: Text.WordWrap
                     }
                 }
             }

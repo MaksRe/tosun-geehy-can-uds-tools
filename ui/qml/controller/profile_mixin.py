@@ -88,6 +88,10 @@ class AppControllerProfileMixin:
         self._profile_device_status = None
 
         self._profile_busy = False
+        # Пока идёт проверка записи, прочитанное складывается сюда, а не в
+        # таблицы на экране: иначе сравнивать было бы уже не с чем.
+        self._profile_verify: dict | None = None
+        self._profile_verify_report: list[str] = []
         self._profile_queue: list[tuple[str, int, object]] = []
         self._profile_status = "Профиль не прочитан."
         self._profile_status_color = "#64748b"
@@ -186,7 +190,10 @@ class AppControllerProfileMixin:
         if not self._profile_queue:
             self._profile_busy = False
             self._profile_step_timer.stop()
-            self._profile_set_status("Готово.", "#16a34a")
+            if self._profile_verify is not None:
+                self._profile_finish_verify()
+            else:
+                self._profile_set_status("Готово.", "#16a34a")
             return True
 
         name, did, payload = self._profile_queue[0]
@@ -217,6 +224,7 @@ class AppControllerProfileMixin:
     def _profile_finish_with_error(self, reason: str):
         self._profile_busy = False
         self._profile_queue = []
+        self._profile_verify = None
         self._profile_step_timer.stop()
         self._profile_set_status(f"Операция прервана: {reason}", "#dc2626")
 
@@ -248,6 +256,10 @@ class AppControllerProfileMixin:
 
     def _profile_store_read(self, name: str, payload: bytes):
         """Раскладывает прочитанные байты по таблицам и служебным полям."""
+        if self._profile_verify is not None:
+            self._profile_store_verify(name, payload)
+            return
+
         if name in self._profile_values:
             count = len(self._profile_values[name])
             if len(payload) >= count * 2:
@@ -271,7 +283,96 @@ class AppControllerProfileMixin:
 
         self.profileChanged.emit()
 
+    def _profile_store_verify(self, name: str, payload: bytes):
+        """Складывает прочитанное в отдельное место, не трогая таблицы на экране."""
+        if name in self._profile_values:
+            count = len(self._profile_values[name])
+            if len(payload) >= count * 2:
+                self._profile_verify[name] = list(struct.unpack(f"<{count}h", payload[:count * 2]))
+            return
+
+        if name == "status":
+            self._profile_verify[name] = payload[0] if payload else 0
+            return
+
+        self._profile_verify[name] = (
+            int.from_bytes(payload[:2], "little", signed=False) if len(payload) >= 2
+            else (payload[0] if payload else 0))
+
+    def _profile_finish_verify(self):
+        """Сверяет прочитанное из прибора с тем, что на экране, и называет расхождения."""
+        read = dict(self._profile_verify or {})
+        self._profile_verify = None
+        problems: list[str] = []
+
+        for name, _did, title, width in self.PROFILE_TABLES:
+            expected = list(self._profile_values[name])
+            actual = read.get(name)
+            if actual is None:
+                problems.append(f"{title}: прибор не отдал таблицу")
+                continue
+            for index, (want, got) in enumerate(zip(expected, actual)):
+                if want == got:
+                    continue
+                node = self._profile_values["nodes"][index // width]
+                problems.append(
+                    f"{title}, узел {node / 10:+.0f} °C: записано {want}, в приборе {got}")
+                break
+
+        crc = self._profile_calc_crc()
+        if read.get("crc") != crc:
+            problems.append(
+                f"сумма профиля: записано 0x{crc:04X}, в приборе "
+                f"0x{int(read.get('crc') or 0):04X}")
+        if read.get("crc_actual") is not None and read.get("crc_actual") != crc:
+            problems.append(
+                f"прибор сам посчитал сумму 0x{int(read['crc_actual']):04X}, а ожидалась 0x{crc:04X}")
+        if read.get("algorithm") != PROFILE_ALGORITHM_ID:
+            problems.append(
+                f"номер алгоритма: ожидался {PROFILE_ALGORITHM_ID}, в приборе {read.get('algorithm')}")
+        if read.get("generation") != int(self._profile_generation):
+            problems.append(
+                f"поколение: записано {int(self._profile_generation)}, в приборе {read.get('generation')}")
+
+        # Состояние применения важнее всего: прибор мог принять запись и всё равно
+        # не взять таблицы в работу.
+        self._profile_device_crc = read.get("crc")
+        self._profile_device_crc_actual = read.get("crc_actual")
+        self._profile_device_status = read.get("status")
+
+        self._profile_verify_report = problems
+        if problems:
+            self._profile_set_status(
+                f"Проверка записи не пройдена, расхождений: {len(problems)}. Смотрите список ниже.",
+                "#dc2626")
+        else:
+            self._profile_set_status(
+                "Проверка записи пройдена: в приборе лежит ровно то, что на экране.", "#16a34a")
+        self.profileChanged.emit()
+
     # ------------------------------------------------------------------ команды
+
+    def _profile_verify_on_device(self) -> bool:
+        """Читает профиль обратно и сверяет его с таблицами на экране.
+
+        Отдельная операция, а не часть записи: прибор подтверждает приём каждой
+        таблицы, но подтверждение не означает, что в памяти лежит именно то, что
+        отправлено. Перед выездом в камеру это стоит проверить явно.
+        """
+        queue = [(name, did, None) for name, did, _title, _width in self.PROFILE_TABLES]
+        queue += [
+            ("algorithm", DID_ALGORITHM, None),
+            ("generation", DID_GENERATION, None),
+            ("crc", DID_CRC, None),
+            ("crc_actual", DID_CRC_ACTUAL, None),
+            ("status", DID_STATUS, None),
+        ]
+        self._profile_verify = {}
+        self._profile_verify_report = []
+        if not self._profile_start_queue(queue, "Проверяю, что записалось в прибор..."):
+            self._profile_verify = None
+            return False
+        return True
 
     def _profile_read_from_device(self) -> bool:
         """Читает из прибора весь профиль и его состояние."""

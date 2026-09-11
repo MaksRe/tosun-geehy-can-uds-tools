@@ -86,6 +86,8 @@ class AppControllerContract:
     _media_wizard_write_service: Any
     _profile_algorithm_id: Any
     _profile_busy: Any
+    _profile_verify: Any
+    _profile_verify_report: Any
     _profile_device_crc: Any
     _profile_device_crc_actual: Any
     _profile_device_status: Any
@@ -103,6 +105,8 @@ class AppControllerContract:
     _chamber_status_color: Any
     _chamber_report: Any
     _chamber_file_path: Any
+    _chamber_rehearsal: Any
+    _chamber_rehearsal_temp_x10: Any
     _chamber_extend_liquid: Any
     _chamber_span_main: Any
     _chamber_span_media: Any

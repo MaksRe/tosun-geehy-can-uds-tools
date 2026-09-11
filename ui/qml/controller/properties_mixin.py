@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import chamber_fit
+
 from PySide6.QtCore import Property, Signal
 
 from uds.data_identifiers import UdsData
@@ -900,6 +902,26 @@ class AppControllerPropertiesMixin(AppControllerContract):
         return [str(item) for item in self._chamber_report]
 
     @Property(bool, notify=chamberChanged)
+    def chamberRehearsal(self):
+        """Цель функции в признаке репетиции, затем окно предупреждает, что температура подставная."""
+        return bool(self._chamber_rehearsal)
+
+    @Property(str, notify=chamberChanged)
+    def chamberRehearsalTemperatureText(self):
+        """Цель функции в показе подставной температуры репетиции, затем поле не теряет её значение."""
+        return f"{self._chamber_rehearsal_temp_x10 / 10:.0f}"
+
+    @Property("QStringList", notify=chamberChanged)
+    def chamberNodeTitles(self):
+        """Цель функции в списке температур сетки, затем окно даёт быстрый выбор узла для репетиции."""
+        return [chamber_fit.node_text(node) for node in chamber_fit.NODES_X10]
+
+    @Property("QVariantList", notify=chamberChanged)
+    def chamberNodeValues(self):
+        """Цель функции в передаче узлов сетки в градусах, затем окно подставляет их одним нажатием."""
+        return [node / 10.0 for node in chamber_fit.NODES_X10]
+
+    @Property(bool, notify=chamberChanged)
     def chamberExtendLiquid(self):
         """Цель функции в признаке достройки строк «в жидкости», затем окно показывает её состояние."""
         return bool(self._chamber_extend_liquid)
@@ -933,6 +955,11 @@ class AppControllerPropertiesMixin(AppControllerContract):
     def profileBusy(self):
         """Цель функции в признаке идущего обмена, затем она блокирует кнопки на время записи."""
         return bool(self._profile_busy)
+
+    @Property("QStringList", notify=profileChanged)
+    def profileVerifyReport(self):
+        """Цель функции в перечислении расхождений после проверки записи, затем виден каждый несовпавший узел."""
+        return [str(item) for item in self._profile_verify_report]
 
     @Property(str, notify=profileChanged)
     def profileStatusText(self):
