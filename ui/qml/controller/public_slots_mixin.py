@@ -3058,6 +3058,25 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         """Цель функции в очистке журнала прогона, затем она готовит окно к новому прогону."""
         self._chamber_clear_points()
 
+    @Slot(bool)
+    def setChamberExtendLiquid(self, enabled):
+        """Цель функции в включении достройки строк «в жидкости», затем расчёт использует постоянный размах."""
+        value = bool(enabled)
+        if value == self._chamber_extend_liquid:
+            return
+        self._chamber_extend_liquid = value
+        self.chamberChanged.emit()
+
+    @Slot(str)
+    def setChamberSpanMain(self, text):
+        """Цель функции в задании размаха основного контура, затем он подставляется вместо измеренного."""
+        self._chamber_set_span("main", text)
+
+    @Slot(str)
+    def setChamberSpanMedia(self, text):
+        """Цель функции в задании размаха контура вида топлива, затем он подставляется вместо измеренного."""
+        self._chamber_set_span("media", text)
+
     @Slot()
     def computeChamberTables(self):
         """Цель функции в расчёте обеих ступеней по снятым точкам, затем она сразу заполняет таблицы профиля."""

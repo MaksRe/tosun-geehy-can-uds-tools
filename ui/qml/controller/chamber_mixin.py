@@ -83,6 +83,13 @@ class AppControllerChamberMixin(AppControllerContract):
         self._chamber_report: list[str] = []
         self._chamber_file_path = ""
 
+        # Достройка строк «в жидкости» по постоянному размаху. Нужна, когда в
+        # камеру нельзя ставить топливо и погружение при каждой температуре не
+        # снять. Пустой размах означает «взять из узла, где пара снята».
+        self._chamber_extend_liquid = False
+        self._chamber_span_main: int | None = None
+        self._chamber_span_media: int | None = None
+
         self._chamber_queue: list[tuple[str, object, bool]] = []
         self._chamber_pending = None
         self._chamber_sample: dict[str, int] = {}
@@ -438,7 +445,11 @@ class AppControllerChamberMixin(AppControllerContract):
             return False
 
         try:
-            result = chamber_fit.compute_tables(self._chamber_points)
+            result = chamber_fit.compute_tables(
+                self._chamber_points,
+                extend_liquid=bool(self._chamber_extend_liquid),
+                span_main=self._chamber_span_main,
+                span_media=self._chamber_span_media)
         except Exception as error:
             self._chamber_set_status(f"Расчёт не выполнен: {error}", "#dc2626")
             return False
@@ -469,7 +480,11 @@ class AppControllerChamberMixin(AppControllerContract):
             self._chamber_set_status("Сохранять нечего: не снято ни одной точки.", "#dc2626")
             return False
         try:
-            result = chamber_fit.compute_tables(self._chamber_points)
+            result = chamber_fit.compute_tables(
+                self._chamber_points,
+                extend_liquid=bool(self._chamber_extend_liquid),
+                span_main=self._chamber_span_main,
+                span_media=self._chamber_span_media)
             result["контрольная_сумма"] = 0
             pathlib.Path(str(path)).write_text(
                 json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -481,6 +496,30 @@ class AppControllerChamberMixin(AppControllerContract):
         return True
 
     # ------------------------------------------------------------------ показ
+
+    def _chamber_set_span(self, which: str, text: str) -> bool:
+        """Разбирает введённый размах. Пустая строка означает «взять из измерения»."""
+        cleaned = str(text).strip().replace(",", ".")
+        if not cleaned:
+            value = None
+        else:
+            try:
+                value = int(round(float(cleaned)))
+            except ValueError:
+                self._chamber_set_status(
+                    "Размах должен быть числом в отсчётах. Оставьте поле пустым, "
+                    "чтобы взять его из снятой пары состояний.", "#dc2626")
+                return False
+            if value <= 0:
+                self._chamber_set_status("Размах должен быть больше нуля.", "#dc2626")
+                return False
+
+        if which == "media":
+            self._chamber_span_media = value
+        else:
+            self._chamber_span_main = value
+        self.chamberChanged.emit()
+        return True
 
     def _chamber_rows(self) -> list:
         """Готовит журнал прогона для показа: последние строки сверху."""

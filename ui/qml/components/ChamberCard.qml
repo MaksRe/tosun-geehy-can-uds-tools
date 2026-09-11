@@ -256,6 +256,104 @@ Card {
             }
         }
 
+        // --- Достройка строк «в жидкости» ---
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: extendLayout.implicitHeight + 18
+            radius: 12
+            color: "#fefce8"
+            border.width: 1
+            border.color: "#fde68a"
+
+            ColumnLayout {
+                id: extendLayout
+                anchors.fill: parent
+                anchors.margins: 9
+                spacing: 6
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    FancySwitch {
+                        id: extendSwitch
+                        checked: root.appController ? root.appController.chamberExtendLiquid : false
+                        enabled: root.appController !== null
+                        onToggled: if (root.appController) root.appController.setChamberExtendLiquid(checked)
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: "Достроить строки «в жидкости» по постоянному размаху"
+                        color: root.textMain
+                        font.pixelSize: 13
+                        font.bold: true
+                        font.family: "Bahnschrift"
+                        elide: Text.ElideRight
+                    }
+
+                    Text {
+                        text: "Размах основного"
+                        color: root.textSoft
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                        Layout.alignment: Qt.AlignVCenter
+                        visible: extendSwitch.checked
+                    }
+
+                    FancyTextField {
+                        id: spanMainField
+                        Layout.preferredWidth: 110
+                        Layout.preferredHeight: 30
+                        visible: extendSwitch.checked
+                        text: root.appController ? root.appController.chamberSpanMainText : ""
+                        placeholderText: "из замера"
+                        textColor: root.textMain
+                        bgColor: root.inputBg
+                        borderColor: root.inputBorder
+                        focusBorderColor: root.inputFocus
+                        onAccepted: if (root.appController) root.appController.setChamberSpanMain(text)
+                        onEditingFinished: if (root.appController) root.appController.setChamberSpanMain(text)
+                    }
+
+                    Text {
+                        text: "Размах вида топлива"
+                        color: root.textSoft
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                        Layout.alignment: Qt.AlignVCenter
+                        visible: extendSwitch.checked
+                    }
+
+                    FancyTextField {
+                        id: spanMediaField
+                        Layout.preferredWidth: 110
+                        Layout.preferredHeight: 30
+                        visible: extendSwitch.checked
+                        text: root.appController ? root.appController.chamberSpanMediaText : ""
+                        placeholderText: "из замера"
+                        textColor: root.textMain
+                        bgColor: root.inputBg
+                        borderColor: root.inputBorder
+                        focusBorderColor: root.inputFocus
+                        onAccepted: if (root.appController) root.appController.setChamberSpanMedia(text)
+                        onEditingFinished: if (root.appController) root.appController.setChamberSpanMedia(text)
+                    }
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: "Нужно, когда в камеру нельзя ставить топливо. Погружение снимается один раз "
+                        + "при комнатной температуре, в остальных узлах размах считается таким же. "
+                        + "Пустое поле означает «взять размах из снятой пары состояний»."
+                    color: root.textSoft
+                    font.pixelSize: 11
+                    font.family: "Bahnschrift"
+                    wrapMode: Text.WordWrap
+                }
+            }
+        }
+
         // --- Расчёт и файлы ---
         RowLayout {
             Layout.fillWidth: true

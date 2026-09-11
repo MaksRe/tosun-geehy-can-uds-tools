@@ -43,6 +43,10 @@ NODE_TOLERANCE_X10 = 30
 # Сколько разных ёмкостей нужно в точке, чтобы разделить сдвиг и растяжение.
 MIN_REFERENCES_PER_NODE = 2
 
+# Наименьший размах между сухой и погружённой трубкой, который примет прибор.
+# То же число задано в прошивке как FUEL_TUBE_MIN_SPAN.
+TUBE_MIN_SPAN = 100
+
 # Пометки состояний трубки по умолчанию.
 AIR_NOTE = "воздух"
 LIQUID_NOTE = "жидкость"
@@ -209,7 +213,12 @@ def apply_board_table(value: float, table, node_x10) -> float:
 
 
 def build_tube_tables(records, board_table, air_note: str, liquid_note: str, report: list[str]):
-    """Строит ряды ступени трубки: показания на воздухе и в опорной жидкости."""
+    """Строит ряды ступени трубки: показания на воздухе и в опорной жидкости.
+
+    Состояния заполняются независимо друг от друга. Так сохраняются те строки
+    «на воздухе», которые сняты, даже если погружение в этом узле сделать не
+    удалось: их потом можно достроить по размаху опорной точки.
+    """
     collected: dict[str, dict[int, dict[str, list[float]]]] = {air_note: {}, liquid_note: {}}
 
     for item in records:
@@ -237,27 +246,112 @@ def build_tube_tables(records, board_table, air_note: str, liquid_note: str, rep
             target["media"].append(apply_board_table(item["media"], board_table, board_x10))
 
     rows = {"air_main": [], "full_main": [], "air_media": [], "full_media": []}
-    missing = []
+    missing_air = []
+    missing_liquid = []
 
     for node in NODES_X10:
         air = collected[air_note].get(node)
         liquid = collected[liquid_note].get(node)
-        if air is None or liquid is None:
-            missing.append(node)
-            for key in rows:
-                rows[key].append(0)
+
+        if air is None:
+            missing_air.append(node)
+            rows["air_main"].append(0)
+            rows["air_media"].append(0)
+        else:
+            rows["air_main"].append(int(round(average(air["main"]))))
+            rows["air_media"].append(int(round(average(air["media"]))) if air["media"] else 0)
+
+        if liquid is None:
+            missing_liquid.append(node)
+            rows["full_main"].append(0)
+            rows["full_media"].append(0)
+        else:
+            rows["full_main"].append(int(round(average(liquid["main"]))))
+            rows["full_media"].append(int(round(average(liquid["media"]))) if liquid["media"] else 0)
+
+    if missing_air:
+        report.append(
+            "нет замера сухой трубки в узлах: "
+            + ", ".join(node_text(node) for node in missing_air)
+        )
+    if missing_liquid:
+        report.append(
+            "нет замера погружённой трубки в узлах: "
+            + ", ".join(node_text(node) for node in missing_liquid)
+        )
+
+    return rows
+
+
+def measured_span(rows, key_air: str, key_full: str):
+    """Возвращает размах из узла, где сняты оба состояния. Опорная точка в приоритете.
+
+    Малый размах здесь не отсеивается: решение о пригодности принимает вызывающая
+    сторона, иначе «пара не снята» и «пара снята, но размах мал» выглядели бы
+    одинаково, и оператор не понял бы, что именно не так.
+    """
+    order = [NODES_X10.index(REFERENCE_X10)] + [
+        index for index in range(len(NODES_X10)) if NODES_X10[index] != REFERENCE_X10
+    ]
+    for index in order:
+        air = rows[key_air][index]
+        full = rows[key_full][index]
+        if air != 0 and full != 0:
+            return full - air, NODES_X10[index]
+    return None, None
+
+
+def extend_liquid_rows(rows, report: list[str], span_main=None, span_media=None):
+    """Достраивает недостающие строки «в жидкости» по постоянному размаху.
+
+    ЗАЧЕМ ЭТО НУЖНО
+    В климатическую камеру часто нельзя ставить топливо, и погружение при каждой
+    температуре снять не получается. Тогда размах между пустым и полным снимают
+    один раз при комнатной температуре, а в остальных узлах считают его таким же.
+
+    ЧТО ЭТО ДАЁТ И ЧЕГО НЕ ДАЁТ
+    Прибор будет править смещение нуля по температуре, то есть основную часть
+    ухода сборки. Масштаб он оставит как есть. Размах меняется в основном из-за
+    проницаемости топлива, а её прибор измеряет контуром вида топлива в реальном
+    времени, поэтому остаётся только тепловое расширение самой трубки.
+    """
+    for key_air, key_full, span, title in (
+        ("air_main", "full_main", span_main, "основного контура"),
+        ("air_media", "full_media", span_media, "контура вида топлива"),
+    ):
+        value = span
+        source = "задан вручную"
+        if value is None:
+            value, node = measured_span(rows, key_air, key_full)
+            source = f"взят из узла {node_text(node)}" if value is not None else ""
+
+        if value is None:
+            report.append(
+                f"строки «в жидкости» для {title} не достроены: "
+                "размах не задан и ни в одном узле не снята пара состояний"
+            )
             continue
 
-        rows["air_main"].append(int(round(average(air["main"]))))
-        rows["full_main"].append(int(round(average(liquid["main"]))))
-        rows["air_media"].append(int(round(average(air["media"]))) if air["media"] else 0)
-        rows["full_media"].append(int(round(average(liquid["media"]))) if liquid["media"] else 0)
+        if value < TUBE_MIN_SPAN:
+            report.append(
+                f"строки «в жидкости» для {title} не достроены: размах {int(value)} отсчётов "
+                f"({source}) меньше {TUBE_MIN_SPAN}, прибор такое приведение не применит"
+            )
+            continue
 
-    if missing:
-        report.append(
-            "нет пары «сухая трубка и погружённая» в узлах: "
-            + ", ".join(node_text(node) for node in missing)
-        )
+        built = []
+        for index, node in enumerate(NODES_X10):
+            if rows[key_air][index] == 0 or rows[key_full][index] != 0:
+                continue
+            rows[key_full][index] = int(round(rows[key_air][index] + value))
+            built.append(node)
+
+        if built:
+            report.append(
+                f"строки «в жидкости» для {title} достроены по размаху "
+                f"{int(value)} отсчётов, {source}, в узлах: "
+                + ", ".join(node_text(node) for node in built)
+            )
 
     return rows
 
@@ -266,12 +360,16 @@ def clamp_i16(value: int) -> int:
     return max(-32768, min(32767, int(value)))
 
 
-def compute_tables(records, air_note: str = AIR_NOTE, liquid_note: str = LIQUID_NOTE) -> dict:
+def compute_tables(records, air_note: str = AIR_NOTE, liquid_note: str = LIQUID_NOTE,
+                   extend_liquid: bool = False, span_main=None, span_media=None) -> dict:
     """Считает обе ступени по списку точек прогона.
 
     Возвращает словарь того же вида, что и файл скрипта прошивки, поэтому окно
     профиля принимает его без всякого преобразования. Ключ «замечания» перечисляет
     всё, чего не хватило: пустой список означает, что таблицы можно записывать.
+
+    Признак extend_liquid включает достройку недостающих строк «в жидкости» по
+    постоянному размаху, см. extend_liquid_rows.
     """
     report: list[str] = []
 
@@ -281,6 +379,8 @@ def compute_tables(records, air_note: str = AIR_NOTE, liquid_note: str = LIQUID_
 
     board_table, fits = build_board_table(stage1, report)
     tube = build_tube_tables(records, board_table, air_note, liquid_note, report)
+    if extend_liquid:
+        tube = extend_liquid_rows(tube, report, span_main=span_main, span_media=span_media)
 
     return {
         "узлы_x10": list(NODES_X10),

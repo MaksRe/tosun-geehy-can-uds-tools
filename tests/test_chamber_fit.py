@@ -161,3 +161,103 @@ def test_result_is_accepted_by_the_profile_window():
     assert set(result) >= {"узлы_x10", "ступень_платы", "ступень_трубки", "замечания"}
     assert set(result["ступень_трубки"]) == {"air_main", "full_main", "air_media", "full_media"}
     assert len(result["узлы_x10"]) == len(chamber_fit.NODES_X10)
+
+
+def _run_without_liquid_above_room() -> list[dict]:
+    """Прогон, где погружение снято только при комнатной температуре.
+
+    Так выглядит реальный выезд, когда в камеру нельзя ставить топливо: эталоны
+    и сухую трубку снимают во всех узлах, а погружение только рядом с камерой.
+    """
+    records = []
+    for point in _synthetic_run():
+        if point["note"] != chamber_fit.LIQUID_NOTE:
+            records.append(point)
+            continue
+        if point["fuel_temp_x10"] == chamber_fit.REFERENCE_X10:
+            records.append(point)
+    return records
+
+
+def test_air_rows_survive_when_liquid_is_missing():
+    """Снятые строки «на воздухе» нельзя терять из-за того, что нет погружения."""
+    result = chamber_fit.compute_tables(_run_without_liquid_above_room())
+    tube = result["ступень_трубки"]
+
+    assert all(value != 0 for value in tube["air_main"]), "строки на воздухе обнулились"
+    index = chamber_fit.NODES_X10.index(chamber_fit.REFERENCE_X10)
+    assert tube["full_main"][index] != 0, "измеренное погружение потерялось"
+    assert sum(1 for value in tube["full_main"] if value == 0) == len(chamber_fit.NODES_X10) - 1
+
+
+def test_liquid_rows_are_built_from_the_reference_span():
+    """Недостающее погружение достраивается по размаху опорной точки."""
+    result = chamber_fit.compute_tables(_run_without_liquid_above_room(), extend_liquid=True)
+    tube = result["ступень_трубки"]
+
+    index = chamber_fit.NODES_X10.index(chamber_fit.REFERENCE_X10)
+    span = tube["full_main"][index] - tube["air_main"][index]
+    assert span >= chamber_fit.TUBE_MIN_SPAN
+
+    for position in range(len(chamber_fit.NODES_X10)):
+        if position == index:
+            continue
+        built = tube["full_main"][position] - tube["air_main"][position]
+        assert built == span, "размах достроенного узла разошёлся с опорным"
+
+
+def test_built_rows_are_named_in_the_report():
+    """Достройка это допущение, и она обязана быть видна оператору, а не молчать."""
+    result = chamber_fit.compute_tables(_run_without_liquid_above_room(), extend_liquid=True)
+    assert any("достроены по размаху" in item for item in result["замечания"])
+
+
+def test_span_given_by_hand_wins_over_the_measured_one():
+    """Заданный вручную размах имеет приоритет: оператор мог снять его точнее."""
+    result = chamber_fit.compute_tables(
+        _run_without_liquid_above_room(), extend_liquid=True, span_main=5000)
+    tube = result["ступень_трубки"]
+
+    index = chamber_fit.NODES_X10.index(chamber_fit.REFERENCE_X10)
+    for position in range(len(chamber_fit.NODES_X10)):
+        if position == index:
+            continue
+        assert tube["full_main"][position] - tube["air_main"][position] == 5000
+
+
+def test_too_small_span_is_refused():
+    """Прибор не примет приведение при малом размахе, и расчёт обязан предупредить."""
+    result = chamber_fit.compute_tables(
+        _run_without_liquid_above_room(), extend_liquid=True, span_main=50)
+    assert any("меньше" in item for item in result["замечания"])
+    assert all(value == 0 for value in result["ступень_трубки"]["full_main"][:3])
+
+
+def test_small_span_and_missing_pair_are_told_apart():
+    """«Пара не снята» и «пара снята, но размах мал» это разные причины отказа."""
+    records = [point for point in _synthetic_run() if point["note"] != chamber_fit.LIQUID_NOTE]
+    no_pair = chamber_fit.compute_tables(records, extend_liquid=True)
+    assert any("ни в одном узле не снята пара" in item for item in no_pair["замечания"])
+
+    small = chamber_fit.compute_tables(
+        _run_without_liquid_above_room(), extend_liquid=True, span_main=50)
+    assert not any("ни в одном узле не снята пара" in item for item in small["замечания"])
+
+
+def test_extension_without_any_span_says_so():
+    """Если размах взять неоткуда, достройка не выполняется и молчать об этом нельзя."""
+    records = [point for point in _synthetic_run() if point["note"] != chamber_fit.LIQUID_NOTE]
+    result = chamber_fit.compute_tables(records, extend_liquid=True)
+
+    assert any("не достроены" in item for item in result["замечания"])
+    assert all(value == 0 for value in result["ступень_трубки"]["full_main"])
+
+
+def test_measured_rows_are_never_overwritten():
+    """Там, где погружение снято, достройка не должна подменять измерение."""
+    full_run = _synthetic_run()
+    plain = chamber_fit.compute_tables(full_run)["ступень_трубки"]
+    extended = chamber_fit.compute_tables(full_run, extend_liquid=True)["ступень_трубки"]
+
+    assert plain["full_main"] == extended["full_main"]
+    assert plain["full_media"] == extended["full_media"]

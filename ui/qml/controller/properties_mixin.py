@@ -899,6 +899,21 @@ class AppControllerPropertiesMixin(AppControllerContract):
         """Цель функции в перечислении недостающих данных, затем она объясняет отказ расчёта."""
         return [str(item) for item in self._chamber_report]
 
+    @Property(bool, notify=chamberChanged)
+    def chamberExtendLiquid(self):
+        """Цель функции в признаке достройки строк «в жидкости», затем окно показывает её состояние."""
+        return bool(self._chamber_extend_liquid)
+
+    @Property(str, notify=chamberChanged)
+    def chamberSpanMainText(self):
+        """Цель функции в показе заданного размаха основного контура, затем пустая строка означает «из измерения»."""
+        return "" if self._chamber_span_main is None else str(int(self._chamber_span_main))
+
+    @Property(str, notify=chamberChanged)
+    def chamberSpanMediaText(self):
+        """Цель функции в показе заданного размаха контура вида топлива, затем пустая строка означает «из измерения»."""
+        return "" if self._chamber_span_media is None else str(int(self._chamber_span_media))
+
     @Property(str, notify=chamberChanged)
     def chamberFilePath(self):
         """Цель функции в показе пути журнала прогона, затем оператор видит, куда он сохранён."""

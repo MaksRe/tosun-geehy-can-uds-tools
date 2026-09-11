@@ -103,6 +103,9 @@ class AppControllerContract:
     _chamber_status_color: Any
     _chamber_report: Any
     _chamber_file_path: Any
+    _chamber_extend_liquid: Any
+    _chamber_span_main: Any
+    _chamber_span_media: Any
     _chamber_queue: Any
     _chamber_pending: Any
     _chamber_sample: Any
