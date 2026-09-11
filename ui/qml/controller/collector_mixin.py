@@ -363,10 +363,6 @@ class AppControllerCollectorMixin(AppControllerContract):
                 "fullPeriod": 0,
                 "emptyKnown": False,
                 "fullKnown": False,
-                "k1X100": 0,
-                "k0Count": 0,
-                "k1Known": False,
-                "k0Known": False,
                 "temperature": 0.0,
                 "temperatureKnown": False,
                 "calibrationRefreshCountdown": int(self._collector_calibration_refresh_cycles),
@@ -410,8 +406,6 @@ class AppControllerCollectorMixin(AppControllerContract):
             int(UdsData.full_fuel_tank.pid) & 0xFFFF: "full_fuel_tank",
             int(UdsData.raw_temperature.pid) & 0xFFFF: "raw_temperature",
             int(UdsData.raw_fuel_level.pid) & 0xFFFF: "raw_fuel_level",
-            int(UdsData.fuel_temp_comp_k1_x100.pid) & 0xFFFF: "fuel_temp_comp_k1_x100",
-            int(UdsData.fuel_temp_comp_k0_count.pid) & 0xFFFF: "fuel_temp_comp_k0_count",
         }
         return labels.get(normalized, f"DID_0x{normalized:04X}")
 
@@ -921,10 +915,6 @@ class AppControllerCollectorMixin(AppControllerContract):
             full_ticks=int(node.get("fullPeriod", 0)),
             empty_known=bool(node.get("emptyKnown", False)),
             full_known=bool(node.get("fullKnown", False)),
-            k1_x100=int(node.get("k1X100", 0)),
-            k0_count=int(node.get("k0Count", 0)),
-            k1_known=bool(node.get("k1Known", False)),
-            k0_known=bool(node.get("k0Known", False)),
         )
         self._append_collector_combined_csv(timestamp)
 
@@ -950,10 +940,6 @@ class AppControllerCollectorMixin(AppControllerContract):
                 "fullPeriod": int(node.get("fullPeriod", 0)),
                 "emptyKnown": bool(node.get("emptyKnown", False)),
                 "fullKnown": bool(node.get("fullKnown", False)),
-                "k1X100": int(node.get("k1X100", 0)),
-                "k0Count": int(node.get("k0Count", 0)),
-                "k1Known": bool(node.get("k1Known", False)),
-                "k0Known": bool(node.get("k0Known", False)),
             }
         return snapshot
 
@@ -1137,25 +1123,6 @@ class AppControllerCollectorMixin(AppControllerContract):
             node["mediaRaw"] = int(value)
             node["mediaRawKnown"] = True
             nodes_changed = True
-        elif did == int(UdsData.fuel_temp_comp_k1_x100.pid):
-            bits = max(8, int(UdsData.fuel_temp_comp_k1_x100.size) * 8)
-            signed_k1 = self._decode_signed(value, bits)
-            if int(node.get("k1X100", 0)) != int(signed_k1):
-                node["k1X100"] = int(signed_k1)
-                nodes_changed = True
-            if not bool(node.get("k1Known", False)):
-                node["k1Known"] = True
-                nodes_changed = True
-        elif did == int(UdsData.fuel_temp_comp_k0_count.pid):
-            bits = max(8, int(UdsData.fuel_temp_comp_k0_count.size) * 8)
-            signed_k0 = self._decode_signed(value, bits)
-            if int(node.get("k0Count", 0)) != int(signed_k0):
-                node["k0Count"] = int(signed_k0)
-                nodes_changed = True
-            if not bool(node.get("k0Known", False)):
-                node["k0Known"] = True
-                nodes_changed = True
-
         if has_trend_update:
             self._append_collector_trend_sample(node_sa, node, str(node.get("lastSeen", "-")))
 
@@ -1230,12 +1197,6 @@ class AppControllerCollectorMixin(AppControllerContract):
             elif not bool(node.get("fullKnown", False)):
                 poll_var = UdsData.full_fuel_tank
                 use_fast_schedule = False
-            elif not bool(node.get("k1Known", False)):
-                poll_var = UdsData.fuel_temp_comp_k1_x100
-                use_fast_schedule = False
-            elif not bool(node.get("k0Known", False)):
-                poll_var = UdsData.fuel_temp_comp_k0_count
-                use_fast_schedule = False
             else:
                 try:
                     refresh_countdown = int(node.get("calibrationRefreshCountdown", self._collector_calibration_refresh_cycles))
@@ -1243,19 +1204,17 @@ class AppControllerCollectorMixin(AppControllerContract):
                     refresh_countdown = int(self._collector_calibration_refresh_cycles)
 
                 if refresh_countdown <= 0:
+                    # Обновляются только отметки бака: чередование идёт по двум
+                    # значениям, поэтому фаза считается по модулю два.
                     try:
-                        refresh_phase = int(node.get("calibrationRefreshPhase", 0)) & 0x03
+                        refresh_phase = int(node.get("calibrationRefreshPhase", 0)) & 0x01
                     except (TypeError, ValueError):
                         refresh_phase = 0
                     if refresh_phase == 0:
                         poll_var = UdsData.empty_fuel_tank
-                    elif refresh_phase == 1:
-                        poll_var = UdsData.full_fuel_tank
-                    elif refresh_phase == 2:
-                        poll_var = UdsData.fuel_temp_comp_k1_x100
                     else:
-                        poll_var = UdsData.fuel_temp_comp_k0_count
-                    node["calibrationRefreshPhase"] = (refresh_phase + 1) % 4
+                        poll_var = UdsData.full_fuel_tank
+                    node["calibrationRefreshPhase"] = (refresh_phase + 1) % 2
                     node["calibrationRefreshCountdown"] = int(self._collector_calibration_refresh_cycles)
                     use_fast_schedule = False
                 else:

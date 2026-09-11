@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import csv
 from datetime import datetime
@@ -503,13 +503,11 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self.infoMessage.emit("SFTP", "Текущая сессия поставлена в очередь выгрузки.")
 
     @staticmethod
-    def _calibration_dump_required_dids() -> tuple[int, int, int, int, int]:
-        """Цель функции в фиксации состава дампа калибровки, затем она возвращает DID 0%/100%/K1/K0/zero trim."""
+    def _calibration_dump_required_dids() -> tuple[int, int, int]:
+        """Цель функции в фиксации состава дампа калибровки, затем она возвращает DID 0%/100%/подгонка нуля."""
         return (
             int(UdsData.empty_fuel_tank.pid),
             int(UdsData.full_fuel_tank.pid),
-            int(UdsData.fuel_temp_comp_k1_x100.pid),
-            int(UdsData.fuel_temp_comp_k0_count.pid),
             int(UdsData.fuel_zero_trim_count.pid),
         )
 
@@ -521,10 +519,6 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             return "0% (DID 0x0012)"
         if did_value == int(UdsData.full_fuel_tank.pid):
             return "100% (DID 0x0013)"
-        if did_value == int(UdsData.fuel_temp_comp_k1_x100.pid):
-            return "K1 (DID 0x001B)"
-        if did_value == int(UdsData.fuel_temp_comp_k0_count.pid):
-            return "K0 (DID 0x001C)"
         if did_value == int(UdsData.fuel_zero_trim_count.pid):
             return "Смещение 0% (DID 0x002D)"
         return f"DID 0x{did_value:04X}"
@@ -571,8 +565,6 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         node_sa: int,
         level_0: int,
         level_100: int,
-        k1: int,
-        k0: int,
         zero_trim: int,
         file_path: str,
         source_text: str,
@@ -583,8 +575,6 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._calibration_backup_node_sa = int(node_sa) & 0xFF
         self._calibration_backup_level_0 = int(level_0)
         self._calibration_backup_level_100 = int(level_100)
-        self._calibration_backup_k1 = int(k1)
-        self._calibration_backup_k0 = int(k0)
         self._calibration_backup_zero_trim = int(zero_trim)
         self._calibration_backup_file_path = str(file_path or "")
         self._calibration_backup_source_text = str(source_text or "").strip()
@@ -609,8 +599,8 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             self.infoMessage.emit("Калибровка", "Не удалось определить целевой узел для дампа.")
             return
 
-        did0, did100, didk1, didk0, didtrim = self._calibration_dump_required_dids()
-        missing = [did for did in (did0, did100, didk1, didk0, didtrim) if did not in values]
+        did0, did100, didtrim = self._calibration_dump_required_dids()
+        missing = [did for did in (did0, did100, didtrim) if did not in values]
         if len(missing) > 0:
             missing_text = ", ".join(f"0x{int(did) & 0xFFFF:04X}" for did in missing)
             error_text = f"Калибровка: дамп не сохранен, не получены DID: {missing_text}."
@@ -620,15 +610,15 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
         saved_at_text = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
         payload = {
-            "format": "fuel-intake-calibration-dump-v1",
+            # Номер формата поднят: в дампе больше нет K1 и K0, их убрали
+            # вместе с прежней температурной компенсацией.
+            "format": "fuel-intake-calibration-dump-v2",
             "savedAt": saved_at_text,
             "nodeSaHex": f"0x{int(target_sa) & 0xFF:02X}",
             "nodeSaDec": int(target_sa) & 0xFF,
             "values": {
                 "did_0x0012": int(values[did0]),
                 "did_0x0013": int(values[did100]),
-                "did_0x001B": int(values[didk1]),
-                "did_0x001C": int(values[didk0]),
                 "did_0x002D": int(values[didtrim]),
             },
         }
@@ -645,8 +635,6 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             node_sa=int(target_sa) & 0xFF,
             level_0=int(values[did0]),
             level_100=int(values[did100]),
-            k1=int(values[didk1]),
-            k0=int(values[didk0]),
             zero_trim=int(values[didtrim]),
             file_path=file_path,
             source_text="Источник дампа: считан из МК.",
@@ -732,20 +720,17 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             "saved_at": str(raw_payload.get("savedAt", "")).strip(),
             "level_0": cls._parse_calibration_dump_value(values.get("did_0x0012"), "did_0x0012"),
             "level_100": cls._parse_calibration_dump_value(values.get("did_0x0013"), "did_0x0013"),
-            "k1": cls._parse_calibration_dump_value(values.get("did_0x001B"), "did_0x001B"),
-            "k0": cls._parse_calibration_dump_value(values.get("did_0x001C"), "did_0x001C"),
             "zero_trim": cls._parse_calibration_dump_value(values.get("did_0x002D"), "did_0x002D"),
         }
         return result
 
     @staticmethod
-    def _calibration_backup_all_nodes_required_dids() -> tuple[int, int, int, int]:
-        """Цель функции в фиксации состава резервной копии, затем она возвращает DID 0%/100%/K1/K0 для опроса."""
+    def _calibration_backup_all_nodes_required_dids() -> tuple[int, int, int]:
+        """Цель функции в фиксации состава резервной копии, затем она возвращает DID 0%/100%/подгонка нуля."""
         return (
             int(UdsData.empty_fuel_tank.pid),
             int(UdsData.full_fuel_tank.pid),
-            int(UdsData.fuel_temp_comp_k1_x100.pid),
-            int(UdsData.fuel_temp_comp_k0_count.pid),
+            int(UdsData.fuel_zero_trim_count.pid),
         )
 
     def _resolve_calibration_backup_all_nodes_targets(self) -> list[int]:
@@ -783,23 +768,24 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             return fallback_dir
 
     def _write_calibration_backup_all_nodes_csv(self, values_by_sa: dict[int, dict[int, int]]) -> str:
-        """Цель функции в сохранении резервной копии по всем узлам, затем она пишет отдельный UTF-8 CSV с 0%/100%/K1/K0."""
+        """Цель функции в сохранении резервной копии по всем узлам, затем она пишет отдельный UTF-8 CSV с 0%/100%/подгонкой нуля."""
         output_dir = self._resolve_calibration_backup_all_nodes_directory()
         file_name = f"calibration_backup_all_nodes_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         csv_path = output_dir / file_name
 
-        did0, did100, didk1, didk0 = self._calibration_backup_all_nodes_required_dids()
+        did0, did100, didtrim = self._calibration_backup_all_nodes_required_dids()
         with csv_path.open("w", newline="", encoding="utf-8") as file:
             writer = csv.writer(file, delimiter=";")
-            writer.writerow(("Время", "Узел", "0% (DID 0x0012)", "100% (DID 0x0013)", "K1 (DID 0x001B)", "K0 (DID 0x001C)"))
+            writer.writerow((
+                "Время", "Узел", "0% (DID 0x0012)", "100% (DID 0x0013)", "Подгонка нуля (DID 0x002D)",
+            ))
             timestamp_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             for node_sa in sorted(values_by_sa.keys()):
                 node_values = values_by_sa.get(int(node_sa) & 0xFF, {})
                 level0 = node_values.get(did0, "")
                 level100 = node_values.get(did100, "")
-                k1_value = node_values.get(didk1, "")
-                k0_value = node_values.get(didk0, "")
-                writer.writerow((timestamp_text, f"0x{int(node_sa) & 0xFF:02X}", level0, level100, k1_value, k0_value))
+                zero_trim_value = node_values.get(didtrim, "")
+                writer.writerow((timestamp_text, f"0x{int(node_sa) & 0xFF:02X}", level0, level100, zero_trim_value))
 
         return str(csv_path)
 
@@ -1418,62 +1404,6 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         else:
             self._append_log(f"Калибровка: выбран целевой узел 0x{self._calibration_target_node_sa:02X}.", RowColor.blue)
 
-    @Slot(int)
-    def setSelectedCalibrationTempCompDatasetIndex(self, index):
-        """Цель функции в выборе набора CSV для офлайн-анализа, затем она пересчитывает графики и метрики по выбранному узлу."""
-        try:
-            parsed_index = int(index)
-        except (TypeError, ValueError):
-            return
-
-        if parsed_index < 0 or parsed_index >= len(self._calibration_temp_comp_dataset_values):
-            return
-
-        selected_sa = int(self._calibration_temp_comp_dataset_values[parsed_index]) & 0xFF
-        if (
-            self._selected_calibration_temp_comp_dataset_index == parsed_index
-            and len(self._calibration_temp_comp_samples) > 0
-        ):
-            return
-
-        self._selected_calibration_temp_comp_dataset_index = parsed_index
-        self.calibrationTempCompChanged.emit()
-
-        self._set_calibration_temp_comp_operation_status(
-            f"Переключение набора CSV на узел 0x{selected_sa:02X}...",
-            busy=True,
-            progress_percent=0,
-            determinate=False,
-        )
-        QCoreApplication.processEvents()
-
-        if not self._apply_calibration_temp_comp_node_samples(
-            selected_sa,
-            clear_coefficients=False,
-        ):
-            self._set_calibration_temp_comp_operation_status(
-                f"Переключение набора CSV завершено с ошибкой: данные узла 0x{selected_sa:02X} недоступны.",
-                busy=False,
-                progress_percent=100,
-                determinate=True,
-            )
-            self._append_log(
-                f"Калибровка: не удалось применить набор CSV для узла 0x{selected_sa:02X}.",
-                RowColor.red,
-            )
-            return
-
-        self._set_calibration_temp_comp_operation_status(
-            f"Переключение набора CSV завершено: активен узел 0x{selected_sa:02X}.",
-            busy=False,
-            progress_percent=100,
-            determinate=True,
-        )
-        self._append_log(
-            f"Калибровка: выбран набор CSV для узла 0x{selected_sa:02X}.",
-            RowColor.blue,
-        )
-
     @Slot()
     def toggleCalibration(self):
         """Цель функции в удобном запуске/остановке калибровки, затем она переключает сценарий одной кнопкой."""
@@ -1519,7 +1449,8 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
         self._calibration_active = True
         self._calibration_runtime_target_sa = None
-        self._reset_calibration_temp_comp_state(clear_samples=False, clear_coefficients=False)
+        self._reset_calibration_zero_trim_air_zero_adjust_state()
+        self._reset_calibration_zero_trim_verify_state()
         self.calibrationStateChanged.emit()
         self._reset_calibration_wizard_state()
         self._reset_calibration_sequence_state()
@@ -1595,76 +1526,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._append_log("Калибровка: чтение уровня 100%.", RowColor.blue)
 
     @Slot()
-    def clearCalibrationTempCompSamples(self):
-        """Цель функции в очистке анализируемой выборки, затем она удаляет собранные точки без сброса текущих K1/K0."""
-        self._set_calibration_temp_comp_operation_status(
-            "Очистка офлайн-данных и сброс графиков...",
-            busy=True,
-            progress_percent=0,
-            determinate=False,
-        )
-        QCoreApplication.processEvents()
-        self._reset_calibration_temp_comp_state(
-            clear_samples=True,
-            clear_coefficients=False,
-            clear_cached_nodes=True,
-        )
-        self._set_calibration_temp_comp_operation_status(
-            "Очистка завершена: графики и метрики сброшены.",
-            busy=False,
-            progress_percent=100,
-            determinate=True,
-        )
-        self._append_log("Калибровка: точки температурной компенсации очищены.", RowColor.blue)
-
-    @Slot()
-    def readCalibrationTempCompK1(self):
-        """Цель функции в чтении коэффициента компенсации, затем она отправляет запрос DID 0x001B."""
-        if not self._can.is_connect:
-            self.infoMessage.emit("Калибровка", "Сначала подключите CAN-адаптер.")
-            return
-        if not self._can.is_trace:
-            self.infoMessage.emit("Калибровка", "Сначала включите трассировку CAN.")
-            return
-
-        if self._calibration_temp_comp_adv_read_active:
-            self._stop_calibration_temp_comp_advanced_read_sequence()
-            self._append_log(
-                "Калибровка: последовательное чтение расширенных DID остановлено для чтения K1.",
-                RowColor.yellow,
-            )
-
-        if not self._request_calibration_temp_comp_k1_read():
-            self.infoMessage.emit("Калибровка", "Не удалось отправить чтение DID 0x001B.")
-            return
-
-        self._append_log("Калибровка: чтение коэффициента K1 (DID 0x001B).", RowColor.blue)
-
-    @Slot()
-    def readCalibrationTempCompK0(self):
-        """Цель функции в чтении коэффициента смещения, затем она отправляет запрос DID 0x001C."""
-        if not self._can.is_connect:
-            self.infoMessage.emit("Калибровка", "Сначала подключите CAN-адаптер.")
-            return
-        if not self._can.is_trace:
-            self.infoMessage.emit("Калибровка", "Сначала включите трассировку CAN.")
-            return
-
-        if self._calibration_temp_comp_adv_read_active:
-            self._stop_calibration_temp_comp_advanced_read_sequence()
-            self._append_log(
-                "Калибровка: последовательное чтение расширенных DID остановлено для чтения K0.",
-                RowColor.yellow,
-            )
-
-        if not self._request_calibration_temp_comp_k0_read():
-            self.infoMessage.emit("Калибровка", "Не удалось отправить чтение DID 0x001C.")
-            return
-
-        self._append_log("Калибровка: чтение коэффициента K0 (DID 0x001C).", RowColor.blue)
-
-    @Slot()
-    def readCalibrationTempCompZeroTrim(self):
+    def readCalibrationZeroTrim(self):
         """Цель функции в чтении коррекции zero trim, затем она отправляет прямой запрос DID 0x002D."""
         if not self._can.is_connect:
             self.infoMessage.emit("Калибровка", "Сначала подключите CAN-адаптер.")
@@ -1673,95 +1535,17 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             self.infoMessage.emit("Калибровка", "Сначала включите трассировку CAN.")
             return
 
-        if self._calibration_temp_comp_adv_read_active:
-            self._stop_calibration_temp_comp_advanced_read_sequence()
-            self._append_log(
-                "Калибровка: последовательное чтение расширенных DID остановлено для чтения zero trim.",
-                RowColor.yellow,
-            )
-
-        if not self._request_calibration_temp_comp_zero_trim_read():
+        if not self._request_calibration_zero_trim_read():
             self.infoMessage.emit("Калибровка", "Не удалось отправить чтение DID 0x002D.")
             return
 
         self._append_log("Калибровка: чтение коррекции zero trim (DID 0x002D).", RowColor.blue)
 
     @Slot()
-    def autoAdjustCalibrationTempCompK0ForCurrentPoint(self):
-        """Цель функции в автоподстройке K0 по фактическому выходу МК, затем она читает 0x0012/0x0013/0x0018/0x001C и записывает рассчитанный DID 0x001C."""
-        if not self._ensure_calibration_write_ready("автоподстройка K0 к 0%"):
-            return
-
-        if self._calibration_temp_comp_adv_read_active:
-            self._stop_calibration_temp_comp_advanced_read_sequence()
-            self._append_log(
-                "Калибровка: последовательное чтение расширенных DID остановлено для автоподстройки K0.",
-                RowColor.yellow,
-            )
-
-        if len(self._calibration_write_verify_pending) > 0:
-            self.infoMessage.emit(
-                "Калибровка",
-                "Дождитесь завершения текущей автопроверки DID перед автоподстройкой K0.",
-            )
-            return
-        if bool(self._calibration_temp_comp_zero_trim_air_zero_adjust_active):
-            self.infoMessage.emit(
-                "Калибровка",
-                "Сначала дождитесь завершения автоподстройки zero trim.",
-            )
-            return
-
-        self._calibration_temp_comp_k0_air_zero_adjust_active = True
-        self._calibration_temp_comp_k0_air_zero_adjust_empty_period = None
-        self._calibration_temp_comp_k0_air_zero_adjust_full_period = None
-        self._calibration_temp_comp_k0_air_zero_adjust_level_x10 = None
-        self._calibration_temp_comp_k0_air_zero_adjust_current_k0 = None
-
-        if not self._request_next_calibration_temp_comp_k0_air_zero_adjust_did():
-            self._reset_calibration_temp_comp_k0_air_zero_adjust_state()
-            self._set_calibration_temp_comp_operation_status(
-                "Автоподстройка K0 не запущена: не удалось отправить первый DID-запрос.",
-                busy=False,
-                progress_percent=100,
-                determinate=True,
-            )
-            self.infoMessage.emit(
-                "Калибровка",
-                "Не удалось отправить первый DID-запрос для автоподстройки K0.",
-            )
-            return
-
-        self._set_calibration_temp_comp_operation_status(
-            "Автоподстройка K0: последовательное чтение DID 0x0012 -> 0x0013 -> 0x0018 -> 0x001C...",
-            busy=True,
-            progress_percent=0,
-            determinate=False,
-        )
-        self._append_log(
-            "Калибровка: запуск автоподстройки K0 по фактическому выходу МК (DID 0x0012/0x0013/0x0018/0x001C).",
-            RowColor.blue,
-        )
-
-    @Slot()
-    def autoAdjustCalibrationTempCompZeroTrimForCurrentPoint(self):
+    def autoAdjustCalibrationZeroTrimForCurrentPoint(self):
         """Цель функции в автоподстройке zero trim по фактическому выходу МК, затем она читает 0x0012/0x0013/0x0018/0x002D и записывает рассчитанный DID 0x002D."""
         if not self._ensure_calibration_write_ready("автоподстройка zero trim к 0%"):
             return
-
-        if len(self._calibration_temp_comp_recommendation_apply_queue) > 0:
-            self.infoMessage.emit(
-                "Калибровка",
-                "Дождитесь завершения пакетной записи рекомендаций K1/K0 перед автоподгонкой zero trim.",
-            )
-            return
-
-        if self._calibration_temp_comp_adv_read_active:
-            self._stop_calibration_temp_comp_advanced_read_sequence()
-            self._append_log(
-                "Калибровка: последовательное чтение расширенных DID остановлено для автоподстройки zero trim.",
-                RowColor.yellow,
-            )
 
         if len(self._calibration_write_verify_pending) > 0:
             self.infoMessage.emit(
@@ -1769,23 +1553,16 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
                 "Дождитесь завершения текущей автопроверки DID перед автоподстройкой zero trim.",
             )
             return
-        if bool(self._calibration_temp_comp_k0_air_zero_adjust_active):
-            self.infoMessage.emit(
-                "Калибровка",
-                "Сначала дождитесь завершения автоподстройки K0.",
-            )
-            return
+        self._calibration_zero_trim_air_zero_adjust_active = True
+        self._calibration_zero_trim_air_zero_adjust_empty_period = None
+        self._calibration_zero_trim_air_zero_adjust_full_period = None
+        self._calibration_zero_trim_air_zero_adjust_level_x10 = None
+        self._calibration_zero_trim_air_zero_adjust_level_samples = []
+        self._calibration_zero_trim_air_zero_adjust_current_zero_trim = None
 
-        self._calibration_temp_comp_zero_trim_air_zero_adjust_active = True
-        self._calibration_temp_comp_zero_trim_air_zero_adjust_empty_period = None
-        self._calibration_temp_comp_zero_trim_air_zero_adjust_full_period = None
-        self._calibration_temp_comp_zero_trim_air_zero_adjust_level_x10 = None
-        self._calibration_temp_comp_zero_trim_air_zero_adjust_level_samples = []
-        self._calibration_temp_comp_zero_trim_air_zero_adjust_current_zero_trim = None
-
-        if not self._request_next_calibration_temp_comp_zero_trim_air_zero_adjust_did():
-            self._reset_calibration_temp_comp_zero_trim_air_zero_adjust_state()
-            self._set_calibration_temp_comp_operation_status(
+        if not self._request_next_calibration_zero_trim_air_zero_adjust_did():
+            self._reset_calibration_zero_trim_air_zero_adjust_state()
+            self._set_calibration_zero_trim_operation_status(
                 "Автоподстройка zero trim не запущена: не удалось отправить первый DID-запрос.",
                 busy=False,
                 progress_percent=100,
@@ -1797,7 +1574,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             )
             return
 
-        self._set_calibration_temp_comp_operation_status(
+        self._set_calibration_zero_trim_operation_status(
             "Автоподстройка zero trim: последовательное чтение DID 0x0012 -> 0x0013 -> 0x0018 -> 0x002D...",
             busy=True,
             progress_percent=0,
@@ -1808,742 +1585,11 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             RowColor.blue,
         )
 
-    @Slot()
-    def readCalibrationTempCompFromMcu(self):
-        """Цель функции в чтении параметров компенсации из МК, затем она выполняет последовательный опрос K1/K0/zero trim и DID текущего режима."""
-        if not self._can.is_connect:
-            self.infoMessage.emit("Калибровка", "Сначала подключите CAN-адаптер.")
-            self._set_calibration_temp_comp_operation_status(
-                "Чтение параметров из МК не запущено: адаптер не подключен.",
-                busy=False,
-                progress_percent=0,
-                determinate=False,
-            )
-            return
-        if not self._can.is_trace:
-            self.infoMessage.emit("Калибровка", "Сначала включите трассировку CAN.")
-            self._set_calibration_temp_comp_operation_status(
-                "Чтение параметров из МК не запущено: трассировка CAN выключена.",
-                busy=False,
-                progress_percent=0,
-                determinate=False,
-            )
-            return
-
-        if self._calibration_temp_comp_adv_read_active:
-            self._stop_calibration_temp_comp_advanced_read_sequence()
-            self._append_log(
-                "Калибровка: предыдущая очередь чтения DID остановлена перед новым запуском.",
-                RowColor.yellow,
-            )
-
-        mode_known = self._calibration_temp_comp_advanced_values.get("mode") is not None
-        mode_value = self._temp_comp_get_mode_from_values(self._calibration_temp_comp_advanced_values)
-        mode_text = self._temp_comp_mode_text(mode_value)
-        queued_count, total_count = self._request_calibration_temp_comp_advanced_read_for_mode(
-            mode_value,
-            include_base=True,
-        )
-        if total_count <= 0 or queued_count <= 0:
-            self.infoMessage.emit("Калибровка", "Не удалось отправить чтение параметров температурной компенсации.")
-            self._set_calibration_temp_comp_operation_status(
-                "Чтение параметров из МК не запущено: очередь DID не сформирована.",
-                busy=False,
-                progress_percent=0,
-                determinate=False,
-            )
-            return
-
-        if not mode_known:
-            self._append_log(
-                "Калибровка: mode до чтения не был известен, поэтому использован базовый профиль mode 0; DID 0x001D уточнит фактический режим и очередь автоматически подстроится.",
-                RowColor.yellow,
-            )
-
-        self._append_log(
-            (
-                "Калибровка: запущено чтение параметров температурной компенсации по режиму "
-                f"{mode_text} ({queued_count} DID, включая K1/K0/zero trim)."
-            ),
-            RowColor.blue,
-        )
-        self.infoMessage.emit(
-            "Калибровка",
-            f"Запущено последовательное чтение {queued_count} DID по режиму {mode_text}, включая K1/K0/zero trim.",
-        )
-
-    @Slot()
-    def readCalibrationTempCompAdvanced(self):
-        """Цель функции в чтении расширенных параметров компенсации, затем она запрашивает DID 0x001D..0x002C."""
-        if not self._can.is_connect:
-            self.infoMessage.emit("Калибровка", "Сначала подключите CAN-адаптер.")
-            self._set_calibration_temp_comp_operation_status(
-                "Чтение параметров из МК не запущено: адаптер не подключен.",
-                busy=False,
-                progress_percent=0,
-                determinate=False,
-            )
-            return
-        if not self._can.is_trace:
-            self.infoMessage.emit("Калибровка", "Сначала включите трассировку CAN.")
-            self._set_calibration_temp_comp_operation_status(
-                "Чтение параметров из МК не запущено: трассировка CAN выключена.",
-                busy=False,
-                progress_percent=0,
-                determinate=False,
-            )
-            return
-
-        queued_count, total_count = self._request_calibration_temp_comp_advanced_read_all()
-        if total_count <= 0 or queued_count <= 0:
-            self.infoMessage.emit("Калибровка", "Не удалось отправить чтение расширенных DID 0x001D..0x002C.")
-            self._set_calibration_temp_comp_operation_status(
-                "Чтение параметров из МК не запущено: не удалось сформировать очередь DID 0x001D..0x002C.",
-                busy=False,
-                progress_percent=0,
-                determinate=False,
-            )
-            return
-
-        self._append_log(
-            (
-                "Калибровка: запущено последовательное чтение расширенных DID "
-                f"0x001D..0x002C ({queued_count} параметров)."
-            ),
-            RowColor.blue,
-        )
-        self.infoMessage.emit(
-            "Калибровка",
-            f"Запущено последовательное чтение {queued_count} параметров. Дождитесь завершения в журнале.",
-        )
-
     @Slot(str)
-    def readCalibrationTempCompAdvancedParam(self, field_key):
-        """Цель функции в чтении одного расширенного параметра, затем она отправляет DID по ключу строки UI."""
-        if not self._can.is_connect:
-            self.infoMessage.emit("Калибровка", "Сначала подключите CAN-адаптер.")
-            return
-        if not self._can.is_trace:
-            self.infoMessage.emit("Калибровка", "Сначала включите трассировку CAN.")
-            return
-
-        field = self._temp_comp_advanced_field_by_key(str(field_key))
-        if field is None:
-            self.infoMessage.emit("Калибровка", "Неизвестный параметр температурной компенсации.")
-            return
-
-        if self._calibration_temp_comp_adv_read_active:
-            self._stop_calibration_temp_comp_advanced_read_sequence()
-            self._append_log(
-                "Калибровка: последовательное чтение расширенных DID остановлено для одиночного запроса.",
-                RowColor.yellow,
-            )
-
-        if not self._request_calibration_temp_comp_advanced_read(str(field.get("key", ""))):
-            field_var = field.get("var")
-            did_text = "----" if field_var is None else f"0x{int(field_var.pid) & 0xFFFF:04X}"
-            self.infoMessage.emit("Калибровка", f"Не удалось отправить чтение DID {did_text}.")
-            return
-
-        self._append_log(
-            f"Калибровка: чтение {self._temp_comp_field_display_name(field)}.",
-            RowColor.blue,
-        )
-
-    @Slot(str, str)
-    def setCalibrationTempCompAdvancedPreviewValue(self, field_key, value_text):
-        """Цель функции в локальном предпросмотре параметра, затем она пересчитывает график и метрики без записи в МК."""
-        field = self._temp_comp_advanced_field_by_key(str(field_key))
-        if field is None:
-            return
-
-        target_key = str(field.get("key", ""))
-        if not target_key:
-            return
-
-        current_value = self._calibration_temp_comp_advanced_values.get(target_key)
-        try:
-            preview_value = self._resolve_calibration_temp_comp_advanced_write_value(
-                field,
-                value_text,
-                current_value,
-            )
-        except ValueError:
-            return
-
-        normalized_value = int(preview_value)
-        if current_value is not None and int(current_value) == normalized_value:
-            return
-
-        if bool(self._calibration_temp_comp_linear_preview_enabled):
-            self._calibration_temp_comp_linear_preview_enabled = False
-            self._calibration_temp_comp_linear_preview_k1_x100 = None
-            self._calibration_temp_comp_linear_preview_k0_count = None
-            self._set_calibration_temp_comp_preview_status(
-                "Линейное превью отключено: применяются ручные параметры режима компенсации.",
-                busy=False,
-                progress_percent=100,
-                determinate=True,
-            )
-            self._append_log(
-                "Калибровка: линейное превью отключено, чтобы пересчет учитывал выбранный mode/segment/heat-cool.",
-                RowColor.blue,
-            )
-
-        if target_key == "mode":
-            self._seed_temp_comp_segment_tables_for_preview(int(normalized_value))
-
-        self._set_calibration_temp_comp_operation_status(
-            "Пересчет графиков по выбранным параметрам...",
-            busy=True,
-            progress_percent=0,
-            determinate=False,
-        )
-        QCoreApplication.processEvents()
-        self._calibration_temp_comp_advanced_values[target_key] = int(normalized_value)
-        self._recompute_calibration_temp_comp_metrics()
-        self._set_calibration_temp_comp_operation_status(
-            "Пересчет графиков завершен.",
-            busy=False,
-            progress_percent=100,
-            determinate=True,
-        )
-
-    @Slot(str, str)
-    def setCalibrationTempCompLinearPreview(self, k1_text, k0_text):
-        """Цель функции в локальном предпросмотре линейного режима, затем она применяет K1/K0 к графику без записи в МК."""
-        if len(self._calibration_temp_comp_samples) <= 0:
-            self._set_calibration_temp_comp_preview_status(
-                "Нет данных для превью. Сначала загрузите CSV.",
-                busy=False,
-                progress_percent=0,
-                determinate=True,
-            )
-            self.infoMessage.emit(
-                "Калибровка",
-                "Для предпросмотра сначала загрузите CSV с данными температурной компенсации.",
-            )
-            return
-
-        fallback_k1 = self._calibration_temp_comp_linear_preview_k1_x100
-        if fallback_k1 is None:
-            if self._calibration_temp_comp_k1_x100_current is not None:
-                fallback_k1 = int(self._calibration_temp_comp_k1_x100_current)
-            elif self._calibration_temp_comp_k1_x100_base is not None:
-                fallback_k1 = int(self._calibration_temp_comp_k1_x100_base)
-            else:
-                fallback_k1 = 0
-
-        fallback_k0 = self._calibration_temp_comp_linear_preview_k0_count
-        if fallback_k0 is None:
-            if self._calibration_temp_comp_k0_count_current is not None:
-                fallback_k0 = int(self._calibration_temp_comp_k0_count_current)
-            elif self._calibration_temp_comp_k0_count_base is not None:
-                fallback_k0 = int(self._calibration_temp_comp_k0_count_base)
-            else:
-                fallback_k0 = 0
-
-        try:
-            preview_k1 = self._resolve_calibration_k1_write_value(k1_text, int(fallback_k1))
-            preview_k0 = self._resolve_calibration_k0_write_value(k0_text, int(fallback_k0))
-        except ValueError as exc:
-            self._set_calibration_temp_comp_preview_status(
-                "Ошибка ввода коэффициентов превью.",
-                busy=False,
-                progress_percent=0,
-                determinate=True,
-            )
-            self.infoMessage.emit("Калибровка", str(exc))
-            return
-
-        normalized_k1 = int(preview_k1)
-        normalized_k0 = int(preview_k0)
-        unchanged = (
-            bool(self._calibration_temp_comp_linear_preview_enabled)
-            and self._calibration_temp_comp_linear_preview_k1_x100 is not None
-            and self._calibration_temp_comp_linear_preview_k0_count is not None
-            and int(self._calibration_temp_comp_linear_preview_k1_x100) == normalized_k1
-            and int(self._calibration_temp_comp_linear_preview_k0_count) == normalized_k0
-        )
-        if unchanged:
-            self._set_calibration_temp_comp_preview_status(
-                "Превью уже применено с этими K1/K0.",
-                busy=False,
-                progress_percent=100,
-                determinate=True,
-            )
-            return
-
-        self._set_calibration_temp_comp_operation_status(
-            "Пересчет графиков по линейному превью...",
-            busy=True,
-            progress_percent=0,
-            determinate=False,
-        )
-        self._set_calibration_temp_comp_preview_status(
-            "Подготовка параметров превью...",
-            busy=True,
-            progress_percent=10,
-            determinate=True,
-        )
-        QCoreApplication.processEvents()
-
-        self._calibration_temp_comp_linear_preview_enabled = True
-        self._calibration_temp_comp_linear_preview_k1_x100 = int(normalized_k1)
-        self._calibration_temp_comp_linear_preview_k0_count = int(normalized_k0)
-        self._set_calibration_temp_comp_preview_status(
-            "Применение K1/K0 и пересчет метрик...",
-            busy=True,
-            progress_percent=45,
-            determinate=True,
-        )
-        QCoreApplication.processEvents()
-        self._recompute_calibration_temp_comp_metrics()
-        self._set_calibration_temp_comp_preview_status(
-            "Обновление графика...",
-            busy=True,
-            progress_percent=85,
-            determinate=True,
-        )
-        QCoreApplication.processEvents()
-        self._set_calibration_temp_comp_preview_status(
-            f"Превью обновлено: K1={int(normalized_k1)}, K0={int(normalized_k0)}.",
-            busy=False,
-            progress_percent=100,
-            determinate=True,
-        )
-        self._set_calibration_temp_comp_operation_status(
-            "Линейное превью пересчитано.",
-            busy=False,
-            progress_percent=100,
-            determinate=True,
-        )
-
-    @Slot()
-    def clearCalibrationTempCompLinearPreview(self):
-        """Цель функции в сбросе локального превью K1/K0, затем она возвращает графики к текущим считанным параметрам."""
-        if (
-            (not bool(self._calibration_temp_comp_linear_preview_enabled))
-            and self._calibration_temp_comp_linear_preview_k1_x100 is None
-            and self._calibration_temp_comp_linear_preview_k0_count is None
-        ):
-            self._set_calibration_temp_comp_preview_status(
-                "Превью уже сброшено.",
-                busy=False,
-                progress_percent=100,
-                determinate=True,
-            )
-            return
-
-        self._set_calibration_temp_comp_operation_status(
-            "Сброс линейного превью и пересчет графиков...",
-            busy=True,
-            progress_percent=0,
-            determinate=False,
-        )
-        self._set_calibration_temp_comp_preview_status(
-            "Сброс превью и восстановление текущих параметров...",
-            busy=True,
-            progress_percent=20,
-            determinate=True,
-        )
-        QCoreApplication.processEvents()
-
-        self._calibration_temp_comp_linear_preview_enabled = False
-        self._calibration_temp_comp_linear_preview_k1_x100 = None
-        self._calibration_temp_comp_linear_preview_k0_count = None
-        self._set_calibration_temp_comp_preview_status(
-            "Пересчет графика после сброса...",
-            busy=True,
-            progress_percent=65,
-            determinate=True,
-        )
-        QCoreApplication.processEvents()
-        self._recompute_calibration_temp_comp_metrics()
-        self._set_calibration_temp_comp_preview_status(
-            "Превью сброшено. График вернулся к текущим параметрам.",
-            busy=False,
-            progress_percent=100,
-            determinate=True,
-        )
-        self._set_calibration_temp_comp_operation_status(
-            "Линейное превью сброшено.",
-            busy=False,
-            progress_percent=100,
-            determinate=True,
-        )
-
-    def _seed_temp_comp_segment_tables_for_preview(self, mode_value: int):
-        """Цель функции в подготовке осмысленного предпросмотра mode=1/2, затем она подставляет информативные сегментные таблицы вместо вырожденного linear-профиля."""
-        normalized_mode = int(mode_value)
-        if normalized_mode not in (
-            int(self._TEMP_COMP_MODE_SEGMENTED),
-            int(self._TEMP_COMP_MODE_SEGMENTED_HEAT_COOL),
-        ):
-            return
-
-        current_values = {
-            str(key): (None if value is None else int(value))
-            for key, value in self._calibration_temp_comp_advanced_values.items()
-        }
-        linear_k1 = int(self._calibration_temp_comp_k1_x100_current or 0)
-        cooling_table, heating_table = self._temp_comp_build_segment_tables_from_values(current_values)
-        need_cooling_seed = (
-            self._temp_comp_segment_table_is_zero(cooling_table)
-            or self._temp_comp_segment_table_is_linear(cooling_table, linear_k1)
-        )
-        need_heating_seed = (
-            normalized_mode == int(self._TEMP_COMP_MODE_SEGMENTED_HEAT_COOL)
-            and (
-                self._temp_comp_segment_table_is_zero(heating_table)
-                or self._temp_comp_segment_table_is_linear(heating_table, linear_k1)
-            )
-        )
-        if not need_cooling_seed and not need_heating_seed:
-            return
-
-        recommended_values = {
-            str(key): int(value)
-            for key, value in self._calibration_temp_comp_advanced_recommended_values.items()
-            if value is not None
-        }
-        has_informative_recommended_values = False
-        if len(recommended_values) > 0:
-            has_informative_recommended_values = self._temp_comp_values_have_informative_segments(
-                {str(key): int(value) for key, value in recommended_values.items()},
-                mode_value=normalized_mode,
-                linear_k1_x100=linear_k1,
-            )
-        if (not has_informative_recommended_values) and len(self._calibration_temp_comp_samples) >= 2:
-            recommended_values = self._build_temp_comp_advanced_recommendations(
-                list(self._calibration_temp_comp_samples),
-                fallback_linear_k1_x100=linear_k1,
-                forced_mode=normalized_mode,
-            )
-            if not self._temp_comp_values_have_informative_segments(
-                {str(key): int(value) for key, value in recommended_values.items()},
-                mode_value=normalized_mode,
-                linear_k1_x100=linear_k1,
-            ):
-                recommended_values = self._build_temp_comp_advanced_recommendations(
-                    list(self._calibration_temp_comp_samples),
-                    fallback_linear_k1_x100=0,
-                    forced_mode=normalized_mode,
-                )
-
-        if len(recommended_values) <= 0:
-            return
-
-        seeded = False
-
-        if need_cooling_seed:
-            for segment_index in range(1, int(self._TEMP_COMP_SEGMENT_COUNT) + 1):
-                key = f"k1_cool_seg{segment_index}_x100"
-                recommended = recommended_values.get(key)
-                if recommended is None:
-                    continue
-                self._calibration_temp_comp_advanced_values[key] = int(recommended)
-                seeded = True
-
-        if need_heating_seed:
-            for segment_index in range(1, int(self._TEMP_COMP_SEGMENT_COUNT) + 1):
-                key = f"k1_heat_seg{segment_index}_x100"
-                recommended = recommended_values.get(key)
-                if recommended is None:
-                    continue
-                self._calibration_temp_comp_advanced_values[key] = int(recommended)
-                seeded = True
-
-        support_keys = (
-            "dir_hyst_x10",
-            "seg_t1_x10",
-            "seg_t2_x10",
-            "seg_t3_x10",
-            "seg_t4_x10",
-        )
-        for key in support_keys:
-            recommended = recommended_values.get(key)
-            if recommended is None:
-                continue
-            self._calibration_temp_comp_advanced_values[key] = int(recommended)
-            seeded = True
-
-        if seeded:
-            self._append_log(
-                "Калибровка: для предпросмотра mode=1/2 подставлены информативные сегментные параметры, чтобы режим не оставался эквивалентным linear K1.",
-                RowColor.blue,
-            )
-
-    @Slot(str, str)
-    def writeCalibrationTempCompAdvancedParam(self, field_key, value_text):
-        """Цель функции в записи одного расширенного параметра, затем она валидирует ввод и отправляет UDS 0x2E."""
-        if not self._ensure_calibration_write_ready("запись расширенного параметра компенсации"):
-            return
-
-        if self._calibration_temp_comp_adv_read_active:
-            self._stop_calibration_temp_comp_advanced_read_sequence()
-            self._append_log(
-                "Калибровка: последовательное чтение расширенных DID остановлено для записи параметра.",
-                RowColor.yellow,
-            )
-
-        if len(self._calibration_write_verify_pending) > 0:
-            self.infoMessage.emit(
-                "Калибровка",
-                "Дождитесь завершения текущей автопроверки DID перед новой записью.",
-            )
-            return
-
-        field = self._temp_comp_advanced_field_by_key(str(field_key))
-        if field is None:
-            self.infoMessage.emit("Калибровка", "Неизвестный параметр температурной компенсации.")
-            return
-
-        field_var = field.get("var")
-        if field_var is None:
-            self.infoMessage.emit("Калибровка", "Выбранный параметр не имеет DID в текущей карте.")
-            return
-
-        current_value = self._calibration_temp_comp_advanced_values.get(str(field.get("key", "")))
-        try:
-            value = self._resolve_calibration_temp_comp_advanced_write_value(field, value_text, current_value)
-        except ValueError as exc:
-            self.infoMessage.emit("Калибровка", str(exc))
-            return
-
-        payload_size_bits = max(8, int(field_var.size) * 8)
-        payload_mask = (1 << payload_size_bits) - 1
-        write_payload = int(value) & payload_mask
-        if self._calibration_write_service.write_data(
-            field_var,
-            write_payload,
-            tx_identifier=self._build_calibration_tx_identifier(),
-        ):
-            self._calibration_write_verify_pending[int(field_var.pid)] = int(value)
-            self.calibrationVerificationChanged.emit()
-            self._append_log(
-                f"Калибровка: запись {self._temp_comp_field_display_name(field)} = {int(value)}.",
-                RowColor.blue,
-            )
-            return
-
-        self.infoMessage.emit(
-            "Калибровка",
-            f"Не удалось отправить запись DID 0x{int(field_var.pid) & 0xFFFF:04X}.",
-        )
-
-    @Slot("QVariant")
-    def loadCalibrationTempCompCsv(self, path_or_urls):
-        """Цель функции в офлайн-анализе температурной компенсации, затем она загружает CSV/XLSX логи коллектора и считает коэффициенты."""
-        # Фиксирует верхний селектор CAN-узла, чтобы оффлайн-загрузка CSV/XLSX не меняла рабочий target для UDS.
-        calibration_node_snapshot = {
-            "options": list(self._calibration_node_options),
-            "values": list(self._calibration_node_values),
-            "selected_index": int(self._selected_calibration_node_index),
-            "target_sa": self._calibration_target_node_sa,
-        }
-
-        raw_items = self._expand_qvariant_items(path_or_urls)
-
-        paths: list[Path] = []
-        for item in raw_items:
-            resolved = self._to_local_path(item)
-            if not resolved:
-                continue
-            try:
-                paths.append(Path(resolved).expanduser().resolve())
-            except Exception:
-                paths.append(Path(resolved))
-
-        self._append_log(
-            f"Калибровка: получены пути CSV/XLSX для анализа температурной компенсации: {len(paths)}.",
-            RowColor.blue,
-        )
-        if len(paths) == 0:
-            self.infoMessage.emit("Калибровка", "Файл CSV/XLSX не выбран.")
-            self._set_calibration_temp_comp_operation_status(
-                "Загрузка CSV/XLSX отменена: файл не выбран.",
-                busy=False,
-                progress_percent=0,
-                determinate=False,
-            )
-            return
-
-        self._set_calibration_temp_comp_operation_status(
-            f"Загрузка CSV/XLSX и пересчет графиков: подготовка ({len(paths)} файлов)...",
-            busy=True,
-            progress_percent=0,
-            determinate=True,
-        )
-        QCoreApplication.processEvents()
-        try:
-            loaded_files, loaded_points = self._load_calibration_temp_comp_csv_files(paths)
-        except Exception as exc:
-            error_text = f"Ошибка загрузки CSV/XLSX: {str(exc)}"
-            if (
-                list(self._calibration_node_options) != calibration_node_snapshot["options"]
-                or list(self._calibration_node_values) != calibration_node_snapshot["values"]
-                or int(self._selected_calibration_node_index) != int(calibration_node_snapshot["selected_index"])
-                or self._calibration_target_node_sa != calibration_node_snapshot["target_sa"]
-            ):
-                self._calibration_node_options = list(calibration_node_snapshot["options"])
-                self._calibration_node_values = list(calibration_node_snapshot["values"])
-                self._selected_calibration_node_index = int(calibration_node_snapshot["selected_index"])
-                self._calibration_target_node_sa = calibration_node_snapshot["target_sa"]
-                self.calibrationNodeSelectionChanged.emit()
-            self._set_calibration_temp_comp_operation_status(
-                error_text,
-                busy=False,
-                progress_percent=100,
-                determinate=True,
-            )
-            self._append_log(f"Калибровка: {error_text}", RowColor.red)
-            self.infoMessage.emit("Калибровка", error_text)
-            return
-        if loaded_files <= 0:
-            if (
-                list(self._calibration_node_options) != calibration_node_snapshot["options"]
-                or list(self._calibration_node_values) != calibration_node_snapshot["values"]
-                or int(self._selected_calibration_node_index) != int(calibration_node_snapshot["selected_index"])
-                or self._calibration_target_node_sa != calibration_node_snapshot["target_sa"]
-            ):
-                self._calibration_node_options = list(calibration_node_snapshot["options"])
-                self._calibration_node_values = list(calibration_node_snapshot["values"])
-                self._selected_calibration_node_index = int(calibration_node_snapshot["selected_index"])
-                self._calibration_target_node_sa = calibration_node_snapshot["target_sa"]
-                self.calibrationNodeSelectionChanged.emit()
-            status_text = str(self._calibration_temp_comp_status or "").strip()
-            if not status_text:
-                status_text = "Не удалось загрузить данные температурной компенсации из выбранных CSV/XLSX."
-            self._set_calibration_temp_comp_operation_status(
-                f"Загрузка CSV/XLSX завершена с ошибкой: {status_text}",
-                busy=False,
-                progress_percent=100,
-                determinate=True,
-            )
-            self.infoMessage.emit("Калибровка", status_text)
-            return
-
-        # Принудительно обновляет метрики и график после каждой успешной загрузки CSV/XLSX.
-        self._recompute_calibration_temp_comp_metrics()
-
-        if (
-            list(self._calibration_node_options) != calibration_node_snapshot["options"]
-            or list(self._calibration_node_values) != calibration_node_snapshot["values"]
-            or int(self._selected_calibration_node_index) != int(calibration_node_snapshot["selected_index"])
-            or self._calibration_target_node_sa != calibration_node_snapshot["target_sa"]
-        ):
-            self._calibration_node_options = list(calibration_node_snapshot["options"])
-            self._calibration_node_values = list(calibration_node_snapshot["values"])
-            self._selected_calibration_node_index = int(calibration_node_snapshot["selected_index"])
-            self._calibration_target_node_sa = calibration_node_snapshot["target_sa"]
-            self.calibrationNodeSelectionChanged.emit()
-
-        self._set_calibration_temp_comp_operation_status(
-            f"Загрузка CSV/XLSX завершена: файлов {loaded_files}, точек {loaded_points}. Графики пересчитаны.",
-            busy=False,
-            progress_percent=100,
-            determinate=True,
-        )
-        self._append_log(
-            f"Калибровка: загружено CSV/XLSX файлов для анализа температурной компенсации: {loaded_files}, точек: {loaded_points}.",
-            RowColor.green,
-        )
-        self.infoMessage.emit(
-            "Калибровка",
-            f"Загружено CSV/XLSX файлов: {loaded_files}, точек: {loaded_points}. Анализ пересчитан.",
-        )
-
-    @Slot(str)
-    def writeCalibrationTempCompK1(self, value_text):
-        """Цель функции в записи нового K1, затем она валидирует ввод и отправляет UDS 0x2E по DID 0x001B."""
-        if not self._ensure_calibration_write_ready("запись коэффициента K1"):
-            return
-
-        if self._calibration_temp_comp_adv_read_active:
-            self._stop_calibration_temp_comp_advanced_read_sequence()
-            self._append_log(
-                "Калибровка: последовательное чтение расширенных DID остановлено для записи K1.",
-                RowColor.yellow,
-            )
-
-        if len(self._calibration_write_verify_pending) > 0:
-            self.infoMessage.emit(
-                "Калибровка",
-                "Дождитесь завершения текущей автопроверки DID перед записью нового K1.",
-            )
-            return
-
-        try:
-            value = self._resolve_calibration_k1_write_value(value_text, self._calibration_temp_comp_k1_x100_current)
-        except ValueError as exc:
-            self.infoMessage.emit("Калибровка", str(exc))
-            return
-
-        write_payload = int(value) & 0xFFFF
-        if self._calibration_write_service.write_data(
-            UdsData.fuel_temp_comp_k1_x100,
-            write_payload,
-            tx_identifier=self._build_calibration_tx_identifier(),
-        ):
-            self._calibration_write_verify_pending[int(UdsData.fuel_temp_comp_k1_x100.pid)] = int(value)
-            self.calibrationVerificationChanged.emit()
-            self._append_log(f"Калибровка: запись коэффициента K1 = {int(value)}.", RowColor.blue)
-            return
-
-        self.infoMessage.emit("Калибровка", "Не удалось отправить запись DID 0x001B.")
-
-    @Slot(str)
-    def writeCalibrationTempCompK0(self, value_text):
-        """Цель функции в записи нового K0, затем она валидирует ввод и отправляет UDS 0x2E по DID 0x001C."""
-        if not self._ensure_calibration_write_ready("запись коэффициента K0"):
-            return
-
-        if self._calibration_temp_comp_adv_read_active:
-            self._stop_calibration_temp_comp_advanced_read_sequence()
-            self._append_log(
-                "Калибровка: последовательное чтение расширенных DID остановлено для записи K0.",
-                RowColor.yellow,
-            )
-
-        if len(self._calibration_write_verify_pending) > 0:
-            self.infoMessage.emit(
-                "Калибровка",
-                "Дождитесь завершения текущей автопроверки DID перед записью нового K0.",
-            )
-            return
-
-        try:
-            value = self._resolve_calibration_k0_write_value(value_text, self._calibration_temp_comp_k0_count_current)
-        except ValueError as exc:
-            self.infoMessage.emit("Калибровка", str(exc))
-            return
-
-        write_payload = int(value) & 0xFFFF
-        if self._calibration_write_service.write_data(
-            UdsData.fuel_temp_comp_k0_count,
-            write_payload,
-            tx_identifier=self._build_calibration_tx_identifier(),
-        ):
-            self._calibration_write_verify_pending[int(UdsData.fuel_temp_comp_k0_count.pid)] = int(value)
-            self.calibrationVerificationChanged.emit()
-            self._append_log(f"Калибровка: запись коэффициента K0 = {int(value)}.", RowColor.blue)
-            return
-
-        self.infoMessage.emit("Калибровка", "Не удалось отправить запись DID 0x001C.")
-
-    @Slot(str)
-    def writeCalibrationTempCompZeroTrim(self, value_text):
+    def writeCalibrationZeroTrim(self, value_text):
         """Цель функции в записи коррекции zero trim, затем она валидирует ввод и отправляет UDS 0x2E по DID 0x002D."""
         if not self._ensure_calibration_write_ready("запись коррекции zero trim"):
             return
-
-        if self._calibration_temp_comp_adv_read_active:
-            self._stop_calibration_temp_comp_advanced_read_sequence()
-            self._append_log(
-                "Калибровка: последовательное чтение расширенных DID остановлено для записи zero trim.",
-                RowColor.yellow,
-            )
 
         if len(self._calibration_write_verify_pending) > 0:
             self.infoMessage.emit(
@@ -2555,15 +1601,15 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         try:
             value = self._resolve_calibration_zero_trim_write_value(
                 value_text,
-                self._calibration_temp_comp_zero_trim_count_current,
+                self._calibration_zero_trim_count_current,
             )
         except ValueError as exc:
             self.infoMessage.emit("Калибровка", str(exc))
             return
 
         write_payload = int(value) & 0xFFFF
-        self._reset_calibration_temp_comp_zero_trim_verify_state()
-        self._calibration_temp_comp_zero_trim_residual_x10 = None
+        self._reset_calibration_zero_trim_verify_state()
+        self._calibration_zero_trim_residual_x10 = None
         if self._calibration_write_service.write_data(
             UdsData.fuel_zero_trim_count,
             write_payload,
@@ -2577,99 +1623,9 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self.infoMessage.emit("Калибровка", "Не удалось отправить запись DID 0x002D.")
 
     @Slot()
-    def resetCalibrationTempCompZeroTrim(self):
+    def resetCalibrationZeroTrim(self):
         """Цель функции в сбросе коррекции zero trim, затем она отправляет запись 0 в DID 0x002D."""
-        self.writeCalibrationTempCompZeroTrim("0")
-
-    @Slot()
-    def applyCalibrationTempCompRecommendations(self):
-        """Цель функции в пакетной записи рекомендаций, затем она последовательно записывает K1/K0 и рассчитанные расширенные DID с автопроверкой каждого шага."""
-        if not self._ensure_calibration_write_ready("запись рекомендуемых параметров компенсации"):
-            return
-
-        if bool(self._calibration_temp_comp_zero_trim_air_zero_adjust_active) or bool(self._calibration_temp_comp_zero_trim_verify_pending):
-            self.infoMessage.emit(
-                "Калибровка",
-                "Дождитесь завершения автоподстройки/автопроверки zero trim перед записью рекомендаций K1/K0.",
-            )
-            return
-
-        if self._calibration_temp_comp_adv_read_active:
-            self._stop_calibration_temp_comp_advanced_read_sequence()
-            self._append_log(
-                "Калибровка: последовательное чтение расширенных DID остановлено для записи рекомендаций.",
-                RowColor.yellow,
-            )
-
-        if len(self._calibration_write_verify_pending) > 0:
-            self.infoMessage.emit(
-                "Калибровка",
-                "Дождитесь завершения текущей автопроверки DID перед записью рекомендаций.",
-            )
-            return
-
-        steps: list[str] = []
-        if self._calibration_temp_comp_k1_x100_next is not None:
-            steps.append("k1")
-        if self._calibration_temp_comp_k0_count_next is not None:
-            steps.append("k0")
-
-        current_mode = self._temp_comp_get_mode_from_values(self._calibration_temp_comp_advanced_values)
-        allowed_field_keys = self._calibration_temp_comp_advanced_read_field_keys_for_mode(
-            current_mode,
-            include_mode=True,
-        )
-        for field_key in allowed_field_keys:
-            if not field_key:
-                continue
-            recommended_value = self._calibration_temp_comp_advanced_recommended_values.get(field_key)
-            if recommended_value is None:
-                continue
-            current_value = self._calibration_temp_comp_advanced_values.get(field_key)
-            if current_value is not None and int(current_value) == int(recommended_value):
-                continue
-            steps.append(f"adv:{field_key}")
-
-        if len(steps) <= 0:
-            self.infoMessage.emit("Калибровка", "Нет рассчитанных рекомендаций для записи. Сначала загрузите CSV/XLSX.")
-            return
-
-        self._calibration_temp_comp_recommendation_apply_queue = list(steps)
-        self._append_log(
-            (
-                "Калибровка: запуск пакетной записи рекомендаций "
-                f"для текущего режима {self._temp_comp_mode_text(current_mode)} "
-                f"({', '.join(steps)})."
-            ),
-            RowColor.blue,
-        )
-        self._append_log(
-            "Калибровка: пакет рекомендаций изменяет только K1/K0 и DID 0x001D..0x002C. Zero trim (0x002D) выполняется отдельной эксплуатационной подгонкой.",
-            RowColor.blue,
-        )
-        self._continue_calibration_temp_comp_recommendation_apply_queue()
-
-    @Slot()
-    def applyCalibrationTempCompNextK1(self):
-        """Цель функции в записи рекомендованного K1, затем она отправляет рассчитанное значение в DID 0x001B."""
-        self._reset_calibration_temp_comp_recommendation_apply_queue()
-        next_k1 = self._calibration_temp_comp_k1_x100_next
-        if next_k1 is None:
-            self.infoMessage.emit("Калибровка", "Сначала загрузите CSV и дождитесь расчета рекомендованного K1.")
-            return
-
-        self.writeCalibrationTempCompK1(str(int(next_k1)))
-
-    @Slot()
-    def applyCalibrationTempCompNextK0(self):
-        """Цель функции в записи рекомендованного K0, затем она отправляет рассчитанное значение в DID 0x001C."""
-        self._reset_calibration_temp_comp_recommendation_apply_queue()
-        next_k0 = self._calibration_temp_comp_k0_count_next
-        if next_k0 is None:
-            self.infoMessage.emit("Калибровка", "Сначала загрузите CSV и дождитесь расчета рекомендованного K0.")
-            return
-
-        self.writeCalibrationTempCompK0(str(int(next_k0)))
+        self.writeCalibrationZeroTrim("0")
 
     @Slot(str)
     def saveCalibrationLevel0(self, value_text):
@@ -2787,8 +1743,6 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             node_sa=int(parsed["node_sa"]) & 0xFF,
             level_0=int(parsed["level_0"]),
             level_100=int(parsed["level_100"]),
-            k1=int(parsed["k1"]),
-            k0=int(parsed["k0"]),
             zero_trim=int(parsed["zero_trim"]),
             file_path=str(candidate),
             source_text="Источник дампа: загружен из файла.",
@@ -2818,8 +1772,6 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
         backup0 = int(self._calibration_backup_level_0)
         backup100 = int(self._calibration_backup_level_100)
-        backup_k1 = int(self._calibration_backup_k1)
-        backup_k0 = int(self._calibration_backup_k0)
         backup_zero_trim = int(self._calibration_backup_zero_trim)
         target_sa = int(self._resolve_calibration_target_sa()) & 0xFF
         self._calibration_target_node_sa = int(target_sa)
@@ -2828,8 +1780,6 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._calibration_restore_queue = [
             (int(UdsData.empty_fuel_tank.pid), backup0),
             (int(UdsData.full_fuel_tank.pid), backup100),
-            (int(UdsData.fuel_temp_comp_k1_x100.pid), backup_k1),
-            (int(UdsData.fuel_temp_comp_k0_count.pid), backup_k0),
             (int(UdsData.fuel_zero_trim_count.pid), backup_zero_trim),
         ]
         self._calibration_restore_current_did = None
@@ -3433,11 +2383,8 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             self._reset_calibration_dump_capture_state()
             self._calibration_restore_active = False
             self._calibration_restore_queue = []
-            self._reset_calibration_temp_comp_state(
-                clear_samples=True,
-                clear_coefficients=True,
-                clear_cached_nodes=True,
-            )
+            self._reset_calibration_zero_trim_air_zero_adjust_state()
+            self._reset_calibration_zero_trim_verify_state()
             self._refresh_calibration_node_options()
             if self._calibration_active:
                 self._calibration_active = False

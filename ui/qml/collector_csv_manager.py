@@ -35,10 +35,6 @@ class CollectorCsvManager:
         self._full_ticks = -1
         self._empty_known = False
         self._full_known = False
-        self._k1_x100 = 0
-        self._k0_count = 0
-        self._k1_known = False
-        self._k0_known = False
 
         self._init_csv(self._csv_path, self._COLUMNS)
         self._update_metadata_if_needed(0, 0, empty_known=False, full_known=False)
@@ -65,11 +61,9 @@ class CollectorCsvManager:
         formula = "Топливо из периода (%)=((Период-empty)*100)/(full-empty)"
         empty_text = str(int(self._empty_ticks)) if self._empty_known else "не получено"
         full_text = str(int(self._full_ticks)) if self._full_known else "не получено"
-        k1_text = str(int(self._k1_x100)) if self._k1_known else "не получено"
-        k0_text = str(int(self._k0_count)) if self._k0_known else "не получено"
         width = len(self._COLUMNS)
         title_row = [f"Узел {self._node_hex}"] + [""] * (width - 1)
-        calibration_row = [f"Калибровка: empty={empty_text}; full={full_text}; k1={k1_text}; k0={k0_text}"]
+        calibration_row = [f"Калибровка: empty={empty_text}; full={full_text}"]
         calibration_row += [""] * (width - 2) + [formula]
         return [title_row, calibration_row]
 
@@ -127,25 +121,6 @@ class CollectorCsvManager:
         self._full_known = normalized_full_known
         self._rewrite_with_metadata()
 
-    def _update_temp_comp_if_needed(self, k1_x100: int, k0_count: int, *, k1_known: bool, k0_known: bool):
-        normalized_k1 = int(k1_x100)
-        normalized_k0 = int(k0_count)
-        normalized_k1_known = bool(k1_known)
-        normalized_k0_known = bool(k0_known)
-        if (
-            normalized_k1 == self._k1_x100
-            and normalized_k0 == self._k0_count
-            and normalized_k1_known == self._k1_known
-            and normalized_k0_known == self._k0_known
-            and self._csv_path.exists()
-        ):
-            return
-        self._k1_x100 = normalized_k1
-        self._k0_count = normalized_k0
-        self._k1_known = normalized_k1_known
-        self._k0_known = normalized_k0_known
-        self._rewrite_with_metadata()
-
     def append_metric(
         self,
         measurement_time: str,
@@ -161,13 +136,8 @@ class CollectorCsvManager:
         full_ticks: int = 0,
         empty_known: bool = False,
         full_known: bool = False,
-        k1_x100: int = 0,
-        k0_count: int = 0,
-        k1_known: bool = False,
-        k0_known: bool = False,
     ):
         self._update_metadata_if_needed(empty_ticks, full_ticks, empty_known=empty_known, full_known=full_known)
-        self._update_temp_comp_if_needed(k1_x100, k0_count, k1_known=k1_known, k0_known=k0_known)
         if fuel_from_period_x10 is None:
             fuel_from_period_x10 = int(round(float(fuel_percent) * 10.0))
         fuel_from_period_percent = float(fuel_from_period_x10) / 10.0
@@ -206,7 +176,7 @@ class CollectorCombinedCsvManager:
         self._csv_path = session_dir / str(file_name)
         self._header: list[str] = ["Время", "Эталон"]
         self._node_columns: dict[str, tuple[str, ...]] = {}
-        self._node_calibration: dict[str, tuple[int, int, bool, bool, int, int, bool, bool]] = {}
+        self._node_calibration: dict[str, tuple[int, int, bool, bool]] = {}
         self._ordered_nodes: list[str] = []
         self._init_csv()
 
@@ -281,14 +251,12 @@ class CollectorCombinedCsvManager:
         row: list[str] = ["", ""]
         formula = "Топливо из периода (%)=((Период-empty)*100)/(full-empty)"
         for node_hex in self._ordered_nodes:
-            empty_ticks, full_ticks, empty_known, full_known, k1_x100, k0_count, k1_known, k0_known = self._node_calibration.get(
-                node_hex, (0, 0, False, False, 0, 0, False, False)
+            empty_ticks, full_ticks, empty_known, full_known = self._node_calibration.get(
+                node_hex, (0, 0, False, False)
             )
             empty_text = str(int(empty_ticks)) if empty_known else "не получено"
             full_text = str(int(full_ticks)) if full_known else "не получено"
-            k1_text = str(int(k1_x100)) if k1_known else "не получено"
-            k0_text = str(int(k0_count)) if k0_known else "не получено"
-            calibration = [f"empty={empty_text}", f"full={full_text}", f"k1={k1_text}", f"k0={k0_text}"]
+            calibration = [f"empty={empty_text}", f"full={full_text}"]
             calibration += [""] * (len(self._NODE_METRIC_LABELS) - len(calibration) - 1) + [formula]
             row.extend(calibration)
         return row
@@ -371,12 +339,8 @@ class CollectorCombinedCsvManager:
             full_ticks = self._as_int(metrics.get("fullPeriod", 0))
             empty_known = self._as_bool(metrics.get("emptyKnown", False))
             full_known = self._as_bool(metrics.get("fullKnown", False))
-            k1_x100 = self._as_int(metrics.get("k1X100", 0))
-            k0_count = self._as_int(metrics.get("k0Count", 0))
-            k1_known = self._as_bool(metrics.get("k1Known", False))
-            k0_known = self._as_bool(metrics.get("k0Known", False))
-            previous = self._node_calibration.get(node_hex, (0, 0, False, False, 0, 0, False, False))
-            current = (empty_ticks, full_ticks, empty_known, full_known, k1_x100, k0_count, k1_known, k0_known)
+            previous = self._node_calibration.get(node_hex, (0, 0, False, False))
+            current = (empty_ticks, full_ticks, empty_known, full_known)
             if previous != current:
                 self._node_calibration[node_hex] = current
                 changed = True
@@ -394,7 +358,7 @@ class CollectorCombinedCsvManager:
                 continue
             columns = self._column_names_for_node(normalized)
             self._node_columns[normalized] = columns
-            self._node_calibration.setdefault(normalized, (0, 0, False, False, 0, 0, False, False))
+            self._node_calibration.setdefault(normalized, (0, 0, False, False))
             self._ordered_nodes.append(normalized)
             new_columns.extend(columns)
 

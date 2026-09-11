@@ -44,7 +44,7 @@ class AppControllerPropertiesMixin(AppControllerContract):
     calibrationVerificationChanged = Signal()
     calibrationBackupChanged = Signal()
     calibrationNodeSelectionChanged = Signal()
-    calibrationTempCompChanged = Signal()
+    calibrationZeroTrimChanged = Signal()
     collectorEnabledChanged = Signal()
     collectorNodesChanged = Signal()
     collectorOutputDirectoryChanged = Signal()
@@ -721,18 +721,6 @@ class AppControllerPropertiesMixin(AppControllerContract):
         return str(int(self._calibration_backup_level_100))
 
     @Property(str, notify=calibrationBackupChanged)
-    def calibrationBackupK1Text(self):
-        if not self._calibration_backup_available:
-            return "-"
-        return str(int(self._calibration_backup_k1))
-
-    @Property(str, notify=calibrationBackupChanged)
-    def calibrationBackupK0Text(self):
-        if not self._calibration_backup_available:
-            return "-"
-        return str(int(self._calibration_backup_k0))
-
-    @Property(str, notify=calibrationBackupChanged)
     def calibrationBackupZeroTrimText(self):
         if not self._calibration_backup_available:
             return "-"
@@ -765,494 +753,67 @@ class AppControllerPropertiesMixin(AppControllerContract):
             return "Источник дампа: МК."
         return "Дамп калибровки не сохранен."
 
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompStatusText(self):
-        return str(self._calibration_temp_comp_status)
+    @Property(str, notify=calibrationZeroTrimChanged)
+    def calibrationZeroTrimOperationText(self):
+        """Цель свойства в показе хода подгонки нуля, затем оно возвращает текст последней операции."""
+        return str(self._calibration_zero_trim_operation_text)
 
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompOperationText(self):
-        return str(self._calibration_temp_comp_operation_text)
+    @Property(bool, notify=calibrationZeroTrimChanged)
+    def calibrationZeroTrimOperationBusy(self):
+        """Цель свойства в блокировке кнопок на время обмена, затем оно возвращает признак занятости."""
+        return bool(self._calibration_zero_trim_operation_busy)
 
-    @Property(bool, notify=calibrationTempCompChanged)
-    def calibrationTempCompOperationBusy(self):
-        return bool(self._calibration_temp_comp_operation_busy)
+    @Property(int, notify=calibrationZeroTrimChanged)
+    def calibrationZeroTrimOperationProgressPercent(self):
+        """Цель свойства в показе доли выполненного, затем оно возвращает проценты от 0 до 100."""
+        return int(self._calibration_zero_trim_operation_progress_percent)
 
-    @Property(int, notify=calibrationTempCompChanged)
-    def calibrationTempCompOperationProgressPercent(self):
-        return int(self._calibration_temp_comp_operation_progress_percent)
+    @Property(bool, notify=calibrationZeroTrimChanged)
+    def calibrationZeroTrimOperationProgressDeterminate(self):
+        """Цель свойства в выборе вида полосы хода, затем оно говорит, известна ли доля выполненного."""
+        return bool(self._calibration_zero_trim_operation_progress_determinate)
 
-    @Property(bool, notify=calibrationTempCompChanged)
-    def calibrationTempCompOperationProgressDeterminate(self):
-        return bool(self._calibration_temp_comp_operation_progress_determinate)
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompPreviewStatusText(self):
-        """Цель функции в выдаче текста локального превью, затем она показывает пользователю текущий этап пересчета графика."""
-        return str(self._calibration_temp_comp_preview_status)
-
-    @Property(bool, notify=calibrationTempCompChanged)
-    def calibrationTempCompPreviewBusy(self):
-        """Цель функции в выдаче флага занятости превью, затем она управляет индикатором выполнения рядом с графиком."""
-        return bool(self._calibration_temp_comp_preview_busy)
-
-    @Property(int, notify=calibrationTempCompChanged)
-    def calibrationTempCompPreviewProgressPercent(self):
-        """Цель функции в выдаче процента прогресса превью, затем она обновляет отдельный ProgressBar блока линейной коррекции."""
-        return int(self._calibration_temp_comp_preview_progress_percent)
-
-    @Property(bool, notify=calibrationTempCompChanged)
-    def calibrationTempCompPreviewProgressDeterminate(self):
-        """Цель функции в выдаче режима прогресса превью, затем она переключает ProgressBar между фиксированным и неопределенным режимом."""
-        return bool(self._calibration_temp_comp_preview_progress_determinate)
-
-    def _calibration_temp_comp_has_enough_samples(self) -> bool:
-        """Цель функции в проверке достаточности выборки, затем она определяет готовность регрессии по температуре."""
-        return len(self._calibration_temp_comp_samples) >= 2
-
-    def _calibration_temp_comp_has_level_calibration(self) -> bool:
-        """Цель функции в проверке доступности калибровок 0% и 100%, затем она определяет возможность расчета метрик в процентах."""
-        return (
-            bool(self._calibration_level_0_known)
-            and bool(self._calibration_level_100_known)
-            and int(self._calibration_level_100) > int(self._calibration_level_0)
-        )
-
-    def _calibration_temp_comp_period_range(self) -> tuple[float, float] | None:
-        """Цель функции в сборе диапазона периода из офлайн-CSV, затем она возвращает min/max для карточки метрик."""
-        samples = list(self._calibration_temp_comp_samples)
-        if len(samples) <= 0:
-            return None
-        periods = [float(item.get("period", 0.0)) for item in samples]
-        return min(periods), max(periods)
-
-    def _calibration_temp_comp_temperature_range(self) -> tuple[float, float] | None:
-        """Цель функции в сборе диапазона температуры из офлайн-CSV, затем она возвращает min/max для UI."""
-        samples = list(self._calibration_temp_comp_samples)
-        if len(samples) <= 0:
-            return None
-        temperatures = [float(item.get("temperature_c", 0.0)) for item in samples]
-        return min(temperatures), max(temperatures)
-
-    def _calibration_temp_comp_level_range(self) -> tuple[float, float] | None:
-        """Цель функции в расчете диапазона уровня по периоду, затем она возвращает min/max в процентах."""
-        if not self._calibration_temp_comp_has_level_calibration():
-            return None
-        samples = list(self._calibration_temp_comp_samples)
-        if len(samples) <= 0:
-            return None
-
-        level_values: list[float] = []
-        for sample in samples:
-            converted = self._period_to_level_percent(float(sample.get("period", 0.0)))
-            if converted is None:
-                return None
-            level_values.append(float(converted))
-        if len(level_values) <= 0:
-            return None
-        return min(level_values), max(level_values)
-
-    @Property(int, notify=calibrationTempCompChanged)
-    def calibrationTempCompSampleCount(self):
-        return len(self._calibration_temp_comp_samples)
-
-    @Property("QStringList", notify=calibrationTempCompChanged)
-    def calibrationTempCompDatasetOptions(self):
-        """Цель функции в выдаче списка наборов CSV, затем она заполняет селектор узлов внутри блока температурной компенсации."""
-        return self._calibration_temp_comp_dataset_options
-
-    @Property(int, notify=calibrationTempCompChanged)
-    def selectedCalibrationTempCompDatasetIndex(self):
-        """Цель функции в выдаче текущего индекса набора CSV, затем она синхронизирует выбор QML-комбобокса."""
-        return int(self._selected_calibration_temp_comp_dataset_index)
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompSelectedDatasetText(self):
-        """Цель функции в выдаче подписи активного набора CSV, затем она показывает оператору узел офлайн-анализа."""
-        selected_index = int(self._selected_calibration_temp_comp_dataset_index)
-        if 0 <= selected_index < len(self._calibration_temp_comp_dataset_options):
-            return str(self._calibration_temp_comp_dataset_options[selected_index])
-        return "Набор CSV не выбран"
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompPeriodRangeText(self):
-        value = self._calibration_temp_comp_period_range()
-        if value is None:
-            return "нет данных"
-        low_value, high_value = value
-        return f"{float(low_value):.1f}..{float(high_value):.1f} count"
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompTemperatureRangeText(self):
-        value = self._calibration_temp_comp_temperature_range()
-        if value is None:
-            return "нет данных"
-        low_value, high_value = value
-        return f"{float(low_value):.1f}..{float(high_value):.1f} °C"
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompLevelRangeText(self):
-        if len(self._calibration_temp_comp_samples) <= 0:
-            return "нет данных"
-        value = self._calibration_temp_comp_level_range()
-        if value is None:
-            return "нужны 0% и 100%"
-        low_value, high_value = value
-        return f"{float(low_value):.1f}..{float(high_value):.1f} %"
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompCurrentPeriodText(self):
-        value = self._calibration_temp_comp_last_period
-        if value is None:
-            return "нет данных"
-        return str(int(value))
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompCurrentTemperatureText(self):
-        value = self._calibration_temp_comp_last_temperature_c
-        if value is None:
-            return "нет данных"
-        return f"{float(value):.1f} °C"
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompCurrentK1Text(self):
-        value = self._calibration_temp_comp_k1_x100_current
-        if value is None:
-            return "не считан (DID 0x001B)"
-        return str(int(value))
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompCurrentK0Text(self):
-        value = self._calibration_temp_comp_k0_count_current
-        if value is None:
-            return "не считан (DID 0x001C)"
-        return str(int(value))
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompCurrentZeroTrimText(self):
-        value = self._calibration_temp_comp_zero_trim_count_current
+    @Property(str, notify=calibrationZeroTrimChanged)
+    def calibrationZeroTrimCurrentText(self):
+        value = self._calibration_zero_trim_count_current
         if value is None:
             return "не считан (DID 0x002D)"
         return str(int(value))
 
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompRecommendedZeroTrimText(self):
-        value = self._calibration_temp_comp_zero_trim_count_recommended
+    @Property(str, notify=calibrationZeroTrimChanged)
+    def calibrationZeroTrimRecommendedText(self):
+        value = self._calibration_zero_trim_count_recommended
         if value is None:
             return "не рассчитан"
         return str(int(value))
 
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompDeltaZeroTrimText(self):
-        value = self._calibration_temp_comp_zero_trim_count_delta
+    @Property(str, notify=calibrationZeroTrimChanged)
+    def calibrationZeroTrimDeltaText(self):
+        value = self._calibration_zero_trim_count_delta
         if value is None:
             return "не рассчитан"
         return f"{int(value):+d}"
 
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompNextZeroTrimText(self):
-        value = self._calibration_temp_comp_zero_trim_count_next
+    @Property(str, notify=calibrationZeroTrimChanged)
+    def calibrationZeroTrimNextText(self):
+        value = self._calibration_zero_trim_count_next
         if value is None:
             return "не рассчитан"
         return str(int(value))
 
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompResidualZeroTrimText(self):
-        value = self._calibration_temp_comp_zero_trim_residual_x10
+    @Property(str, notify=calibrationZeroTrimChanged)
+    def calibrationZeroTrimResidualText(self):
+        value = self._calibration_zero_trim_residual_x10
         if value is None:
             return "не рассчитан"
         return f"{float(value) / 10.0:+.1f} %"
 
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompZeroTrimLastReportText(self):
-        value = str(self._calibration_temp_comp_zero_trim_last_report or "").strip()
+    @Property(str, notify=calibrationZeroTrimChanged)
+    def calibrationZeroTrimLastReportText(self):
+        value = str(self._calibration_zero_trim_last_report or "").strip()
         if not value:
             return "Операции подгонки еще не выполнялись."
         return value
-
-    @Property(bool, notify=calibrationTempCompChanged)
-    def calibrationTempCompLinearPreviewEnabled(self):
-        return bool(self._calibration_temp_comp_linear_preview_enabled)
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompLinearPreviewK1Text(self):
-        value = self._calibration_temp_comp_linear_preview_k1_x100
-        if value is not None:
-            return str(int(value))
-        if self._calibration_temp_comp_k1_x100_current is not None:
-            return str(int(self._calibration_temp_comp_k1_x100_current))
-        if self._calibration_temp_comp_k1_x100_base is not None:
-            return str(int(self._calibration_temp_comp_k1_x100_base))
-        return "0"
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompLinearPreviewK0Text(self):
-        value = self._calibration_temp_comp_linear_preview_k0_count
-        if value is not None:
-            return str(int(value))
-        if self._calibration_temp_comp_k0_count_current is not None:
-            return str(int(self._calibration_temp_comp_k0_count_current))
-        if self._calibration_temp_comp_k0_count_base is not None:
-            return str(int(self._calibration_temp_comp_k0_count_base))
-        return "0"
-
-    @Property("QVariantList", notify=calibrationTempCompChanged)
-    def calibrationTempCompAdvancedRows(self):
-        rows: list[dict[str, object]] = []
-        for field in self._temp_comp_advanced_fields():
-            field_var = field.get("var")
-            if field_var is None:
-                continue
-
-            field_key = str(field.get("key", ""))
-            raw_value = self._calibration_temp_comp_advanced_values.get(field_key)
-            display_text = self._temp_comp_field_ui_value_text(field, raw_value)
-            raw_text = "" if raw_value is None else str(int(raw_value))
-            recommended_raw_value = self._calibration_temp_comp_advanced_recommended_values.get(field_key)
-            has_recommended = recommended_raw_value is not None
-            recommended_display_text = self._temp_comp_field_ui_value_text(field, recommended_raw_value) if has_recommended else "не рассчитан"
-            recommended_raw_text = "" if recommended_raw_value is None else str(int(recommended_raw_value))
-            rows.append(
-                {
-                    "key": field_key,
-                    "did": f"0x{int(field_var.pid) & 0xFFFF:04X}",
-                    "label": str(field.get("label", "")),
-                    "unit": str(field.get("unit", "")),
-                    "valueText": display_text,
-                    "valueRawText": raw_text,
-                    "recommendedText": recommended_display_text,
-                    "recommendedRawText": recommended_raw_text,
-                    "hasRecommended": bool(has_recommended),
-                    "placeholder": str(field.get("placeholder", "dec/0xHEX")),
-                }
-            )
-        return rows
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompBaseK1Text(self):
-        value = self._calibration_temp_comp_k1_x100_base
-        if value is None:
-            if len(self._calibration_temp_comp_samples) <= 0:
-                return "нет данных"
-            return "0 (оффлайн)"
-        if self._calibration_temp_comp_k1_x100_current is None:
-            return f"{int(value)} (оффлайн)"
-        return str(int(value))
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompRecommendedK1Text(self):
-        value = self._calibration_temp_comp_k1_x100_recommended
-        if value is None:
-            if not self._calibration_temp_comp_has_enough_samples():
-                return "нужно >=2 точки"
-            return "не рассчитан"
-        return str(int(value))
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompDeltaK1Text(self):
-        value = self._calibration_temp_comp_k1_x100_delta
-        if value is None:
-            if not self._calibration_temp_comp_has_enough_samples():
-                return "нужно >=2 точки"
-            return "не рассчитан"
-        return f"{int(value):+d}"
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompNextK1Text(self):
-        value = self._calibration_temp_comp_k1_x100_next
-        if value is None:
-            if not self._calibration_temp_comp_has_enough_samples():
-                return "нужно >=2 точки"
-            return "не рассчитан"
-        return str(int(value))
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompBaseK0Text(self):
-        value = self._calibration_temp_comp_k0_count_base
-        if value is None:
-            if len(self._calibration_temp_comp_samples) <= 0:
-                return "нет данных"
-            return "0 (оффлайн)"
-        if self._calibration_temp_comp_k0_count_current is None:
-            return f"{int(value)} (оффлайн)"
-        return str(int(value))
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompRecommendedK0Text(self):
-        value = self._calibration_temp_comp_k0_count_recommended
-        if value is None:
-            if not self._calibration_temp_comp_has_level_calibration():
-                return "нужны 0% и 100%"
-            if not self._calibration_temp_comp_has_enough_samples():
-                return "нужно >=2 точки"
-            return "не рассчитан"
-        return str(int(value))
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompDeltaK0Text(self):
-        value = self._calibration_temp_comp_k0_count_delta
-        if value is None:
-            if not self._calibration_temp_comp_has_level_calibration():
-                return "нужны 0% и 100%"
-            if not self._calibration_temp_comp_has_enough_samples():
-                return "нужно >=2 точки"
-            return "не рассчитан"
-        return f"{int(value):+d}"
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompNextK0Text(self):
-        value = self._calibration_temp_comp_k0_count_next
-        if value is None:
-            if not self._calibration_temp_comp_has_level_calibration():
-                return "нужны 0% и 100%"
-            if not self._calibration_temp_comp_has_enough_samples():
-                return "нужно >=2 точки"
-            return "не рассчитан"
-        return str(int(value))
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompSlopeBeforePeriodText(self):
-        value = self._calibration_temp_comp_period_slope_before
-        if value is None:
-            if not self._calibration_temp_comp_has_enough_samples():
-                return "нужно >=2 точки"
-            return "не рассчитан"
-        return f"{float(value):.4f} count/°C"
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompSlopeAfterPeriodText(self):
-        value = self._calibration_temp_comp_period_slope_after
-        if value is None:
-            if not self._calibration_temp_comp_has_enough_samples():
-                return "нужно >=2 точки"
-            return "не рассчитан"
-        return f"{float(value):.4f} count/°C"
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompSlopeBeforeLevelText(self):
-        value = self._calibration_temp_comp_level_slope_before
-        if value is None:
-            if not self._calibration_temp_comp_has_level_calibration():
-                return "нужны 0% и 100%"
-            if not self._calibration_temp_comp_has_enough_samples():
-                return "нужно >=2 точки"
-            return "не рассчитан"
-        return f"{float(value):.4f} %/°C"
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompSlopeAfterLevelText(self):
-        value = self._calibration_temp_comp_level_slope_after
-        if value is None:
-            if not self._calibration_temp_comp_has_level_calibration():
-                return "нужны 0% и 100%"
-            if not self._calibration_temp_comp_has_enough_samples():
-                return "нужно >=2 точки"
-            return "не рассчитан"
-        return f"{float(value):.4f} %/°C"
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompReductionPeriodText(self):
-        value = self._calibration_temp_comp_period_reduction_percent
-        if value is None:
-            if not self._calibration_temp_comp_has_enough_samples():
-                return "нужно >=2 точки"
-            return "не рассчитан"
-        return f"{float(value):.2f} %"
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompReductionLevelText(self):
-        value = self._calibration_temp_comp_level_reduction_percent
-        if value is None:
-            if not self._calibration_temp_comp_has_level_calibration():
-                return "нужны 0% и 100%"
-            if not self._calibration_temp_comp_has_enough_samples():
-                return "нужно >=2 точки"
-            return "не рассчитан"
-        return f"{float(value):.2f} %"
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompErrorRangeBeforeText(self):
-        value = self._calibration_temp_comp_level_error_range_before
-        if value is None:
-            if not self._calibration_temp_comp_has_level_calibration():
-                return "нужны 0% и 100%"
-            if not self._calibration_temp_comp_has_enough_samples():
-                return "нужно >=2 точки"
-            return "не рассчитан"
-        low_value, high_value = value
-        return f"{float(low_value):.3f}..{float(high_value):.3f} %"
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompErrorRangeAfterText(self):
-        value = self._calibration_temp_comp_level_error_range_after
-        if value is None:
-            if not self._calibration_temp_comp_has_level_calibration():
-                return "нужны 0% и 100%"
-            if not self._calibration_temp_comp_has_enough_samples():
-                return "нужно >=2 точки"
-            return "не рассчитан"
-        low_value, high_value = value
-        return f"{float(low_value):.3f}..{float(high_value):.3f} %"
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompErrorMaxBeforeText(self):
-        value = self._calibration_temp_comp_level_error_max_before
-        if value is None:
-            if not self._calibration_temp_comp_has_level_calibration():
-                return "нужны 0% и 100%"
-            if not self._calibration_temp_comp_has_enough_samples():
-                return "нужно >=2 точки"
-            return "не рассчитан"
-        return f"{float(value):.3f} %"
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompErrorMaxAfterText(self):
-        value = self._calibration_temp_comp_level_error_max_after
-        if value is None:
-            if not self._calibration_temp_comp_has_level_calibration():
-                return "нужны 0% и 100%"
-            if not self._calibration_temp_comp_has_enough_samples():
-                return "нужно >=2 точки"
-            return "не рассчитан"
-        return f"{float(value):.3f} %"
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompErrorP95BeforeText(self):
-        value = self._calibration_temp_comp_level_error_p95_before
-        if value is None:
-            if not self._calibration_temp_comp_has_level_calibration():
-                return "нужны 0% и 100%"
-            if not self._calibration_temp_comp_has_enough_samples():
-                return "нужно >=2 точки"
-            return "не рассчитан"
-        return f"{float(value):.3f} %"
-
-    @Property(str, notify=calibrationTempCompChanged)
-    def calibrationTempCompErrorP95AfterText(self):
-        value = self._calibration_temp_comp_level_error_p95_after
-        if value is None:
-            if not self._calibration_temp_comp_has_level_calibration():
-                return "нужны 0% и 100%"
-            if not self._calibration_temp_comp_has_enough_samples():
-                return "нужно >=2 точки"
-            return "не рассчитан"
-        return f"{float(value):.3f} %"
-
-    @Property(bool, notify=calibrationTempCompChanged)
-    def calibrationTempCompCanApplyNext(self):
-        return self._calibration_temp_comp_k1_x100_next is not None
-
-    @Property(bool, notify=calibrationTempCompChanged)
-    def calibrationTempCompCanApplyNextK0(self):
-        return self._calibration_temp_comp_k0_count_next is not None
-
-    @Property("QVariantList", notify=calibrationTempCompChanged)
-    def calibrationTempCompTrendSeries(self):
-        return self._calibration_temp_comp_chart_series
-
-    @Property(int, notify=calibrationTempCompChanged)
-    def calibrationTempCompChartRevision(self):
-        """Цель функции в выдаче версии графика температурной компенсации, затем она позволяет QML пропускать лишние перерисовки."""
-        return int(self._calibration_temp_comp_chart_revision)
 
     @Property(bool, notify=diagnosticsChanged)
     def diagnosticsRunning(self):

@@ -198,89 +198,32 @@ class AppController(
         self._calibration_recent_window_sec = 4.0
         self._calibration_captured_level = 0
         self._calibration_captured_available = False
-        self._calibration_temp_comp_status = "Загрузите CSV из коллектора для офлайн-анализа температурной компенсации."
-        self._calibration_temp_comp_operation_text = "Ожидание операций."
-        self._calibration_temp_comp_operation_busy = False
-        self._calibration_temp_comp_operation_progress_percent = 0
-        self._calibration_temp_comp_operation_progress_determinate = False
-        self._calibration_temp_comp_preview_status = "Ожидание превью."
-        self._calibration_temp_comp_preview_busy = False
-        self._calibration_temp_comp_preview_progress_percent = 0
-        self._calibration_temp_comp_preview_progress_determinate = False
-        self._calibration_temp_comp_samples: list[dict[str, object]] = []
-        self._calibration_temp_comp_samples_by_node: dict[int, dict[str, object]] = {}
-        self._calibration_temp_comp_sample_limit = 3000
-        self._calibration_temp_comp_last_period: int | None = None
-        self._calibration_temp_comp_last_temperature_x10: int | None = None
-        self._calibration_temp_comp_last_temperature_c: float | None = None
-        self._calibration_temp_comp_k1_x100_current: int | None = None
-        self._calibration_temp_comp_k1_x100_base: int | None = None
-        self._calibration_temp_comp_k1_x100_recommended: int | None = None
-        self._calibration_temp_comp_k1_x100_delta: int | None = None
-        self._calibration_temp_comp_k1_x100_next: int | None = None
-        self._calibration_temp_comp_k0_count_current: int | None = None
-        self._calibration_temp_comp_linear_preview_enabled = False
-        self._calibration_temp_comp_linear_preview_k1_x100: int | None = None
-        self._calibration_temp_comp_linear_preview_k0_count: int | None = None
-        self._calibration_temp_comp_advanced_values: dict[str, int | None] = {}
-        self._calibration_temp_comp_adv_read_active = False
-        self._calibration_temp_comp_adv_read_queue: list[str] = []
-        self._calibration_temp_comp_adv_read_inflight_key: str | None = None
-        self._calibration_temp_comp_adv_read_total_count = 0
-        self._calibration_temp_comp_adv_read_success_count = 0
-        self._calibration_temp_comp_adv_read_mode_aware = False
-        self._calibration_temp_comp_adv_read_expected_mode: int | None = None
-        self._calibration_temp_comp_adv_read_recompute_pending = False
-        self._calibration_temp_comp_adv_read_timeout_ms = 1200
-        self._calibration_temp_comp_adv_read_delay_ms = 120
-        self._calibration_temp_comp_recommendation_apply_queue: list[str] = []
-        self._calibration_temp_comp_k0_air_zero_adjust_active = False
-        self._calibration_temp_comp_k0_air_zero_adjust_empty_period: int | None = None
-        self._calibration_temp_comp_k0_air_zero_adjust_full_period: int | None = None
-        self._calibration_temp_comp_k0_air_zero_adjust_level_x10: int | None = None
-        self._calibration_temp_comp_k0_air_zero_adjust_current_k0: int | None = None
-        self._calibration_temp_comp_k0_air_zero_adjust_timeout_ms = 1500
-        self._calibration_temp_comp_zero_trim_air_zero_adjust_active = False
-        self._calibration_temp_comp_zero_trim_air_zero_adjust_empty_period: int | None = None
-        self._calibration_temp_comp_zero_trim_air_zero_adjust_full_period: int | None = None
-        self._calibration_temp_comp_zero_trim_air_zero_adjust_level_x10: int | None = None
-        self._calibration_temp_comp_zero_trim_air_zero_adjust_level_samples: list[int] = []
-        self._calibration_temp_comp_zero_trim_air_zero_adjust_required_samples = 6
-        self._calibration_temp_comp_zero_trim_air_zero_adjust_stability_threshold_x10 = 3
-        self._calibration_temp_comp_zero_trim_air_zero_adjust_current_zero_trim: int | None = None
-        self._calibration_temp_comp_zero_trim_air_zero_adjust_timeout_ms = 1500
-        self._calibration_temp_comp_k0_count_base: int | None = None
-        self._calibration_temp_comp_k0_count_recommended: int | None = None
-        self._calibration_temp_comp_k0_count_delta: int | None = None
-        self._calibration_temp_comp_k0_count_next: int | None = None
-        self._calibration_temp_comp_zero_trim_count_current: int | None = None
-        self._calibration_temp_comp_zero_trim_count_recommended: int | None = None
-        self._calibration_temp_comp_zero_trim_count_delta: int | None = None
-        self._calibration_temp_comp_zero_trim_count_next: int | None = None
-        self._calibration_temp_comp_zero_trim_residual_x10: int | None = None
-        self._calibration_temp_comp_zero_trim_last_report = "Операции подгонки еще не выполнялись."
-        self._calibration_temp_comp_zero_trim_csv_log_path = ""
-        self._calibration_temp_comp_zero_trim_verify_pending = False
-        self._calibration_temp_comp_zero_trim_verify_timeout_ms = 1500
-        self._calibration_temp_comp_zero_trim_verify_tolerance_x10 = 10
-        self._calibration_temp_comp_zero_trim_verify_repeat_threshold_x10 = 25
-        self._calibration_temp_comp_zero_trim_verify_retries_left = 0
-        self._calibration_temp_comp_zero_trim_verify_retries_max = 1
-        self._calibration_temp_comp_period_slope_before: float | None = None
-        self._calibration_temp_comp_period_slope_after: float | None = None
-        self._calibration_temp_comp_level_slope_before: float | None = None
-        self._calibration_temp_comp_level_slope_after: float | None = None
-        self._calibration_temp_comp_period_reduction_percent: float | None = None
-        self._calibration_temp_comp_level_reduction_percent: float | None = None
-        self._calibration_temp_comp_level_error_range_before: tuple[float, float] | None = None
-        self._calibration_temp_comp_level_error_range_after: tuple[float, float] | None = None
-        self._calibration_temp_comp_level_error_max_before: float | None = None
-        self._calibration_temp_comp_level_error_max_after: float | None = None
-        self._calibration_temp_comp_level_error_p95_before: float | None = None
-        self._calibration_temp_comp_level_error_p95_after: float | None = None
-        self._calibration_temp_comp_chart_series: list[dict[str, object]] = []
-        self._calibration_temp_comp_chart_revision = 0
-        self._calibration_temp_comp_advanced_recommended_values: dict[str, int | None] = {}
+        self._calibration_zero_trim_operation_text = "Ожидание операций."
+        self._calibration_zero_trim_operation_busy = False
+        self._calibration_zero_trim_operation_progress_percent = 0
+        self._calibration_zero_trim_operation_progress_determinate = False
+        self._calibration_zero_trim_air_zero_adjust_active = False
+        self._calibration_zero_trim_air_zero_adjust_empty_period: int | None = None
+        self._calibration_zero_trim_air_zero_adjust_full_period: int | None = None
+        self._calibration_zero_trim_air_zero_adjust_level_x10: int | None = None
+        self._calibration_zero_trim_air_zero_adjust_level_samples: list[int] = []
+        self._calibration_zero_trim_air_zero_adjust_required_samples = 6
+        self._calibration_zero_trim_air_zero_adjust_stability_threshold_x10 = 3
+        self._calibration_zero_trim_air_zero_adjust_current_zero_trim: int | None = None
+        self._calibration_zero_trim_air_zero_adjust_timeout_ms = 1500
+        self._calibration_zero_trim_count_current: int | None = None
+        self._calibration_zero_trim_count_recommended: int | None = None
+        self._calibration_zero_trim_count_delta: int | None = None
+        self._calibration_zero_trim_count_next: int | None = None
+        self._calibration_zero_trim_residual_x10: int | None = None
+        self._calibration_zero_trim_last_report = "Операции подгонки еще не выполнялись."
+        self._calibration_zero_trim_csv_log_path = ""
+        self._calibration_zero_trim_verify_pending = False
+        self._calibration_zero_trim_verify_timeout_ms = 1500
+        self._calibration_zero_trim_verify_tolerance_x10 = 10
+        self._calibration_zero_trim_verify_repeat_threshold_x10 = 25
+        self._calibration_zero_trim_verify_retries_left = 0
+        self._calibration_zero_trim_verify_retries_max = 1
         self._calibration_backup_available = False
         self._calibration_backup_level_0 = 0
         self._calibration_backup_level_100 = 0
@@ -316,9 +259,6 @@ class AppController(
         self._calibration_node_options: list[str] = ["Авто (по текущим UDS ID)"]
         self._calibration_node_values: list[int | None] = [None]
         self._selected_calibration_node_index = 0
-        self._calibration_temp_comp_dataset_options: list[str] = []
-        self._calibration_temp_comp_dataset_values: list[int] = []
-        self._selected_calibration_temp_comp_dataset_index = -1
         self._calibration_read_service = ServiceReadDataById()
         self._calibration_write_service = ServiceWriteDataById()
         self._calibration_session_service = ServiceSession()
@@ -536,41 +476,21 @@ class AppController(
         self._calibration_sequence_timeout_timer.setSingleShot(True)
         self._calibration_sequence_timeout_timer.setInterval(self._calibration_sequence_timeout_ms)
         self._calibration_sequence_timeout_timer.timeout.connect(self._on_calibration_sequence_timeout)
-        self._calibration_temp_comp_adv_read_timeout_timer = QTimer(self)
-        self._calibration_temp_comp_adv_read_timeout_timer.setSingleShot(True)
-        self._calibration_temp_comp_adv_read_timeout_timer.setInterval(self._calibration_temp_comp_adv_read_timeout_ms)
-        self._calibration_temp_comp_adv_read_timeout_timer.timeout.connect(
-            self._on_calibration_temp_comp_advanced_read_timeout
+        self._calibration_zero_trim_air_zero_adjust_timeout_timer = QTimer(self)
+        self._calibration_zero_trim_air_zero_adjust_timeout_timer.setSingleShot(True)
+        self._calibration_zero_trim_air_zero_adjust_timeout_timer.setInterval(
+            self._calibration_zero_trim_air_zero_adjust_timeout_ms
         )
-        self._calibration_temp_comp_adv_read_delay_timer = QTimer(self)
-        self._calibration_temp_comp_adv_read_delay_timer.setSingleShot(True)
-        self._calibration_temp_comp_adv_read_delay_timer.setInterval(self._calibration_temp_comp_adv_read_delay_ms)
-        self._calibration_temp_comp_adv_read_delay_timer.timeout.connect(
-            self._on_calibration_temp_comp_advanced_read_delay_timeout
+        self._calibration_zero_trim_air_zero_adjust_timeout_timer.timeout.connect(
+            self._on_calibration_zero_trim_air_zero_adjust_timeout
         )
-        self._calibration_temp_comp_k0_air_zero_adjust_timeout_timer = QTimer(self)
-        self._calibration_temp_comp_k0_air_zero_adjust_timeout_timer.setSingleShot(True)
-        self._calibration_temp_comp_k0_air_zero_adjust_timeout_timer.setInterval(
-            self._calibration_temp_comp_k0_air_zero_adjust_timeout_ms
+        self._calibration_zero_trim_verify_timeout_timer = QTimer(self)
+        self._calibration_zero_trim_verify_timeout_timer.setSingleShot(True)
+        self._calibration_zero_trim_verify_timeout_timer.setInterval(
+            self._calibration_zero_trim_verify_timeout_ms
         )
-        self._calibration_temp_comp_k0_air_zero_adjust_timeout_timer.timeout.connect(
-            self._on_calibration_temp_comp_k0_air_zero_adjust_timeout
-        )
-        self._calibration_temp_comp_zero_trim_air_zero_adjust_timeout_timer = QTimer(self)
-        self._calibration_temp_comp_zero_trim_air_zero_adjust_timeout_timer.setSingleShot(True)
-        self._calibration_temp_comp_zero_trim_air_zero_adjust_timeout_timer.setInterval(
-            self._calibration_temp_comp_zero_trim_air_zero_adjust_timeout_ms
-        )
-        self._calibration_temp_comp_zero_trim_air_zero_adjust_timeout_timer.timeout.connect(
-            self._on_calibration_temp_comp_zero_trim_air_zero_adjust_timeout
-        )
-        self._calibration_temp_comp_zero_trim_verify_timeout_timer = QTimer(self)
-        self._calibration_temp_comp_zero_trim_verify_timeout_timer.setSingleShot(True)
-        self._calibration_temp_comp_zero_trim_verify_timeout_timer.setInterval(
-            self._calibration_temp_comp_zero_trim_verify_timeout_ms
-        )
-        self._calibration_temp_comp_zero_trim_verify_timeout_timer.timeout.connect(
-            self._on_calibration_temp_comp_zero_trim_verify_timeout
+        self._calibration_zero_trim_verify_timeout_timer.timeout.connect(
+            self._on_calibration_zero_trim_verify_timeout
         )
         self._calibration_backup_all_nodes_step_timer = QTimer(self)
         self._calibration_backup_all_nodes_step_timer.setSingleShot(True)

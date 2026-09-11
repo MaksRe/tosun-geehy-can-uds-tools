@@ -1,3 +1,11 @@
+"""Проверки арифметики подгонки нуля и её автопроверки.
+
+Прежняя температурная компенсация с коэффициентами K1 и K0 удалена, её
+место занял температурный профиль. Здесь остались проверки того, что
+пережило удаление: разбор ввода, расчёт нового смещения и поведение
+автопроверки при таймаутах.
+"""
+
 from ui.qml.controller.calibration_mixin import AppControllerCalibrationMixin
 import pytest
 
@@ -23,19 +31,6 @@ def test_saturate_int16_limits_range():
     assert AppControllerCalibrationMixin._saturate_int16(123) == 123
     assert AppControllerCalibrationMixin._saturate_int16(40000) == 32767
     assert AppControllerCalibrationMixin._saturate_int16(-40000) == -32768
-
-
-def test_apply_temperature_compensation_model_linear_mode():
-    """Цель теста в проверке базовой формулы линейной компенсации, затем он подтверждает расчет Pcomp по K1 и K0."""
-    # Pcomp = raw - (k1*(T-20.0C)/1000) + k0
-    # raw=1000, T=30.0C -> dT=100 (x10), k1=50 => delta=5, k0=10 => 1000-5+10=1005
-    result = AppControllerCalibrationMixin._apply_temperature_compensation_model(
-        raw_period=1000,
-        temperature_x10=300,
-        k1_x100=50,
-        k0_count=10,
-    )
-    assert result == 1005
 
 
 def test_resolve_zero_trim_write_value_accepts_dec_and_hex():
@@ -111,26 +106,26 @@ class _ZeroTrimVerifyTimeoutContext:
 
     def __init__(self, *, retries_left: int, request_ok: bool):
         """Цель конструктора в подготовке сценария таймаута, затем он задает исходные флаги и заглушки."""
-        self._calibration_temp_comp_zero_trim_verify_pending = True
-        self._calibration_temp_comp_zero_trim_verify_retries_left = int(retries_left)
-        self._calibration_temp_comp_zero_trim_verify_timeout_ms = 1500
-        self._calibration_temp_comp_zero_trim_verify_timeout_timer = _FakeTimer()
+        self._calibration_zero_trim_verify_pending = True
+        self._calibration_zero_trim_verify_retries_left = int(retries_left)
+        self._calibration_zero_trim_verify_timeout_ms = 1500
+        self._calibration_zero_trim_verify_timeout_timer = _FakeTimer()
         self._request_ok = bool(request_ok)
         self._request_count = 0
         self._status_calls = []
         self._last_report_kwargs = None
         self._reset_called = False
         self._logs = []
-        self._calibration_temp_comp_zero_trim_count_current = 10
-        self._calibration_temp_comp_zero_trim_count_next = 12
-        self._calibration_temp_comp_zero_trim_residual_x10 = 15
+        self._calibration_zero_trim_count_current = 10
+        self._calibration_zero_trim_count_next = 12
+        self._calibration_zero_trim_residual_x10 = 15
 
-    def _request_calibration_temp_comp_raw_level_read(self):
+    def _request_calibration_raw_level_read(self):
         """Цель метода в имитации повторного чтения DID 0x0018, затем он возвращает преднастроенный исход отправки."""
         self._request_count += 1
         return bool(self._request_ok)
 
-    def _set_calibration_temp_comp_operation_status(self, text, **kwargs):
+    def _set_calibration_zero_trim_operation_status(self, text, **kwargs):
         """Цель метода в фиксации статуса операции, затем он складывает текст и параметры в список проверок."""
         self._status_calls.append({"text": str(text), **dict(kwargs)})
 
@@ -138,15 +133,15 @@ class _ZeroTrimVerifyTimeoutContext:
         """Цель метода в фиксации логов сценария, затем он сохраняет текст и цвет без зависимости от UI."""
         self._logs.append((str(text), color))
 
-    def _set_calibration_temp_comp_zero_trim_last_report(self, **kwargs):
+    def _set_calibration_zero_trim_last_report(self, **kwargs):
         """Цель метода в перехвате итогового отчета, затем он сохраняет аргументы для последующего ассерта."""
         self._last_report_kwargs = dict(kwargs)
 
-    def _reset_calibration_temp_comp_zero_trim_verify_state(self):
+    def _reset_calibration_zero_trim_verify_state(self):
         """Цель метода в имитации сброса состояния автопроверки, затем он выставляет конечные флаги завершения."""
         self._reset_called = True
-        self._calibration_temp_comp_zero_trim_verify_pending = False
-        self._calibration_temp_comp_zero_trim_verify_retries_left = 0
+        self._calibration_zero_trim_verify_pending = False
+        self._calibration_zero_trim_verify_retries_left = 0
 
 
 class _ZeroTrimReadStepTimeoutContext:
@@ -154,17 +149,17 @@ class _ZeroTrimReadStepTimeoutContext:
 
     def __init__(self):
         """Цель конструктора в подготовке активной операции, затем он инициализирует перехваты вызовов."""
-        self._calibration_temp_comp_zero_trim_air_zero_adjust_active = True
+        self._calibration_zero_trim_air_zero_adjust_active = True
         self._reset_called = False
         self._status_calls = []
         self._logs = []
 
-    def _reset_calibration_temp_comp_zero_trim_air_zero_adjust_state(self):
+    def _reset_calibration_zero_trim_air_zero_adjust_state(self):
         """Цель метода в фиксации reset после таймаута, затем он переводит флаг активности в false."""
         self._reset_called = True
-        self._calibration_temp_comp_zero_trim_air_zero_adjust_active = False
+        self._calibration_zero_trim_air_zero_adjust_active = False
 
-    def _set_calibration_temp_comp_operation_status(self, text, **kwargs):
+    def _set_calibration_zero_trim_operation_status(self, text, **kwargs):
         """Цель метода в перехвате статуса операции, затем он сохраняет все аргументы для проверок."""
         self._status_calls.append({"text": str(text), **dict(kwargs)})
 
@@ -176,11 +171,11 @@ class _ZeroTrimReadStepTimeoutContext:
 def test_zero_trim_verify_timeout_requests_retry_when_retries_left():
     """Цель теста в проверке повторного запроса DID 0x0018, затем он подтверждает запуск таймера и промежуточный статус."""
     ctx = _ZeroTrimVerifyTimeoutContext(retries_left=1, request_ok=True)
-    AppControllerCalibrationMixin._on_calibration_temp_comp_zero_trim_verify_timeout(ctx)
+    AppControllerCalibrationMixin._on_calibration_zero_trim_verify_timeout(ctx)
 
     assert ctx._request_count == 1
-    assert ctx._calibration_temp_comp_zero_trim_verify_retries_left == 0
-    assert ctx._calibration_temp_comp_zero_trim_verify_timeout_timer.started is True
+    assert ctx._calibration_zero_trim_verify_retries_left == 0
+    assert ctx._calibration_zero_trim_verify_timeout_timer.started is True
     assert ctx._reset_called is False
     assert ctx._last_report_kwargs is None
     assert len(ctx._status_calls) > 0
@@ -191,7 +186,7 @@ def test_zero_trim_verify_timeout_requests_retry_when_retries_left():
 def test_zero_trim_verify_timeout_finishes_when_no_retries_left():
     """Цель теста в проверке финальной ветки таймаута, затем он подтверждает запись отчета и сброс состояния."""
     ctx = _ZeroTrimVerifyTimeoutContext(retries_left=0, request_ok=False)
-    AppControllerCalibrationMixin._on_calibration_temp_comp_zero_trim_verify_timeout(ctx)
+    AppControllerCalibrationMixin._on_calibration_zero_trim_verify_timeout(ctx)
 
     assert ctx._request_count == 0
     assert ctx._reset_called is True
@@ -206,7 +201,7 @@ def test_zero_trim_verify_timeout_finishes_when_no_retries_left():
 def test_zero_trim_verify_timeout_finishes_when_retry_send_failed():
     """Цель теста в проверке отказа повторной отправки DID 0x0018, затем он подтверждает переход в финальный статус ошибки."""
     ctx = _ZeroTrimVerifyTimeoutContext(retries_left=1, request_ok=False)
-    AppControllerCalibrationMixin._on_calibration_temp_comp_zero_trim_verify_timeout(ctx)
+    AppControllerCalibrationMixin._on_calibration_zero_trim_verify_timeout(ctx)
 
     assert ctx._request_count == 1
     assert ctx._reset_called is True
@@ -219,7 +214,7 @@ def test_zero_trim_verify_timeout_finishes_when_retry_send_failed():
 def test_zero_trim_read_step_timeout_sets_error_status_and_resets_state():
     """Цель теста в проверке таймаута чтения DID для автоподгонки, затем он подтверждает reset и понятный текст статуса."""
     ctx = _ZeroTrimReadStepTimeoutContext()
-    AppControllerCalibrationMixin._on_calibration_temp_comp_zero_trim_air_zero_adjust_timeout(ctx)
+    AppControllerCalibrationMixin._on_calibration_zero_trim_air_zero_adjust_timeout(ctx)
 
     assert ctx._reset_called is True
     assert len(ctx._status_calls) > 0

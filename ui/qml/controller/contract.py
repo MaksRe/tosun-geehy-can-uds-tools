@@ -15,7 +15,7 @@ class AppControllerContract:
     calibrationNodeSelectionChanged: Any
     calibrationPollingIntervalChanged: Any
     calibrationStateChanged: Any
-    calibrationTempCompChanged: Any
+    calibrationZeroTrimChanged: Any
     calibrationValuesChanged: Any
     calibrationVerificationChanged: Any
     calibrationWizardChanged: Any
@@ -150,9 +150,6 @@ class AppControllerContract:
     _calibration_level_100_known: Any
     _calibration_node_options: Any
     _calibration_node_values: Any
-    _calibration_temp_comp_dataset_options: Any
-    _calibration_temp_comp_dataset_values: Any
-    _selected_calibration_temp_comp_dataset_index: Any
     _calibration_poll_interval_ms: Any
     _calibration_poll_timer: Any
     _calibration_read_service: Any
@@ -165,82 +162,34 @@ class AppControllerContract:
     _calibration_session_service: Any
     _calibration_target_node_sa: Any
     _calibration_runtime_target_sa: Any
-    _calibration_temp_comp_status: Any
-    _calibration_temp_comp_operation_text: Any
-    _calibration_temp_comp_operation_busy: Any
-    _calibration_temp_comp_operation_progress_percent: Any
-    _calibration_temp_comp_operation_progress_determinate: Any
-    _calibration_temp_comp_preview_status: Any
-    _calibration_temp_comp_preview_busy: Any
-    _calibration_temp_comp_preview_progress_percent: Any
-    _calibration_temp_comp_preview_progress_determinate: Any
-    _calibration_temp_comp_samples: Any
-    _calibration_temp_comp_samples_by_node: Any
-    _calibration_temp_comp_sample_limit: Any
-    _calibration_temp_comp_last_period: Any
-    _calibration_temp_comp_last_temperature_x10: Any
-    _calibration_temp_comp_last_temperature_c: Any
-    _calibration_temp_comp_k1_x100_current: Any
-    _calibration_temp_comp_k1_x100_base: Any
-    _calibration_temp_comp_k1_x100_recommended: Any
-    _calibration_temp_comp_k1_x100_delta: Any
-    _calibration_temp_comp_k1_x100_next: Any
-    _calibration_temp_comp_linear_preview_enabled: Any
-    _calibration_temp_comp_linear_preview_k1_x100: Any
-    _calibration_temp_comp_linear_preview_k0_count: Any
-    _calibration_temp_comp_advanced_values: Any
-    _calibration_temp_comp_adv_read_active: Any
-    _calibration_temp_comp_adv_read_queue: Any
-    _calibration_temp_comp_adv_read_inflight_key: Any
-    _calibration_temp_comp_adv_read_total_count: Any
-    _calibration_temp_comp_adv_read_success_count: Any
-    _calibration_temp_comp_adv_read_mode_aware: Any
-    _calibration_temp_comp_adv_read_expected_mode: Any
-    _calibration_temp_comp_adv_read_recompute_pending: Any
-    _calibration_temp_comp_adv_read_timeout_ms: Any
-    _calibration_temp_comp_adv_read_delay_ms: Any
-    _calibration_temp_comp_adv_read_timeout_timer: Any
-    _calibration_temp_comp_adv_read_delay_timer: Any
-    _calibration_temp_comp_recommendation_apply_queue: Any
-    _calibration_temp_comp_k0_air_zero_adjust_active: Any
-    _calibration_temp_comp_k0_air_zero_adjust_empty_period: Any
-    _calibration_temp_comp_k0_air_zero_adjust_full_period: Any
-    _calibration_temp_comp_k0_air_zero_adjust_level_x10: Any
-    _calibration_temp_comp_k0_air_zero_adjust_current_k0: Any
-    _calibration_temp_comp_k0_air_zero_adjust_timeout_ms: Any
-    _calibration_temp_comp_k0_air_zero_adjust_timeout_timer: Any
-    _calibration_temp_comp_zero_trim_air_zero_adjust_active: Any
-    _calibration_temp_comp_zero_trim_air_zero_adjust_empty_period: Any
-    _calibration_temp_comp_zero_trim_air_zero_adjust_full_period: Any
-    _calibration_temp_comp_zero_trim_air_zero_adjust_level_x10: Any
-    _calibration_temp_comp_zero_trim_air_zero_adjust_level_samples: Any
-    _calibration_temp_comp_zero_trim_air_zero_adjust_required_samples: Any
-    _calibration_temp_comp_zero_trim_air_zero_adjust_stability_threshold_x10: Any
-    _calibration_temp_comp_zero_trim_air_zero_adjust_current_zero_trim: Any
-    _calibration_temp_comp_zero_trim_air_zero_adjust_timeout_ms: Any
-    _calibration_temp_comp_zero_trim_air_zero_adjust_timeout_timer: Any
-    _calibration_temp_comp_zero_trim_count_current: Any
-    _calibration_temp_comp_zero_trim_count_recommended: Any
-    _calibration_temp_comp_zero_trim_count_delta: Any
-    _calibration_temp_comp_zero_trim_count_next: Any
-    _calibration_temp_comp_zero_trim_residual_x10: Any
-    _calibration_temp_comp_zero_trim_last_report: Any
-    _calibration_temp_comp_zero_trim_csv_log_path: Any
-    _calibration_temp_comp_zero_trim_verify_pending: Any
-    _calibration_temp_comp_zero_trim_verify_timeout_ms: Any
-    _calibration_temp_comp_zero_trim_verify_tolerance_x10: Any
-    _calibration_temp_comp_zero_trim_verify_repeat_threshold_x10: Any
-    _calibration_temp_comp_zero_trim_verify_retries_left: Any
-    _calibration_temp_comp_zero_trim_verify_retries_max: Any
-    _calibration_temp_comp_zero_trim_verify_timeout_timer: Any
-    _calibration_temp_comp_period_slope_before: Any
-    _calibration_temp_comp_period_slope_after: Any
-    _calibration_temp_comp_level_slope_before: Any
-    _calibration_temp_comp_level_slope_after: Any
-    _calibration_temp_comp_period_reduction_percent: Any
-    _calibration_temp_comp_level_reduction_percent: Any
-    _calibration_temp_comp_chart_series: Any
-    _calibration_temp_comp_chart_revision: Any
+    _calibration_zero_trim_operation_text: Any
+    _calibration_zero_trim_operation_busy: Any
+    _calibration_zero_trim_operation_progress_percent: Any
+    _calibration_zero_trim_operation_progress_determinate: Any
+    _calibration_zero_trim_air_zero_adjust_active: Any
+    _calibration_zero_trim_air_zero_adjust_empty_period: Any
+    _calibration_zero_trim_air_zero_adjust_full_period: Any
+    _calibration_zero_trim_air_zero_adjust_level_x10: Any
+    _calibration_zero_trim_air_zero_adjust_level_samples: Any
+    _calibration_zero_trim_air_zero_adjust_required_samples: Any
+    _calibration_zero_trim_air_zero_adjust_stability_threshold_x10: Any
+    _calibration_zero_trim_air_zero_adjust_current_zero_trim: Any
+    _calibration_zero_trim_air_zero_adjust_timeout_ms: Any
+    _calibration_zero_trim_air_zero_adjust_timeout_timer: Any
+    _calibration_zero_trim_count_current: Any
+    _calibration_zero_trim_count_recommended: Any
+    _calibration_zero_trim_count_delta: Any
+    _calibration_zero_trim_count_next: Any
+    _calibration_zero_trim_residual_x10: Any
+    _calibration_zero_trim_last_report: Any
+    _calibration_zero_trim_csv_log_path: Any
+    _calibration_zero_trim_verify_pending: Any
+    _calibration_zero_trim_verify_timeout_ms: Any
+    _calibration_zero_trim_verify_tolerance_x10: Any
+    _calibration_zero_trim_verify_repeat_threshold_x10: Any
+    _calibration_zero_trim_verify_retries_left: Any
+    _calibration_zero_trim_verify_retries_max: Any
+    _calibration_zero_trim_verify_timeout_timer: Any
     _calibration_verify0_ok: Any
     _calibration_verify100_ok: Any
     _calibration_verify_tolerance: Any
