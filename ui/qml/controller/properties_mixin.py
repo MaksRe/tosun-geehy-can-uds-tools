@@ -67,6 +67,7 @@ class AppControllerPropertiesMixin(AppControllerContract):
     profileChanged = Signal()
     chamberChanged = Signal()
     trialChanged = Signal()
+    trialLiveChanged = Signal()
     softwareVersionChanged = Signal()
 
     @Property("QStringList", notify=devicesChanged)
@@ -862,17 +863,32 @@ class AppControllerPropertiesMixin(AppControllerContract):
 
     @Property("QVariantList", notify=trialChanged)
     def trialSteps(self):
-        """Цель функции в передаче шагов пробной калибровки, затем окно показывает итог каждого."""
+        """Цель функции в передаче этапов пробной калибровки в таблицу, затем видно итог и время каждого."""
         return self._trial_step_rows()
+
+    @Property("QVariantList", notify=trialChanged)
+    def trialLogRows(self):
+        """Цель функции в передаче журнала проверки, затем видно, что делал каждый этап и почему."""
+        return self._trial_log_rows()
 
     @Property(bool, notify=trialChanged)
     def trialBusy(self):
-        """Цель функции в признаке идущей проверки, затем она блокирует кнопки на это время."""
+        """Цель функции в признаке идущего обмена, затем она блокирует кнопки на это время."""
         return bool(self._trial_busy)
+
+    @Property(bool, notify=trialChanged)
+    def trialAutoActive(self):
+        """Цель функции в признаке автоматического прогона, затем окно показывает кнопку остановки."""
+        return bool(self._trial_auto_active)
+
+    @Property(str, notify=trialChanged)
+    def trialAutoProgressText(self):
+        """Цель функции в показе хода прогона, затем видно, какой этап идёт."""
+        return self._trial_auto_progress()
 
     @Property(str, notify=trialChanged)
     def trialStatusText(self):
-        """Цель функции в подписи о ходе работы, затем она объясняет текущий шаг."""
+        """Цель функции в подписи о ходе работы, затем она объясняет текущий этап."""
         return str(self._trial_status)
 
     @Property(str, notify=trialChanged)
@@ -882,24 +898,13 @@ class AppControllerPropertiesMixin(AppControllerContract):
 
     @Property(str, notify=trialChanged)
     def trialSummaryText(self):
-        """Цель функции в короткой сводке, затем видно, сколько шагов пройдено."""
+        """Цель функции в короткой сводке, затем видно, сколько этапов пройдено."""
         return self._trial_summary()
 
-    @Property(str, notify=trialChanged)
-    def trialBackupText(self):
-        """Цель функции в показе запомненных настроек, затем видно, есть ли к чему вернуться."""
-        backup = self._trial_backup
-        if not backup:
-            return "Настройки прибора ещё не запомнены."
-        values = backup["values"]
-        return (f"Запомнено {backup['saved_at']} для прибора 0x{backup['node']:02X}: "
-                f"0 % = {values['empty']}, 100 % = {values['full']}, подгонка нуля {values['zero_trim']}, "
-                f"вид топлива {values['media_air']} / {values['media_cal']}.")
-
-    @Property(str, notify=trialChanged)
-    def trialChamberProgressText(self):
-        """Цель функции в показе хода прогона, затем видно, сколько точек осталось."""
-        return self._trial_chamber_progress()
+    @Property("QVariantMap", notify=trialLiveChanged)
+    def trialLive(self):
+        """Цель функции в постоянном показе отсчётов обоих контуров, затем видно, что прибор жив."""
+        return self._trial_live_view()
 
     @Property(str, notify=chamberChanged)
     def chamberLabel(self):

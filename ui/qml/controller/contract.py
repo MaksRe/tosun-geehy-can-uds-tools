@@ -118,9 +118,11 @@ class AppControllerContract:
     _chamber_timeout_timer: Any
     chamberChanged: Any
     trialChanged: Any
+    trialLiveChanged: Any
     _trial_read: Any
     _trial_write: Any
     _trial_steps_state: Any
+    _trial_step_started_s: Any
     _trial_busy: Any
     _trial_status: Any
     _trial_status_color: Any
@@ -131,17 +133,33 @@ class AppControllerContract:
     _trial_done_handler: Any
     _trial_backup: Any
     _trial_expected: Any
-    _trial_rf_deadline: Any
     _trial_level_reading: Any
     _trial_media_points: Any
-    _trial_chamber_outcome: Any
-    _trial_applied_profile: Any
+    _trial_rf_deadline: Any
     _trial_chamber_plan: Any
     _trial_chamber_index: Any
+    _trial_chamber_outcome: Any
+    _trial_applied_profile: Any
+    _trial_auto_active: Any
+    _trial_auto_queue: Any
+    _trial_auto_current: Any
+    _trial_auto_last: Any
+    _trial_auto_stop_requested: Any
+    _trial_auto_backup_ok: Any
+    _trial_auto_failed: Any
+    _trial_live: Any
+    _trial_live_seen: Any
+    _trial_live_enabled: Any
+    _trial_live_index: Any
+    _trial_live_last_inject: Any
+    _trial_live_last_poll: Any
+    _trial_live_suspend_until: Any
     _trial_gap_timer: Any
     _trial_wait_timer: Any
     _trial_timeout_timer: Any
     _trial_poll_timer: Any
+    _trial_auto_timer: Any
+    _trial_live_timer: Any
     _diagnostics_counter_delta: Any
     _diagnostics_counter_growing: Any
     _diagnostics_counter_prev: Any

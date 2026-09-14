@@ -3041,31 +3041,23 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot(str)
     def runTrialStep(self, key):
-        """Цель функции в запуске шага пробной калибровки, затем она выполняет проверку и пишет итог."""
-        handlers = {
-            "link": self._trial_run_link,
-            "access": self._trial_run_access,
-            "emulation": self._trial_run_emulation,
-            "level": self._trial_run_level,
-            "media": self._trial_run_media,
-            "chamber": self._trial_run_chamber,
-            "profile": self._trial_run_profile,
-            "apply": self._trial_run_apply,
-            "persist": self._trial_run_persist,
-        }
-        handler = handlers.get(str(key))
-        if handler is not None:
-            handler()
+        """Цель функции в запуске одного этапа пробной калибровки, затем она выполняет проверку и пишет итог."""
+        self._trial_run_step(str(key))
 
     @Slot()
-    def trialBackupSettings(self):
-        """Цель функции в запоминании настроек прибора до начала, затем она сохраняет копию в файл."""
-        self._trial_backup_run()
+    def runAllTrialSteps(self):
+        """Цель функции в автоматическом прогоне всех этапов, затем при отказе она возвращает настройки."""
+        self._trial_auto_start()
 
     @Slot()
-    def trialRestoreSettings(self):
-        """Цель функции в возврате запомненных настроек, затем она читает их обратно для сверки."""
-        self._trial_restore_run()
+    def stopTrialAuto(self):
+        """Цель функции в остановке прогона, затем он закончится после текущего этапа."""
+        self._trial_auto_stop()
+
+    @Slot(bool)
+    def setTrialLiveEnabled(self, enabled):
+        """Цель функции в включении постоянного опроса отсчётов, затем он идёт, пока раздел открыт."""
+        self._trial_set_live_enabled(bool(enabled))
 
     @Slot()
     def trialEmulationOff(self):
@@ -3074,8 +3066,13 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot()
     def trialResetSteps(self):
-        """Цель функции в сбросе отметок шагов, затем пробную калибровку можно пройти заново."""
+        """Цель функции в сбросе отметок этапов, затем пробную калибровку можно пройти заново."""
         self._trial_reset_steps()
+
+    @Slot()
+    def clearTrialLog(self):
+        """Цель функции в очистке журнала проверки, затем новый прогон читается с чистого листа."""
+        self._trial_clear_log()
 
     @Slot(str)
     def saveTrialProtocol(self, path):
