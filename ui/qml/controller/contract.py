@@ -131,14 +131,11 @@ class AppControllerContract:
     _trial_done_handler: Any
     _trial_backup: Any
     _trial_expected: Any
-    _trial_capture_target: Any
-    _trial_level_empty: Any
-    _trial_level_full: Any
-    _trial_media_air: Any
-    _trial_media_fuel: Any
     _trial_rf_deadline: Any
-    _trial_chamber_ref1: Any
-    _trial_chamber_ref2: Any
+    _trial_level_reading: Any
+    _trial_media_points: Any
+    _trial_chamber_outcome: Any
+    _trial_applied_profile: Any
     _trial_chamber_plan: Any
     _trial_chamber_index: Any
     _trial_gap_timer: Any

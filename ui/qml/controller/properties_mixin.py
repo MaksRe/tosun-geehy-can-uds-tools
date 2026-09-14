@@ -897,24 +897,9 @@ class AppControllerPropertiesMixin(AppControllerContract):
                 f"вид топлива {values['media_air']} / {values['media_cal']}.")
 
     @Property(str, notify=trialChanged)
-    def trialChamberRef1Text(self):
-        """Цель функции в номинале первого эталона, затем поле не теряет введённое."""
-        return f"{self._trial_chamber_ref1:g}"
-
-    @Property(str, notify=trialChanged)
-    def trialChamberRef2Text(self):
-        """Цель функции в номинале второго эталона, затем поле не теряет введённое."""
-        return f"{self._trial_chamber_ref2:g}"
-
-    @Property(str, notify=trialChanged)
     def trialChamberProgressText(self):
         """Цель функции в показе хода прогона, затем видно, сколько точек осталось."""
-        total = len(self._trial_chamber_plan)
-        if total == 0:
-            return ""
-        if self._trial_chamber_index >= total:
-            return f"Все {total} точек сняты"
-        return f"Точка {self._trial_chamber_index + 1} из {total}"
+        return self._trial_chamber_progress()
 
     @Property(str, notify=chamberChanged)
     def chamberLabel(self):

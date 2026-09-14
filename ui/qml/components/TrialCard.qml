@@ -7,8 +7,10 @@ import "."
   Раздел пробной калибровки на столе.
   Назначение:
   - проходит весь порядок калибровки до выезда в климатическую камеру;
-  - плата подключена к шине, контуры нагружены внешними конденсаторами,
-    а температуру прибору задаёт эмуляция в самой прошивке;
+  - плата подключена к шине, на каждом контуре висит по одному постоянному
+    конденсатору, а температуру прибору задаёт эмуляция в самой прошивке;
+  - ни один шаг не требует менять конденсатор: отметки и точки программа
+    ставит вокруг показания того, что уже подключено;
   - проверяет не только запись, но и применение: итоговый период прибора
     сверяется с расчётом по формулам прошивки;
   - запоминает настройки прибора до начала и возвращает их в конце.
@@ -46,6 +48,42 @@ Card {
     cardColor: "#ffffff"
     cardBorder: "#d6e2ef"
 
+    // Карточка шага с одной кнопкой: таких шагов большинство.
+    component SimpleStep: TrialStepCard {
+        id: simpleStep
+        property string stepKey: ""
+        property string buttonText: "Проверить"
+        property color buttonTone: "#0284c7"
+        property color buttonHover: "#0369a1"
+        property color buttonPressed: "#075985"
+        property int buttonWidth: 160
+        property string buttonHint: ""
+        readonly property var row: root.stepRow(stepKey)
+
+        Layout.fillWidth: true
+        number: row.number
+        title: row.title
+        hint: row.hint
+        statusText: row.statusText
+        statusColor: row.statusColor
+        detail: row.detail
+        textMain: root.textMain
+        textSoft: root.textSoft
+
+        FancyButton {
+            Layout.preferredWidth: simpleStep.buttonWidth
+            Layout.preferredHeight: 30
+            fontPixelSize: 12
+            text: simpleStep.buttonText
+            tone: simpleStep.buttonTone
+            toneHover: simpleStep.buttonHover
+            tonePressed: simpleStep.buttonPressed
+            toolTipText: simpleStep.buttonHint
+            enabled: root.ready
+            onClicked: root.appController.runTrialStep(simpleStep.stepKey)
+        }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 14
@@ -72,7 +110,7 @@ Card {
 
                 Text {
                     Layout.fillWidth: true
-                    text: "Плата на шине, контуры нагружены конденсаторами, температуру задаёт эмуляция в самом приборе"
+                    text: "Плата на шине, на каждом контуре по одному конденсатору, температуру задаёт эмуляция в самом приборе"
                     color: root.textSoft
                     font.pixelSize: 12
                     font.family: "Bahnschrift"
@@ -213,180 +251,40 @@ Card {
                 width: stepsScroll.availableWidth
                 spacing: 8
 
-                TrialStepCard {
-                    readonly property var row: root.stepRow("link")
-                    Layout.fillWidth: true
-                    number: row.number
-                    title: row.title
-                    hint: row.hint
-                    statusText: row.statusText
-                    statusColor: row.statusColor
-                    detail: row.detail
-                    textMain: root.textMain
-                    textSoft: root.textSoft
+                SimpleStep {
+                    stepKey: "link"
+                }
 
-                    FancyButton {
-                        Layout.preferredWidth: 130
-                        Layout.preferredHeight: 30
-                        fontPixelSize: 12
-                        text: "Проверить"
-                        tone: "#0284c7"
-                        toneHover: "#0369a1"
-                        tonePressed: "#075985"
-                        enabled: root.ready
-                        onClicked: root.appController.runTrialStep("link")
-                    }
+                SimpleStep {
+                    stepKey: "access"
+                }
+
+                SimpleStep {
+                    stepKey: "emulation"
+                }
+
+                SimpleStep {
+                    stepKey: "level"
+                    buttonText: "Записать и проверить"
+                    buttonTone: "#16a34a"
+                    buttonHover: "#15803d"
+                    buttonPressed: "#166534"
+                    buttonWidth: 190
+                    buttonHint: "Снимает показание конденсатора, ставит вокруг него отметки и сверяет уровень с 25 %"
+                }
+
+                SimpleStep {
+                    stepKey: "media"
+                    buttonText: "Записать и проверить"
+                    buttonTone: "#16a34a"
+                    buttonHover: "#15803d"
+                    buttonPressed: "#166534"
+                    buttonWidth: 190
+                    buttonHint: "Снимает показание конденсатора, ставит точки и ждёт, пока коэффициент среды станет 1,100"
                 }
 
                 TrialStepCard {
-                    readonly property var row: root.stepRow("access")
-                    Layout.fillWidth: true
-                    number: row.number
-                    title: row.title
-                    hint: row.hint
-                    statusText: row.statusText
-                    statusColor: row.statusColor
-                    detail: row.detail
-                    textMain: root.textMain
-                    textSoft: root.textSoft
-
-                    FancyButton {
-                        Layout.preferredWidth: 130
-                        Layout.preferredHeight: 30
-                        fontPixelSize: 12
-                        text: "Проверить"
-                        tone: "#0284c7"
-                        toneHover: "#0369a1"
-                        tonePressed: "#075985"
-                        enabled: root.ready
-                        onClicked: root.appController.runTrialStep("access")
-                    }
-                }
-
-                TrialStepCard {
-                    readonly property var row: root.stepRow("emulation")
-                    Layout.fillWidth: true
-                    number: row.number
-                    title: row.title
-                    hint: row.hint
-                    statusText: row.statusText
-                    statusColor: row.statusColor
-                    detail: row.detail
-                    textMain: root.textMain
-                    textSoft: root.textSoft
-
-                    FancyButton {
-                        Layout.preferredWidth: 130
-                        Layout.preferredHeight: 30
-                        fontPixelSize: 12
-                        text: "Проверить"
-                        tone: "#0284c7"
-                        toneHover: "#0369a1"
-                        tonePressed: "#075985"
-                        enabled: root.ready
-                        onClicked: root.appController.runTrialStep("emulation")
-                    }
-                }
-
-                TrialStepCard {
-                    readonly property var row: root.stepRow("level")
-                    Layout.fillWidth: true
-                    number: row.number
-                    title: row.title
-                    hint: row.hint
-                    statusText: row.statusText
-                    statusColor: row.statusColor
-                    detail: row.detail
-                    textMain: root.textMain
-                    textSoft: root.textSoft
-
-                    FancyButton {
-                        Layout.preferredWidth: 140
-                        Layout.preferredHeight: 30
-                        fontPixelSize: 12
-                        text: "Снять пустой"
-                        tone: "#64748b"
-                        toneHover: "#475569"
-                        tonePressed: "#334155"
-                        enabled: root.ready
-                        onClicked: root.appController.trialCaptureLevel("empty")
-                    }
-
-                    FancyButton {
-                        Layout.preferredWidth: 140
-                        Layout.preferredHeight: 30
-                        fontPixelSize: 12
-                        text: "Снять полный"
-                        tone: "#64748b"
-                        toneHover: "#475569"
-                        tonePressed: "#334155"
-                        enabled: root.ready
-                        onClicked: root.appController.trialCaptureLevel("full")
-                    }
-
-                    FancyButton {
-                        Layout.preferredWidth: 180
-                        Layout.preferredHeight: 30
-                        fontPixelSize: 12
-                        text: "Записать и проверить"
-                        tone: "#16a34a"
-                        toneHover: "#15803d"
-                        tonePressed: "#166534"
-                        enabled: root.ready
-                        onClicked: root.appController.trialWriteLevel()
-                    }
-                }
-
-                TrialStepCard {
-                    readonly property var row: root.stepRow("media")
-                    Layout.fillWidth: true
-                    number: row.number
-                    title: row.title
-                    hint: row.hint
-                    statusText: row.statusText
-                    statusColor: row.statusColor
-                    detail: row.detail
-                    textMain: root.textMain
-                    textSoft: root.textSoft
-
-                    FancyButton {
-                        Layout.preferredWidth: 140
-                        Layout.preferredHeight: 30
-                        fontPixelSize: 12
-                        text: "Снять воздух"
-                        tone: "#64748b"
-                        toneHover: "#475569"
-                        tonePressed: "#334155"
-                        enabled: root.ready
-                        onClicked: root.appController.trialCaptureMedia("air")
-                    }
-
-                    FancyButton {
-                        Layout.preferredWidth: 140
-                        Layout.preferredHeight: 30
-                        fontPixelSize: 12
-                        text: "Снять топливо"
-                        tone: "#64748b"
-                        toneHover: "#475569"
-                        tonePressed: "#334155"
-                        enabled: root.ready
-                        onClicked: root.appController.trialCaptureMedia("fuel")
-                    }
-
-                    FancyButton {
-                        Layout.preferredWidth: 180
-                        Layout.preferredHeight: 30
-                        fontPixelSize: 12
-                        text: "Записать и проверить"
-                        tone: "#16a34a"
-                        toneHover: "#15803d"
-                        tonePressed: "#166534"
-                        enabled: root.ready
-                        onClicked: root.appController.trialWriteMedia()
-                    }
-                }
-
-                TrialStepCard {
+                    id: chamberStep
                     readonly property var row: root.stepRow("chamber")
                     Layout.fillWidth: true
                     number: row.number
@@ -398,84 +296,17 @@ Card {
                     textMain: root.textMain
                     textSoft: root.textSoft
 
-                    Text {
-                        text: "Эталон 1, пФ"
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                        Layout.alignment: Qt.AlignVCenter
-                    }
-
-                    FancyTextField {
-                        id: ref1Field
-                        Layout.preferredWidth: 80
-                        Layout.preferredHeight: 30
-                        text: root.appController ? root.appController.trialChamberRef1Text : "300"
-                        textColor: root.textMain
-                        bgColor: root.inputBg
-                        borderColor: root.inputBorder
-                        focusBorderColor: root.inputFocus
-                        onEditingFinished: if (root.appController) root.appController.setTrialChamberRefs(ref1Field.text, ref2Field.text)
-                    }
-
-                    Text {
-                        text: "Эталон 2, пФ"
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                        Layout.alignment: Qt.AlignVCenter
-                    }
-
-                    FancyTextField {
-                        id: ref2Field
-                        Layout.preferredWidth: 80
-                        Layout.preferredHeight: 30
-                        text: root.appController ? root.appController.trialChamberRef2Text : "600"
-                        textColor: root.textMain
-                        bgColor: root.inputBg
-                        borderColor: root.inputBorder
-                        focusBorderColor: root.inputFocus
-                        onEditingFinished: if (root.appController) root.appController.setTrialChamberRefs(ref1Field.text, ref2Field.text)
-                    }
-
                     FancyButton {
-                        Layout.preferredWidth: 130
+                        Layout.preferredWidth: 170
                         Layout.preferredHeight: 30
                         fontPixelSize: 12
-                        text: "Начать прогон"
+                        text: "Снять все точки"
                         tone: "#0284c7"
                         toneHover: "#0369a1"
                         tonePressed: "#075985"
-                        toolTipText: "Очищает журнал прогона и строит список из 22 точек по семи температурам"
+                        toolTipText: "Очищает журнал прогона и проходит семь температур сетки, конденсаторы трогать не нужно"
                         enabled: root.ready
-                        onClicked: {
-                            root.appController.setTrialChamberRefs(ref1Field.text, ref2Field.text)
-                            root.appController.trialChamberStart()
-                        }
-                    }
-
-                    FancyButton {
-                        Layout.preferredWidth: 150
-                        Layout.preferredHeight: 30
-                        fontPixelSize: 12
-                        text: "Снять эту точку"
-                        tone: "#16a34a"
-                        toneHover: "#15803d"
-                        tonePressed: "#166534"
-                        enabled: root.ready
-                        onClicked: root.appController.trialChamberCaptureNext()
-                    }
-
-                    FancyButton {
-                        Layout.preferredWidth: 160
-                        Layout.preferredHeight: 30
-                        fontPixelSize: 12
-                        text: "Посчитать таблицы"
-                        tone: "#7c3aed"
-                        toneHover: "#6d28d9"
-                        tonePressed: "#5b21b6"
-                        enabled: root.ready
-                        onClicked: root.appController.trialChamberCompute()
+                        onClicked: root.appController.runTrialStep("chamber")
                     }
 
                     Text {
@@ -490,80 +321,26 @@ Card {
                     }
                 }
 
-                TrialStepCard {
-                    readonly property var row: root.stepRow("profile")
-                    Layout.fillWidth: true
-                    number: row.number
-                    title: row.title
-                    hint: row.hint
-                    statusText: row.statusText
-                    statusColor: row.statusColor
-                    detail: row.detail
-                    textMain: root.textMain
-                    textSoft: root.textSoft
-
-                    FancyButton {
-                        Layout.preferredWidth: 180
-                        Layout.preferredHeight: 30
-                        fontPixelSize: 12
-                        text: "Записать и сверить"
-                        tone: "#0284c7"
-                        toneHover: "#0369a1"
-                        tonePressed: "#075985"
-                        enabled: root.ready
-                        onClicked: root.appController.runTrialStep("profile")
-                    }
+                SimpleStep {
+                    stepKey: "profile"
+                    buttonText: "Записать и сверить"
+                    buttonWidth: 180
                 }
 
-                TrialStepCard {
-                    readonly property var row: root.stepRow("apply")
-                    Layout.fillWidth: true
-                    number: row.number
-                    title: row.title
-                    hint: row.hint
-                    statusText: row.statusText
-                    statusColor: row.statusColor
-                    detail: row.detail
-                    textMain: root.textMain
-                    textSoft: root.textSoft
-
-                    FancyButton {
-                        Layout.preferredWidth: 200
-                        Layout.preferredHeight: 30
-                        fontPixelSize: 12
-                        text: "Проверить применение"
-                        tone: "#0284c7"
-                        toneHover: "#0369a1"
-                        tonePressed: "#075985"
-                        enabled: root.ready
-                        onClicked: root.appController.runTrialStep("apply")
-                    }
+                SimpleStep {
+                    stepKey: "apply"
+                    buttonText: "Проверить применение"
+                    buttonWidth: 200
                 }
 
-                TrialStepCard {
-                    readonly property var row: root.stepRow("persist")
-                    Layout.fillWidth: true
-                    number: row.number
-                    title: row.title
-                    hint: row.hint
-                    statusText: row.statusText
-                    statusColor: row.statusColor
-                    detail: row.detail
-                    textMain: root.textMain
-                    textSoft: root.textSoft
-
-                    FancyButton {
-                        Layout.preferredWidth: 230
-                        Layout.preferredHeight: 30
-                        fontPixelSize: 12
-                        text: "Перезапустить и проверить"
-                        tone: "#b45309"
-                        toneHover: "#92400e"
-                        tonePressed: "#78350f"
-                        toolTipText: "Перезапускает прибор. Сессию калибровки после этого нужно запустить заново"
-                        enabled: root.ready
-                        onClicked: root.appController.runTrialStep("persist")
-                    }
+                SimpleStep {
+                    stepKey: "persist"
+                    buttonText: "Перезапустить и проверить"
+                    buttonTone: "#b45309"
+                    buttonHover: "#92400e"
+                    buttonPressed: "#78350f"
+                    buttonWidth: 230
+                    buttonHint: "Перезапускает прибор. Сессию калибровки после этого нужно запустить заново"
                 }
             }
         }

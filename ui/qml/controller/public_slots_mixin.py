@@ -3046,6 +3046,9 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             "link": self._trial_run_link,
             "access": self._trial_run_access,
             "emulation": self._trial_run_emulation,
+            "level": self._trial_run_level,
+            "media": self._trial_run_media,
+            "chamber": self._trial_run_chamber,
             "profile": self._trial_run_profile,
             "apply": self._trial_run_apply,
             "persist": self._trial_run_persist,
@@ -3053,46 +3056,6 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         handler = handlers.get(str(key))
         if handler is not None:
             handler()
-
-    @Slot(str)
-    def trialCaptureLevel(self, which):
-        """Цель функции в снятии показания пустого или полного бака, затем она усредняет несколько замеров."""
-        self._trial_capture_level(str(which))
-
-    @Slot()
-    def trialWriteLevel(self):
-        """Цель функции в записи отметок бака, затем она читает их обратно и сверяет уровень."""
-        self._trial_write_level()
-
-    @Slot(str)
-    def trialCaptureMedia(self, which):
-        """Цель функции в снятии точки вида топлива, затем она усредняет несколько замеров."""
-        self._trial_capture_media(str(which))
-
-    @Slot()
-    def trialWriteMedia(self):
-        """Цель функции в записи точек вида топлива, затем она ждёт, пока коэффициент среды сойдётся."""
-        self._trial_write_media()
-
-    @Slot(str, str)
-    def setTrialChamberRefs(self, ref1, ref2):
-        """Цель функции в задании номиналов эталонов, затем по ним строится список точек прогона."""
-        self._trial_set_chamber_refs(str(ref1), str(ref2))
-
-    @Slot()
-    def trialChamberStart(self):
-        """Цель функции в запуске прогона с эмуляцией, затем она строит список точек по семи температурам."""
-        self._trial_chamber_start()
-
-    @Slot()
-    def trialChamberCaptureNext(self):
-        """Цель функции в снятии очередной точки прогона, затем она задаёт прибору нужную температуру."""
-        self._trial_chamber_capture_next()
-
-    @Slot()
-    def trialChamberCompute(self):
-        """Цель функции в расчёте таблиц по прогону, затем она выключает эмуляцию и проверяет полноту."""
-        self._trial_chamber_compute()
 
     @Slot()
     def trialBackupSettings(self):

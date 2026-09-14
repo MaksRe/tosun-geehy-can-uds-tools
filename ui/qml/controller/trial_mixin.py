@@ -3,14 +3,26 @@
 ЗАЧЕМ
 Выезд в климатическую камеру стоит дорого и не переделывается. Если что-то в
 программе или в приборе отработает неверно, это выяснится только на месте. Здесь
-тот же порядок проходится на столе: плата подключена к шине, контуры нагружены
-внешними конденсаторами, а температуру прибору задаёт эмуляция в самой прошивке.
+тот же порядок проходится на столе: плата подключена к шине, на каждом контуре
+висит по одному постоянному конденсатору, а температуру прибору задаёт эмуляция в
+самой прошивке.
+
+ПОЧЕМУ ХВАТАЕТ ОДНОГО КОНДЕНСАТОРА НА КОНТУР
+Перепаивать проводки на столе неудобно, поэтому ни один шаг не требует менять
+ёмкость. Отметки бака и точки вида топлива программа ставит сама вокруг показания
+того конденсатора, что уже подключён, и так, чтобы прибор обязан был выдать
+заранее известный результат: уровень 25 % и коэффициент среды 1,100.
+
+Таблицы температурного профиля по одной ёмкости посчитать нельзя: сдвиг и
+растяжение показания по одной точке неразличимы. Поэтому их запись и применение
+проверяются на проверочном профиле с заранее известными поправками, а сам расчёт
+таблиц закреплён автотестами.
 
 ЧТО ПРОВЕРЯЕТСЯ
 Не только то, что данные записались, но и то, что прибор их применяет:
-- отметки бака: записались, читаются обратно, уровень при полном баке 100 %;
-- вид топлива: точки записались, коэффициент среды при «топливе» равен единице;
-- прогон: точки при семи эмулируемых температурах попадают в свои узлы;
+- отметки бака: записались, читаются обратно, уровень ровно 25 %;
+- вид топлива: точки записались, коэффициент среды сошёлся к 1,100;
+- снятие точек: при семи эмулируемых температурах точка попадает в свой узел;
 - профиль: записался без потерь, прибор посчитал ту же сумму;
 - применение: при десяти температурах итоговый период прибора совпадает с
   расчётом по формулам прошивки до пары отсчётов;
@@ -65,13 +77,28 @@ class AppControllerTrialMixin(AppControllerContract):
     TRIAL_SETTLE_MS = 400
     TRIAL_RESET_WAIT_MS = 4000
     TRIAL_SAMPLES = 5
-    TRIAL_MIN_SPAN = 200
     TRIAL_PERIOD_TOLERANCE = 3
     TRIAL_LEVEL_TOLERANCE_PERMILLE = 30
     TRIAL_RF_TOLERANCE_X1000 = 15
     TRIAL_RF_TIMEOUT_MS = 30000
     TRIAL_PROFILE_TIMEOUT_MS = 30000
     TRIAL_CHAMBER_TIMEOUT_MS = 15000
+
+    # Отметки бака ставятся вокруг показания конденсатора несимметрично: уровень
+    # обязан стать ровно 25 %, а перепутанные местами отметки дали бы 75 %.
+    TRIAL_LEVEL_BELOW = 1000
+    TRIAL_LEVEL_ABOVE = 3000
+    TRIAL_LEVEL_EXPECTED_PERMILLE = 250
+
+    # Точки вида топлива ставятся так, чтобы коэффициент среды стал 1,100, а не
+    # единицей: единица совпадает с нейтральным значением, и по ней не видно,
+    # считает ли прибор коэффициент на самом деле.
+    TRIAL_MEDIA_SPAN = 1000
+    TRIAL_MEDIA_TARGET_X1000 = 1100
+
+    # Пометка точек, снятых на столе, и допустимый разброс одного конденсатора.
+    TRIAL_CHAMBER_LABEL = "проба на столе"
+    TRIAL_CHAMBER_SPREAD_LIMIT = 20
 
     # Температуры проверки применения: все узлы и точки между ними.
     TRIAL_APPLY_TEMPS_X10 = (-400, -300, -200, 0, 125, 250, 375, 500, 700, 850)
@@ -90,18 +117,21 @@ class AppControllerTrialMixin(AppControllerContract):
         ("emulation", "Эмуляция температуры работает",
          "Прибор должен поверить, что он при -40 и +85 °C, и затем вернуться к настоящей температуре."),
         ("level", "Отметки бака записываются и применяются",
-         "Основной контур: подключите конденсатор пустого бака и снимите, затем полного бака и снимите."),
+         "Хватает одного конденсатора на основном контуре. Программа ставит отметки 0 % и 100 % "
+         "вокруг его показания так, что уровень обязан стать ровно 25 %."),
         ("media", "Вид топлива записывается и применяется",
-         "Контур вида топлива: конденсатор «воздух», затем «топливо». При записи держите на основном "
-         "контуре конденсатор полного бака: при пустом баке коэффициент среды заморожен."),
-        ("chamber", "Прогон с эмуляцией температуры",
-         "Программа сама переключает температуру прибора. Вы подключаете то, что она просит, "
-         "и нажимаете «Снять эту точку»."),
+         "Хватает одного конденсатора на контуре вида топлива. Программа ставит точки «воздух» и "
+         "«топливо» так, что коэффициент среды обязан стать 1,100. Сначала пройдите шаг 4: при пустом "
+         "баке коэффициент среды заморожен."),
+        ("chamber", "Снятие точек с эмуляцией температуры",
+         "Программа сама задаёт прибору все семь температур сетки и снимает точку при каждой. Каждая "
+         "обязана попасть в свой узел. Конденсаторы трогать не нужно."),
         ("profile", "Профиль записывается без потерь",
-         "Записывает посчитанные по прогону таблицы и читает их обратно."),
+         "Пишет проверочный профиль с крупными поправками и читает его обратно. Таблицы по одному "
+         "конденсатору не посчитать: для этого нужны две разные ёмкости."),
         ("apply", "Прибор применяет таблицы правильно",
-         "Пишет проверочный профиль с крупными поправками и сверяет итоговый период прибора "
-         "с расчётом по формулам прошивки при десяти температурах."),
+         "При десяти температурах сверяет итоговый период прибора с расчётом по формулам прошивки. "
+         "Нужен пройденный шаг 7."),
         ("persist", "Всё сохраняется после перезагрузки",
          "Перезапускает прибор и читает всё записанное заново. После этого сессию калибровки "
          "нужно запустить снова."),
@@ -137,17 +167,14 @@ class AppControllerTrialMixin(AppControllerContract):
 
         self._trial_backup: dict | None = None
         self._trial_expected: dict = {}
-        self._trial_capture_target = ""
-        self._trial_level_empty: dict | None = None
-        self._trial_level_full: dict | None = None
-        self._trial_media_air: int | None = None
-        self._trial_media_fuel: int | None = None
+        self._trial_level_reading: dict | None = None
+        self._trial_media_points: dict | None = None
         self._trial_rf_deadline = 0.0
 
-        self._trial_chamber_ref1 = 300.0
-        self._trial_chamber_ref2 = 600.0
-        self._trial_chamber_plan: list[tuple[int, str, str]] = []
+        self._trial_chamber_plan: list[int] = []
         self._trial_chamber_index = 0
+        self._trial_chamber_outcome: tuple[str, str] | None = None
+        self._trial_applied_profile: dict | None = None
 
         self._trial_gap_timer = QTimer(self)
         self._trial_gap_timer.setSingleShot(True)
@@ -454,12 +481,12 @@ class AppControllerTrialMixin(AppControllerContract):
         for key, _title, _hint in self.TRIAL_STEPS:
             self._trial_steps_state[key] = {"status": "pending", "detail": ""}
         self._trial_expected = {}
-        self._trial_level_empty = None
-        self._trial_level_full = None
-        self._trial_media_air = None
-        self._trial_media_fuel = None
+        self._trial_level_reading = None
+        self._trial_media_points = None
         self._trial_chamber_plan = []
         self._trial_chamber_index = 0
+        self._trial_chamber_outcome = None
+        self._trial_applied_profile = None
         self._trial_status = "Отметки шагов сброшены."
         self._trial_status_color = self.COLOR_IDLE
         self.trialChanged.emit()
@@ -576,70 +603,9 @@ class AppControllerTrialMixin(AppControllerContract):
 
     # ------------------------------------------------------------------ шаг 4: отметки бака
 
-    def _trial_capture_level(self, which: str) -> bool:
-        if which not in ("empty", "full"):
-            return False
-        self._trial_capture_target = which
-        ops = []
-        if self._trial_write_ready():
-            ops += [self._trial_emulation_op("emul_off", None), self._op_wait(self.TRIAL_SETTLE_MS)]
-        for index in range(self.TRIAL_SAMPLES):
-            ops.append(self._op_read(f"raw{index}", UdsData.curr_fuel_tank))
-            ops.append(self._op_read(f"comp{index}", UdsData.fuel_compensated_period))
-        word = "пустого" if which == "empty" else "полного"
-        self._trial_mark_running("level", f"Снимаю показание при конденсаторе {word} бака...")
-        return self._trial_start_ops(ops, "_trial_level_capture_done")
-
-    def _trial_level_capture_done(self, res: dict):
-        raw = self._trial_mean(res, "raw", self.TRIAL_SAMPLES)
-        comp = self._trial_mean(res, "comp", self.TRIAL_SAMPLES)
-        if raw is None or comp is None:
-            self._trial_set_step(
-                "level", "fail",
-                "Прибор не отдал период основного контура. Проверьте, что конденсатор подключён и шина работает.")
-            return
-
-        value = {"raw": raw, "comp": comp}
-        if self._trial_capture_target == "empty":
-            self._trial_level_empty = value
-        else:
-            self._trial_level_full = value
-
-        parts = []
-        if self._trial_level_empty:
-            parts.append(f"пустой бак {self._trial_level_empty['comp']}")
-        if self._trial_level_full:
-            parts.append(f"полный бак {self._trial_level_full['comp']}")
-        if self._trial_level_empty and self._trial_level_full:
-            hint = "Нажмите «Записать и проверить», не отключая конденсатор полного бака."
-        elif self._trial_level_empty:
-            hint = "Теперь подключите конденсатор полного бака и нажмите «Снять полный»."
-        else:
-            hint = "Теперь подключите конденсатор пустого бака и нажмите «Снять пустой»."
-        self._trial_set_step("level", "pending", f"Снято: {', '.join(parts)}. {hint}")
-
-    def _trial_write_level(self) -> bool:
-        if not self._trial_require_write("level"):
-            return False
-        empty = self._trial_level_empty
-        full = self._trial_level_full
-        if empty is None or full is None:
-            self._trial_set_step("level", "fail", "Сначала снимите показания пустого и полного бака.")
-            return False
-        if full["comp"] - empty["comp"] < self.TRIAL_MIN_SPAN:
-            self._trial_set_step(
-                "level", "fail",
-                f"Полный бак ({full['comp']}) должен превышать пустой ({empty['comp']}) хотя бы на "
-                f"{self.TRIAL_MIN_SPAN} отсчётов. Проверьте конденсаторы.")
-            return False
-
-        ops = [
-            self._trial_emulation_op("emul_off", None),
-            self._op_wait(self.TRIAL_SETTLE_MS),
-            self._op_read("cur_full", UdsData.full_fuel_tank),
-        ]
-        self._trial_mark_running("level", "Записываю отметки бака...")
-        return self._trial_start_ops(ops, "_trial_level_write_stage2")
+    def _trial_level_marks(self, compensated: int) -> tuple[int, int]:
+        """Отметки 0 % и 100 % вокруг показания конденсатора, при которых уровень ровно 25 %."""
+        return int(compensated) - self.TRIAL_LEVEL_BELOW, int(compensated) + self.TRIAL_LEVEL_ABOVE
 
     def _trial_level_order(self, current_full, new_empty: int, new_full: int) -> list[dict]:
         """Порядок записи отметок, который прибор примет.
@@ -654,23 +620,52 @@ class AppControllerTrialMixin(AppControllerContract):
             return [write_empty, write_full]
         return [write_full, write_empty]
 
-    def _trial_level_write_stage2(self, res: dict):
-        new_empty = self._trial_level_empty["comp"]
-        new_full = self._trial_level_full["comp"]
-        ops = self._trial_level_order(self._trial_value(res, "cur_full"), new_empty, new_full)
+    def _trial_run_level(self) -> bool:
+        if not self._trial_require_write("level"):
+            return False
+        ops = [self._trial_emulation_op("emul_off", None), self._op_wait(self.TRIAL_SETTLE_MS)]
+        for index in range(self.TRIAL_SAMPLES):
+            ops.append(self._op_read(f"raw{index}", UdsData.curr_fuel_tank))
+            ops.append(self._op_read(f"comp{index}", UdsData.fuel_compensated_period))
+        ops += [self._op_read("cur_full", UdsData.full_fuel_tank), self._op_read("tank_model", VAR_TANK_MODEL)]
+        self._trial_mark_running("level", "Снимаю показание конденсатора на основном контуре...")
+        return self._trial_start_ops(ops, "_trial_level_stage2")
+
+    def _trial_level_stage2(self, res: dict):
+        raw = self._trial_mean(res, "raw", self.TRIAL_SAMPLES)
+        comp = self._trial_mean(res, "comp", self.TRIAL_SAMPLES)
+        if raw is None or comp is None:
+            self._trial_set_step(
+                "level", "fail",
+                "Прибор не отдал период основного контура. Проверьте, что конденсатор подключён и шина работает.")
+            return
+
+        empty, full = self._trial_level_marks(comp)
+        if empty < 1 or full > 0xFFFF:
+            self._trial_set_step(
+                "level", "fail",
+                f"Показание {comp} слишком близко к краю шкалы, отметки вокруг него не помещаются. "
+                "Возьмите конденсатор другого номинала.")
+            return
+
+        self._trial_level_reading = {
+            "raw": raw, "comp": comp, "empty": empty, "full": full,
+            "tank_model": self._trial_value(res, "tank_model"),
+        }
+        ops = self._trial_level_order(self._trial_value(res, "cur_full"), empty, full)
         ops += [
             self._op_wait(self.TRIAL_SETTLE_MS),
             self._op_read("rb_empty", UdsData.empty_fuel_tank),
             self._op_read("rb_full", UdsData.full_fuel_tank),
-            self._op_read("tank_model", VAR_TANK_MODEL),
-            self._op_read("comp_now", UdsData.fuel_compensated_period),
-            self._op_read("level", UdsData.raw_fuel_level, signed=True),
         ]
-        self._trial_start_ops(ops, "_trial_level_write_done")
+        ops += [self._op_read(f"lvl{index}", UdsData.raw_fuel_level, signed=True)
+                for index in range(self.TRIAL_SAMPLES)]
+        self._trial_mark_running("level", f"Показание {comp}. Записываю отметки {empty} и {full}...")
+        self._trial_start_ops(ops, "_trial_level_done")
 
-    def _trial_level_write_done(self, res: dict):
-        new_empty = self._trial_level_empty["comp"]
-        new_full = self._trial_level_full["comp"]
+    def _trial_level_done(self, res: dict):
+        reading = self._trial_level_reading
+        empty, full = reading["empty"], reading["full"]
         problems = []
         notes = []
 
@@ -678,29 +673,28 @@ class AppControllerTrialMixin(AppControllerContract):
             if res.get(key) is not True:
                 problems.append(f"запись отметки {word}: {self._trial_error_text(res, key)}")
 
-        for key, want, word in (("rb_empty", new_empty, "0 %"), ("rb_full", new_full, "100 %")):
+        for key, want, word in (("rb_empty", empty, "0 %"), ("rb_full", full, "100 %")):
             got = self._trial_value(res, key)
             if got != want:
                 problems.append(f"в приборе отметка {word} = {got}, а записывали {want}")
 
-        model = self._trial_value(res, "tank_model")
-        comp_now = self._trial_value(res, "comp_now")
-        level = self._trial_value(res, "level")
-        if model == 0 and comp_now is not None and level is not None:
-            near_full = abs(comp_now - new_full) <= abs(comp_now - new_empty)
-            expected = 1000 if near_full else 0
-            word = "полного" if near_full else "пустого"
-            if abs(level - expected) > self.TRIAL_LEVEL_TOLERANCE_PERMILLE:
-                problems.append(
-                    f"уровень {level / 10:.1f} %, а при конденсаторе {word} бака должен быть {expected // 10} %")
+        level = self._trial_mean(res, "lvl", self.TRIAL_SAMPLES)
+        expected = self.TRIAL_LEVEL_EXPECTED_PERMILLE
+        model = reading["tank_model"]
+        if model == 0:
+            if level is None:
+                problems.append("прибор не отдал уровень")
+            elif abs(level - expected) > self.TRIAL_LEVEL_TOLERANCE_PERMILLE:
+                problems.append(f"уровень {level / 10:.1f} %, а по отметкам вокруг конденсатора должен быть "
+                                f"{expected / 10:.1f} %")
             else:
-                notes.append(f"уровень {level / 10:.1f} % при конденсаторе {word} бака")
-        elif model not in (None, 0):
+                notes.append(f"уровень {level / 10:.1f} % при расчётных {expected / 10:.1f} %")
+        elif model is not None:
             notes.append("выбрана модель уровня по двум контурам, уровень здесь не сверяется")
 
-        # Отметки берутся по итоговому периоду: по нему прибор и считает уровень.
-        drift = max(abs(self._trial_level_empty["raw"] - new_empty), abs(self._trial_level_full["raw"] - new_full))
+        # Отметки ставятся по итоговому периоду: по нему прибор и считает уровень.
         warning = ""
+        drift = abs(reading["raw"] - reading["comp"])
         if drift > self.TRIAL_PERIOD_TOLERANCE:
             warning = (f"итоговый период отличается от сырого на {drift} отсчётов: раздел «Уровень бака» "
                        "снимает отметки по сырому периоду, и при таком расхождении уровень там сместится")
@@ -709,8 +703,9 @@ class AppControllerTrialMixin(AppControllerContract):
             self._trial_set_step("level", "fail", "; ".join(problems) + ".")
             return
 
-        self._trial_expected.update({"empty": new_empty, "full": new_full})
-        text = f"Отметки 0 % = {new_empty} и 100 % = {new_full} записаны и прочитаны обратно; " + "; ".join(notes)
+        self._trial_expected.update({"empty": empty, "full": full})
+        text = (f"Показание конденсатора {reading['comp']}, отметки 0 % = {empty} и 100 % = {full} записаны "
+                f"и прочитаны обратно; " + "; ".join(notes))
         if warning:
             self._trial_set_step("level", "warn", text + "; " + warning + ".")
         else:
@@ -718,110 +713,91 @@ class AppControllerTrialMixin(AppControllerContract):
 
     # ------------------------------------------------------------------ шаг 5: вид топлива
 
-    def _trial_capture_media(self, which: str) -> bool:
-        if which not in ("air", "fuel"):
-            return False
-        self._trial_capture_target = which
-        ops = [self._op_read(f"m{index}", UdsData.fuel_media_flatcap_raw) for index in range(self.TRIAL_SAMPLES)]
-        word = "«воздух»" if which == "air" else "«топливо»"
-        self._trial_mark_running("media", f"Снимаю контур вида топлива при конденсаторе {word}...")
-        return self._trial_start_ops(ops, "_trial_media_capture_done")
+    def _trial_media_points_for(self, flatcap: int) -> tuple[int, int]:
+        """Точки «воздух» и «топливо», при которых коэффициент среды ровно 1,100."""
+        air = int(flatcap) - (self.TRIAL_MEDIA_SPAN * self.TRIAL_MEDIA_TARGET_X1000) // 1000
+        return air, air + self.TRIAL_MEDIA_SPAN
 
-    def _trial_media_capture_done(self, res: dict):
-        value = self._trial_mean(res, "m", self.TRIAL_SAMPLES)
-        if value is None:
-            self._trial_set_step("media", "fail", "Прибор не отдал показание контура вида топлива.")
-            return
-        if self._trial_capture_target == "air":
-            self._trial_media_air = value
-        else:
-            self._trial_media_fuel = value
-
-        parts = []
-        if self._trial_media_air is not None:
-            parts.append(f"воздух {self._trial_media_air}")
-        if self._trial_media_fuel is not None:
-            parts.append(f"топливо {self._trial_media_fuel}")
-        if self._trial_media_air is not None and self._trial_media_fuel is not None:
-            hint = ("Оставьте «топливо» на контуре вида топлива, подключите полный бак к основному "
-                    "и нажмите «Записать и проверить».")
-        elif self._trial_media_air is not None:
-            hint = "Теперь подключите конденсатор «топливо» и нажмите «Снять топливо»."
-        else:
-            hint = "Теперь подключите конденсатор «воздух» и нажмите «Снять воздух»."
-        self._trial_set_step("media", "pending", f"Снято: {', '.join(parts)}. {hint}")
-
-    def _trial_write_media(self) -> bool:
+    def _trial_run_media(self) -> bool:
         if not self._trial_require_write("media"):
             return False
-        air = self._trial_media_air
-        fuel = self._trial_media_fuel
-        if air is None or fuel is None:
-            self._trial_set_step("media", "fail", "Сначала снимите «воздух» и «топливо».")
-            return False
-        if fuel - air < self.TRIAL_MIN_SPAN:
+        ops = [self._trial_emulation_op("emul_off", None), self._op_wait(self.TRIAL_SETTLE_MS)]
+        ops += [self._op_read(f"m{index}", UdsData.fuel_media_flatcap_raw) for index in range(self.TRIAL_SAMPLES)]
+        ops += [self._op_read("level", UdsData.raw_fuel_level, signed=True), self._op_read("freeze", VAR_FREEZE_PCT)]
+        self._trial_mark_running("media", "Снимаю показание конденсатора на контуре вида топлива...")
+        return self._trial_start_ops(ops, "_trial_media_stage2")
+
+    def _trial_media_stage2(self, res: dict):
+        flatcap = self._trial_mean(res, "m", self.TRIAL_SAMPLES)
+        if flatcap is None:
             self._trial_set_step(
                 "media", "fail",
-                f"«Топливо» ({fuel}) должно превышать «воздух» ({air}) хотя бы на {self.TRIAL_MIN_SPAN} отсчётов.")
-            return False
+                "Прибор не отдал показание контура вида топлива. Проверьте, что конденсатор подключён.")
+            return
 
+        level = self._trial_value(res, "level")
+        freeze = self._trial_value(res, "freeze")
+        if level is not None and freeze is not None and level < int(freeze) * 10:
+            self._trial_set_step(
+                "media", "fail",
+                f"Уровень {level / 10:.1f} % ниже порога заморозки {freeze} %, коэффициент среды не "
+                "обновляется. Сначала пройдите шаг 4: он ставит уровень 25 %.")
+            return
+
+        air, cal = self._trial_media_points_for(flatcap)
+        if air < 1:
+            self._trial_set_step(
+                "media", "fail",
+                f"Показание {flatcap} слишком мало для проверки: нужен конденсатор, у которого показание "
+                f"больше {self.TRIAL_MEDIA_SPAN * self.TRIAL_MEDIA_TARGET_X1000 // 1000} отсчётов.")
+            return
+
+        self._trial_media_points = {"flatcap": flatcap, "air": air, "cal": cal}
         ops = [
-            self._trial_emulation_op("emul_off", None),
             self._op_write("w_air", UdsData.fuel_media_flatcap_air_count, air),
-            self._op_write("w_cal", UdsData.fuel_media_flatcap_cal_count, fuel),
+            self._op_write("w_cal", UdsData.fuel_media_flatcap_cal_count, cal),
             self._op_write("w_en", UdsData.fuel_media_comp_enable, 1),
             self._op_wait(self.TRIAL_SETTLE_MS),
             self._op_read("rb_air", UdsData.fuel_media_flatcap_air_count),
             self._op_read("rb_cal", UdsData.fuel_media_flatcap_cal_count),
             self._op_read("rb_en", UdsData.fuel_media_comp_enable),
-            self._op_read("freeze", VAR_FREEZE_PCT),
-            self._op_read("level", UdsData.raw_fuel_level, signed=True),
-            self._op_read("flat_now", UdsData.fuel_media_flatcap_raw),
         ]
-        self._trial_mark_running("media", "Записываю точки вида топлива...")
-        return self._trial_start_ops(ops, "_trial_media_write_done")
+        self._trial_mark_running("media", f"Показание {flatcap}. Записываю «воздух» = {air} и «топливо» = {cal}...")
+        self._trial_start_ops(ops, "_trial_media_stage3")
 
-    def _trial_media_write_done(self, res: dict):
-        air = self._trial_media_air
-        fuel = self._trial_media_fuel
+    def _trial_media_stage3(self, res: dict):
+        points = self._trial_media_points
         problems = []
 
         for key, word in (("w_air", "«воздух»"), ("w_cal", "«топливо»"), ("w_en", "включение поправки")):
             if res.get(key) is not True:
                 problems.append(f"запись {word}: {self._trial_error_text(res, key)}")
-        for key, want, word in (("rb_air", air, "«воздух»"), ("rb_cal", fuel, "«топливо»"), ("rb_en", 1, "включение")):
+        for key, want, word in (("rb_air", points["air"], "«воздух»"), ("rb_cal", points["cal"], "«топливо»"),
+                                ("rb_en", 1, "включение")):
             got = self._trial_value(res, key)
             if got != want:
                 problems.append(f"в приборе {word} = {got}, а записывали {want}")
-
-        flat_now = self._trial_value(res, "flat_now")
-        if flat_now is not None and abs(flat_now - fuel) > abs(flat_now - air):
-            problems.append("на контуре вида топлива сейчас не «топливо», подключите его для проверки коэффициента")
-
-        freeze = self._trial_value(res, "freeze")
-        level = self._trial_value(res, "level")
-        if level is not None and freeze is not None and level < int(freeze) * 10:
-            problems.append(
-                f"уровень {level / 10:.1f} % ниже порога заморозки {freeze} %: подключите к основному "
-                "контуру конденсатор полного бака, иначе коэффициент среды не обновляется")
 
         if problems:
             self._trial_set_step("media", "fail", "; ".join(problems) + ".")
             return
 
-        self._trial_expected.update({"media_air": air, "media_cal": fuel, "media_enable": 1})
+        self._trial_expected.update({"media_air": points["air"], "media_cal": points["cal"], "media_enable": 1})
         self._trial_rf_deadline = time.monotonic() + self.TRIAL_RF_TIMEOUT_MS / 1000.0
-        self._trial_mark_running("media", "Точки записаны. Жду, пока коэффициент среды сойдётся к единице...")
+        self._trial_mark_running("media", "Точки записаны. Жду, пока коэффициент среды сойдётся к 1,100...")
         self._trial_start_ops([self._op_read("rf", UdsData.fuel_media_rf_x1000), self._op_wait(500)],
                               "_trial_media_rf_poll")
 
     def _trial_media_rf_poll(self, res: dict):
+        points = self._trial_media_points
+        target = self.TRIAL_MEDIA_TARGET_X1000
         rf = self._trial_value(res, "rf")
-        if rf is not None and abs(rf - 1000) <= self.TRIAL_RF_TOLERANCE_X1000:
+        if rf is not None and abs(rf - target) <= self.TRIAL_RF_TOLERANCE_X1000:
             self._trial_set_step(
                 "media", "pass",
-                f"Точки «воздух» = {self._trial_media_air} и «топливо» = {self._trial_media_fuel} записаны "
-                f"и прочитаны обратно; коэффициент среды {rf / 1000:.3f} при конденсаторе «топливо».")
+                f"Показание конденсатора {points['flatcap']}, точки «воздух» = {points['air']} и «топливо» = "
+                f"{points['cal']} записаны и прочитаны обратно; коэффициент среды {rf / 1000:.3f} при "
+                f"расчётном {target / 1000:.3f}.")
             return
         if time.monotonic() < self._trial_rf_deadline:
             self._trial_start_ops([self._op_read("rf", UdsData.fuel_media_rf_x1000), self._op_wait(500)],
@@ -830,73 +806,23 @@ class AppControllerTrialMixin(AppControllerContract):
         shown = "нет данных" if rf is None else f"{rf / 1000:.3f}"
         self._trial_set_step(
             "media", "fail",
-            f"Точки записались, но коэффициент среды за {self.TRIAL_RF_TIMEOUT_MS // 1000} с не сошёлся "
-            f"к 1.000, последнее значение {shown}.")
+            f"Точки записались, но коэффициент среды за {self.TRIAL_RF_TIMEOUT_MS // 1000} с не сошёлся к "
+            f"{target / 1000:.3f}, последнее значение {shown}.")
 
-    # ------------------------------------------------------------------ шаг 6: прогон
+    # ------------------------------------------------------------------ шаг 6: снятие точек
 
-    def _trial_set_chamber_refs(self, ref1_text: str, ref2_text: str) -> bool:
-        try:
-            ref1 = float(str(ref1_text).strip().replace(",", "."))
-            ref2 = float(str(ref2_text).strip().replace(",", "."))
-        except ValueError:
-            self._trial_set_step("chamber", "fail", "Номиналы эталонов должны быть числами в пикофарадах.")
-            return False
-        if ref1 < 0 or ref2 < 0 or abs(ref1 - ref2) < 1.0:
-            self._trial_set_step("chamber", "fail", "Номиналы двух эталонов должны различаться, иначе расчёт невозможен.")
-            return False
-        self._trial_chamber_ref1 = ref1
-        self._trial_chamber_ref2 = ref2
-        self.trialChanged.emit()
-        return True
-
-    def _trial_build_chamber_plan(self) -> list[tuple[int, str, str]]:
-        """Список точек прогона в том порядке, в каком их снимают."""
-        plan = []
-        for node in chamber_fit.NODES_X10:
-            place = f"Температура {chamber_fit.node_text(node)}: "
-            for ref in (self._trial_chamber_ref1, self._trial_chamber_ref2):
-                plan.append((node, f"{ref:g} пФ", place + f"подключите к основному контуру эталон {ref:g} пФ."))
-            plan.append((node, chamber_fit.AIR_NOTE,
-                         place + "подключите к основному контуру конденсатор пустого бака, "
-                                 "а к контуру вида топлива конденсатор «воздух»."))
-            if node == chamber_fit.REFERENCE_X10:
-                plan.append((node, chamber_fit.LIQUID_NOTE,
-                             place + "подключите к основному контуру конденсатор полного бака, "
-                                     "а к контуру вида топлива конденсатор «топливо»."))
-        return plan
-
-    def _trial_chamber_instruction(self) -> str:
-        if not self._trial_chamber_plan:
-            return "Нажмите «Начать прогон»."
-        if self._trial_chamber_index >= len(self._trial_chamber_plan):
-            return "Все точки сняты. Нажмите «Посчитать таблицы»."
-        return self._trial_chamber_plan[self._trial_chamber_index][2]
-
-    def _trial_chamber_start(self) -> bool:
+    def _trial_run_chamber(self) -> bool:
         if not self._trial_require_write("chamber"):
             return False
-        self._trial_chamber_plan = self._trial_build_chamber_plan()
+        self._trial_chamber_plan = list(chamber_fit.NODES_X10)
         self._trial_chamber_index = 0
+        self._trial_chamber_outcome = None
         self._chamber_clear_points()
         self._chamber_rehearsal = True
-        self._chamber_extend_liquid = True
-        self._trial_set_step(
-            "chamber", "pending",
-            f"Точка 1 из {len(self._trial_chamber_plan)}. {self._trial_chamber_instruction()}")
-        return True
+        return self._trial_chamber_capture_current()
 
-    def _trial_chamber_capture_next(self) -> bool:
-        if not self._trial_chamber_plan:
-            self._trial_set_step("chamber", "fail", "Сначала нажмите «Начать прогон».")
-            return False
-        if self._trial_chamber_index >= len(self._trial_chamber_plan):
-            self._trial_set_step("chamber", "pending", self._trial_chamber_instruction())
-            return False
-        if not self._trial_require_write("chamber"):
-            return False
-
-        node, _label, _text = self._trial_chamber_plan[self._trial_chamber_index]
+    def _trial_chamber_capture_current(self) -> bool:
+        node = self._trial_chamber_plan[self._trial_chamber_index]
         ops = [
             self._trial_emulation_op("w_node", node),
             self._op_wait(self.TRIAL_SETTLE_MS),
@@ -904,89 +830,89 @@ class AppControllerTrialMixin(AppControllerContract):
             self._op_await("await_chamber", "captured", self.TRIAL_CHAMBER_TIMEOUT_MS),
         ]
         self._trial_mark_running(
-            "chamber", f"Точка {self._trial_chamber_index + 1} из {len(self._trial_chamber_plan)}: снимаю...")
+            "chamber",
+            f"Температура {chamber_fit.node_text(node)}: снимаю точку "
+            f"{self._trial_chamber_index + 1} из {len(self._trial_chamber_plan)}...")
         return self._trial_start_ops(ops, "_trial_chamber_capture_done")
 
     def _trial_chamber_capture_call(self):
-        _node, label, _text = self._trial_chamber_plan[self._trial_chamber_index]
-        self._chamber_label = label
+        self._chamber_label = self.TRIAL_CHAMBER_LABEL
         self._trial_results["capture_started"] = bool(self._chamber_capture_point())
 
     def _trial_chamber_capture_done(self, res: dict):
-        node, label, _text = self._trial_chamber_plan[self._trial_chamber_index]
+        node = self._trial_chamber_plan[self._trial_chamber_index]
         number = self._trial_chamber_index + 1
         total = len(self._trial_chamber_plan)
+        problem = None
 
         if res.get("w_node") is not True:
-            self._trial_set_step(
-                "chamber", "fail",
-                f"Точка {number}: прибор не принял температуру {chamber_fit.node_text(node)} "
-                f"({self._trial_error_text(res, 'w_node')}).")
-            return
-        if res.get("capture_started") is not True or res.get("captured") is not True:
-            self._trial_set_step("chamber", "fail", f"Точка {number} не снята: {self._chamber_status}")
-            return
+            problem = (f"прибор не принял температуру {chamber_fit.node_text(node)} "
+                       f"({self._trial_error_text(res, 'w_node')})")
+        elif res.get("capture_started") is not True or res.get("captured") is not True:
+            problem = f"точка {number} не снята: {self._chamber_status}"
+        else:
+            point = self._chamber_points[-1] if self._chamber_points else None
+            if point is None or point["note"] != self.TRIAL_CHAMBER_LABEL:
+                problem = f"точка {number} не записалась в журнал: {self._chamber_status}"
+            elif chamber_fit.nearest_node(point["board_temp_x10"]) != node:
+                problem = (f"точка {number}: задана температура {chamber_fit.node_text(node)}, а прибор сообщил "
+                           f"{self._trial_temp_text(point['board_temp_x10'])}. Эмуляция не дошла до измерения")
 
-        point = self._chamber_points[-1] if self._chamber_points else None
-        if point is None or point["note"] != label:
-            self._trial_set_step("chamber", "fail", f"Точка {number} не записалась в журнал: {self._chamber_status}")
-            return
-        got_node = chamber_fit.nearest_node(point["board_temp_x10"])
-        if got_node != node:
-            self._trial_set_step(
-                "chamber", "fail",
-                f"Точка {number}: задана температура {chamber_fit.node_text(node)}, а прибор сообщил "
-                f"{self._trial_temp_text(point['board_temp_x10'])}. Эмуляция не дошла до измерения.")
+        if problem:
+            self._trial_chamber_outcome = ("fail", problem + ".")
+            self._trial_chamber_finish_start()
             return
 
         self._trial_chamber_index += 1
-        if self._trial_chamber_index >= total:
-            self._trial_set_step("chamber", "pending", f"Сняты все {total} точек. Нажмите «Посчитать таблицы».")
+        if self._trial_chamber_index < total:
+            self._trial_chamber_capture_current()
+            return
+
+        periods = [point["main"] for point in self._chamber_points if point["note"] == self.TRIAL_CHAMBER_LABEL]
+        spread = max(periods) - min(periods) if periods else 0
+        if spread > self.TRIAL_CHAMBER_SPREAD_LIMIT:
+            self._trial_chamber_outcome = (
+                "warn",
+                f"Все {total} точек попали в свои узлы, но показание одного и того же конденсатора гуляло на "
+                f"{spread} отсчётов. Проверьте проводки и контакт.")
         else:
-            self._trial_set_step(
-                "chamber", "pending",
-                f"Точка {number} записана. Точка {self._trial_chamber_index + 1} из {total}. "
-                f"{self._trial_chamber_instruction()}")
+            self._trial_chamber_outcome = (
+                "pass",
+                f"Все {total} точек попали в свои узлы, показание конденсатора стабильно, разброс {spread} "
+                "отсчётов. Точки записаны в журнал прогона с пометкой пробы.")
+        self._trial_chamber_finish_start()
 
-    def _trial_chamber_compute(self) -> bool:
-        if not self._trial_chamber_plan or self._trial_chamber_index < len(self._trial_chamber_plan):
-            self._trial_set_step("chamber", "fail", "Сначала снимите все точки прогона.")
-            return False
-        if not self._trial_require_write("chamber"):
-            return False
-        ops = [self._trial_emulation_op("emul_off", None), self._op_call("computed", "_trial_chamber_compute_call")]
-        self._trial_mark_running("chamber", "Считаю таблицы по прогону...")
-        return self._trial_start_ops(ops, "_trial_chamber_compute_done")
-
-    def _trial_chamber_compute_call(self):
-        self._trial_results["computed"] = bool(self._chamber_compute_tables())
+    def _trial_chamber_finish_start(self):
+        """Выключает эмуляцию после снятия точек и только потом объявляет итог."""
         self._chamber_rehearsal = False
+        if not self._trial_start_ops([self._trial_emulation_op("emul_off", None)], "_trial_chamber_finish"):
+            status, detail = self._trial_chamber_outcome
+            self._trial_set_step("chamber", "fail", detail + " Эмуляцию после снятия выключить не удалось.")
 
-    def _trial_chamber_compute_done(self, res: dict):
-        report = list(self._chamber_report)
-        blocking = [line for line in report
-                    if any(word in line for word in ("опорной точке", "нужно минимум", "нет замера сухой",
-                                                     "не растёт", "совпали"))]
-        doubtful = [line for line in report if any(word in line for word in ("не достроены", "плохо ложатся"))]
+    def _trial_chamber_finish(self, res: dict):
+        status, detail = self._trial_chamber_outcome
+        if res.get("emul_off") is not True:
+            status = "fail"
+            detail += f" Эмуляцию после снятия выключить не удалось ({self._trial_error_text(res, 'emul_off')})."
+        self._trial_set_step("chamber", status, detail)
 
-        if res.get("computed") is not True or blocking:
-            reason = "; ".join(blocking) if blocking else self._chamber_status
-            self._trial_set_step("chamber", "fail", f"Таблицы не посчитаны: {reason}.")
-            return
-        if doubtful:
-            self._trial_set_step("chamber", "warn", "Таблицы посчитаны, но: " + "; ".join(doubtful) + ".")
-            return
-        self._trial_set_step(
-            "chamber", "pass",
-            f"Все {len(self._trial_chamber_plan)} точек попали в свои узлы, таблицы посчитаны и перенесены "
-            "в раздел профиля. Эмуляция выключена.")
+    def _trial_chamber_progress(self) -> str:
+        total = len(self._trial_chamber_plan)
+        if total == 0:
+            return ""
+        if self._trial_chamber_index >= total:
+            return f"Сняты все {total} точек"
+        return f"Точка {self._trial_chamber_index + 1} из {total}"
 
     # ------------------------------------------------------------------ шаг 7: запись профиля
 
     def _trial_run_profile(self) -> bool:
         if not self._trial_require_write("profile"):
             return False
+        self._trial_applied_profile = None
         ops = [
+            self._trial_emulation_op("emul_off", None),
+            self._op_call("loaded", "_trial_profile_load_call"),
             self._op_call("write_started", "_trial_profile_write_call"),
             self._op_await("await_profile", "written", self.TRIAL_PROFILE_TIMEOUT_MS),
             self._op_call("write_status", "_trial_profile_status_call"),
@@ -994,8 +920,15 @@ class AppControllerTrialMixin(AppControllerContract):
             self._op_await("await_profile", "verified", self.TRIAL_PROFILE_TIMEOUT_MS),
             self._op_read("status", UdsData.fuel_thermal_profile_status),
         ]
-        self._trial_mark_running("profile", "Записываю профиль и читаю его обратно...")
+        self._trial_mark_running("profile", "Пишу проверочный профиль и читаю его обратно...")
         return self._trial_start_ops(ops, "_trial_profile_done")
+
+    def _trial_profile_load_call(self):
+        profile = profile_model.build_test_profile(self._profile_values["nodes"])
+        for name, values in profile.items():
+            self._profile_values[name] = [int(value) for value in values]
+        self.profileChanged.emit()
+        self._trial_results["loaded"] = True
 
     def _trial_profile_write_call(self):
         self._trial_results["write_started"] = bool(self._profile_write_to_device())
@@ -1007,7 +940,7 @@ class AppControllerTrialMixin(AppControllerContract):
         self._trial_results["write_status"] = str(self._profile_status)
 
     def _trial_profile_verdict(self, res: dict, what: str) -> list[str]:
-        """Общая проверка записи и сверки профиля для шагов 7 и 8."""
+        """Общая проверка записи и сверки профиля для шага 7 и возврата настроек."""
         problems = []
         if res.get("write_started") is not True:
             problems.append(f"запись {what} не началась: {self._profile_status}")
@@ -1031,36 +964,38 @@ class AppControllerTrialMixin(AppControllerContract):
         return problems
 
     def _trial_profile_done(self, res: dict):
-        problems = self._trial_profile_verdict(res, "профиля")
+        problems = self._trial_profile_verdict(res, "проверочного профиля")
         if problems:
+            self._trial_applied_profile = None
             self._trial_set_step("profile", "fail", "; ".join(problems) + ".")
             return
-        self._trial_remember_profile()
-        self._trial_set_step(
-            "profile", "pass",
-            f"Все семь таблиц совпали с экраном, сумма 0x{self._profile_calc_crc():04X} сошлась, "
-            "прибор взял таблицы в работу.")
 
-    def _trial_remember_profile(self):
+        # Снимок того, что лежит в приборе: по нему шаг 8 предсказывает результат,
+        # даже если таблицы на экране потом кто-то поправит.
+        self._trial_applied_profile = {name: list(values) for name, values in self._profile_values.items()}
         self._trial_expected.update({
             "crc": self._profile_calc_crc(),
             "generation": int(self._profile_generation),
             "algorithm": 1,
         })
+        self._trial_set_step(
+            "profile", "pass",
+            f"Проверочный профиль записан: все семь таблиц совпали с прочитанными из прибора, сумма "
+            f"0x{self._profile_calc_crc():04X} сошлась, прибор взял таблицы в работу. В приборе остался "
+            "проверочный профиль, в конце верните настройки.")
 
     # ------------------------------------------------------------------ шаг 8: применение
 
     def _trial_run_apply(self) -> bool:
         if not self._trial_require_write("apply"):
             return False
+        if self._trial_applied_profile is None:
+            self._trial_set_step(
+                "apply", "fail",
+                "Сначала пройдите шаг 7: он записывает проверочный профиль, по которому идёт сверка.")
+            return False
         ops = [
             self._trial_emulation_op("emul_off", None),
-            self._op_call("loaded", "_trial_apply_load_call"),
-            self._op_call("write_started", "_trial_profile_write_call"),
-            self._op_await("await_profile", "written", self.TRIAL_PROFILE_TIMEOUT_MS),
-            self._op_call("write_status", "_trial_profile_status_call"),
-            self._op_call("verify_started", "_trial_profile_verify_call"),
-            self._op_await("await_profile", "verified", self.TRIAL_PROFILE_TIMEOUT_MS),
             self._op_read("status", UdsData.fuel_thermal_profile_status),
             self._op_read("zero_trim", UdsData.fuel_zero_trim_count, signed=True),
         ]
@@ -1075,15 +1010,8 @@ class AppControllerTrialMixin(AppControllerContract):
                 self._op_read(f"mode{index}", UdsData.fuel_board_stage_mode),
             ]
         ops.append(self._trial_emulation_op("emul_off_end", None))
-        self._trial_mark_running("apply", "Пишу проверочный профиль и прохожу десять температур...")
+        self._trial_mark_running("apply", "Прохожу десять температур и сверяю итоговый период с расчётом...")
         return self._trial_start_ops(ops, "_trial_apply_done")
-
-    def _trial_apply_load_call(self):
-        profile = profile_model.build_test_profile(self._profile_values["nodes"])
-        for name, values in profile.items():
-            self._profile_values[name] = [int(value) for value in values]
-        self.profileChanged.emit()
-        self._trial_results["loaded"] = True
 
     def _trial_apply_compare(self, res: dict) -> tuple[list[str], list[str]]:
         """Сверяет цепочку прибора с расчётом. Возвращает (расхождения, строки отчёта)."""
@@ -1092,8 +1020,11 @@ class AppControllerTrialMixin(AppControllerContract):
         status = self._trial_value(res, "status") or 0
         trusted = bool(status & profile_model.STATUS_TRUSTED)
         zero_trim = self._trial_value(res, "zero_trim") or 0
-        profile = {name: list(values) for name, values in self._profile_values.items()}
+        profile = self._trial_applied_profile
         tolerance = self.TRIAL_PERIOD_TOLERANCE
+
+        if not trusted:
+            problems.append(f"прибор не применяет профиль, состояние 0x{status:02X}")
 
         for index, temperature in enumerate(self.TRIAL_APPLY_TEMPS_X10):
             place = self._trial_temp_text(temperature)
@@ -1136,12 +1067,6 @@ class AppControllerTrialMixin(AppControllerContract):
         return problems, lines
 
     def _trial_apply_done(self, res: dict):
-        problems = self._trial_profile_verdict(res, "проверочного профиля")
-        if problems:
-            self._trial_set_step("apply", "fail", "; ".join(problems) + ".")
-            return
-
-        self._trial_remember_profile()
         mismatches, lines = self._trial_apply_compare(res)
         if res.get("emul_off_end") is not True:
             mismatches.append("эмуляция после проверки не выключилась")
@@ -1153,8 +1078,7 @@ class AppControllerTrialMixin(AppControllerContract):
             self._trial_set_step(
                 "apply", "pass",
                 f"При всех {len(self.TRIAL_APPLY_TEMPS_X10)} температурах итоговый период прибора совпал с "
-                f"расчётом по формулам прошивки в пределах {self.TRIAL_PERIOD_TOLERANCE} отсчётов. "
-                "В приборе остался проверочный профиль, в конце верните настройки.\n" + detail)
+                f"расчётом по формулам прошивки в пределах {self.TRIAL_PERIOD_TOLERANCE} отсчётов.\n" + detail)
 
     # ------------------------------------------------------------------ шаг 9: сохранение
 
@@ -1171,7 +1095,7 @@ class AppControllerTrialMixin(AppControllerContract):
 
     def _trial_run_persist(self) -> bool:
         if not self._trial_expected:
-            self._trial_set_step("persist", "fail", "Сверять нечего: сначала пройдите шаги 4, 5 и 7 или 8.")
+            self._trial_set_step("persist", "fail", "Сверять нечего: сначала пройдите шаги 4, 5 и 7.")
             return False
         ops = [self._op_reset("reset")]
         ops += [self._op_read(f"p_{key}", var, signed) for key, var, signed in self.PERSIST_VARS]
@@ -1343,9 +1267,8 @@ class AppControllerTrialMixin(AppControllerContract):
             got = self._trial_value(res, f"r_{key}")
             if got != values[key]:
                 problems.append(f"{key}: в приборе {got}, а запомнено {values[key]}")
-        profile_problems = self._trial_profile_verdict(res, "запомненного профиля")
         # Пустой профиль прибор считает доверенным, поэтому признак проверяется так же.
-        problems.extend(profile_problems)
+        problems.extend(self._trial_profile_verdict(res, "запомненного профиля"))
 
         if problems:
             self._trial_status = "Вернуть всё не удалось: " + "; ".join(problems) + "."
@@ -1355,6 +1278,7 @@ class AppControllerTrialMixin(AppControllerContract):
                                   "эмуляция выключена.")
             self._trial_status_color = self.COLOR_OK
             self._trial_expected = {}
+            self._trial_applied_profile = None
         self._trial_log_line(self._trial_status)
         self.trialChanged.emit()
 
