@@ -1,6 +1,7 @@
 from .calibration_mixin import AppControllerCalibrationMixin
 from .can_mixin import AppControllerCanMixin
 from .chamber_mixin import AppControllerChamberMixin
+from .trial_mixin import AppControllerTrialMixin
 from .collector_mixin import AppControllerCollectorMixin
 from .contract import AppControllerContract
 from .diagnostics_mixin import AppControllerDiagnosticsMixin
@@ -16,6 +17,7 @@ __all__ = [
     "AppControllerCalibrationMixin",
     "AppControllerCanMixin",
     "AppControllerChamberMixin",
+    "AppControllerTrialMixin",
     "AppControllerCollectorMixin",
     "AppControllerContract",
     "AppControllerDiagnosticsMixin",

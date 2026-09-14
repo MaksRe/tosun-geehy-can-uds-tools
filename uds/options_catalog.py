@@ -85,7 +85,7 @@ UDS_OPTIONS: list[UdsOptionParameter] = [
 
     # Второй датчик температуры и выбор источника компенсации тракта.
     UdsOptionParameter(0x003A, 1, "Источник температуры компенсации: 0 топливо, 1 плата", AccessMode.READ_WRITE,
-                       "Переключать только вместе с повторной калибровкой K1"),
+                       "Переключать только вместе с повторным снятием температурного профиля"),
     UdsOptionParameter(0x003B, 2, "Температура платы, 0.1 °C", AccessMode.READ),
     UdsOptionParameter(0x003C, 2, "Сырой код АЦП датчика платы", AccessMode.READ),
 
@@ -161,6 +161,12 @@ UDS_OPTIONS: list[UdsOptionParameter] = [
                        "Расхождение с записанной означает недописанный профиль"),
     UdsOptionParameter(0x0060, 1, "Состояние температурного профиля", AccessMode.READ,
                        "Биты: 0 заполнен, 1 сумма сходится, 2 алгоритм совпадает, 3 применяется"),
+
+    # Проверка на столе без климатической камеры.
+    UdsOptionParameter(0x0061, 2, "Эмуляция температуры, 0.1 °C", AccessMode.READ_WRITE,
+                       "Только ОЗУ, гаснет при перезапуске и выходе из сессии, 0x8000 выключает"),
+    UdsOptionParameter(0x0062, 2, "Итоговый период после компенсации и подгонки нуля", AccessMode.READ,
+                       "По нему считается уровень, на стенде сверяется с расчётом"),
     UdsOptionParameter(0xF188, 18, "Номер ПО ЭБУ", AccessMode.READ_WRITE),
     UdsOptionParameter(0xF189, 32, "Версия ПО ЭБУ", AccessMode.READ_WRITE),
     UdsOptionParameter(0xF18A, 32, "Поставщик системы и адрес", AccessMode.READ_WRITE),

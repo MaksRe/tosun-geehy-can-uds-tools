@@ -317,6 +317,20 @@ ApplicationWindow {
     }
 
     FileDialog {
+        id: trialProtocolDialog
+        title: "Сохранить протокол пробной калибровки"
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "txt"
+        nameFilters: ["Протокол (*.txt)", "Все файлы (*)"]
+
+        onAccepted: {
+            if (window.backendController) {
+                window.backendController.saveTrialProtocol(selectedFile.toString())
+            }
+        }
+    }
+
+    FileDialog {
         id: chamberTablesDialog
         title: "Выгрузить посчитанные таблицы"
         fileMode: FileDialog.SaveFile
@@ -365,6 +379,7 @@ ApplicationWindow {
             onSaveChamberLogRequested: chamberSaveDialog.open()
             onLoadChamberLogRequested: chamberLoadDialog.open()
             onExportChamberTablesRequested: chamberTablesDialog.open()
+            onSaveTrialProtocolRequested: trialProtocolDialog.open()
         }
     }
 

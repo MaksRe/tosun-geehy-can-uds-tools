@@ -3040,6 +3040,86 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._profile_load_file(self._to_local_path(path))
 
     @Slot(str)
+    def runTrialStep(self, key):
+        """Цель функции в запуске шага пробной калибровки, затем она выполняет проверку и пишет итог."""
+        handlers = {
+            "link": self._trial_run_link,
+            "access": self._trial_run_access,
+            "emulation": self._trial_run_emulation,
+            "profile": self._trial_run_profile,
+            "apply": self._trial_run_apply,
+            "persist": self._trial_run_persist,
+        }
+        handler = handlers.get(str(key))
+        if handler is not None:
+            handler()
+
+    @Slot(str)
+    def trialCaptureLevel(self, which):
+        """Цель функции в снятии показания пустого или полного бака, затем она усредняет несколько замеров."""
+        self._trial_capture_level(str(which))
+
+    @Slot()
+    def trialWriteLevel(self):
+        """Цель функции в записи отметок бака, затем она читает их обратно и сверяет уровень."""
+        self._trial_write_level()
+
+    @Slot(str)
+    def trialCaptureMedia(self, which):
+        """Цель функции в снятии точки вида топлива, затем она усредняет несколько замеров."""
+        self._trial_capture_media(str(which))
+
+    @Slot()
+    def trialWriteMedia(self):
+        """Цель функции в записи точек вида топлива, затем она ждёт, пока коэффициент среды сойдётся."""
+        self._trial_write_media()
+
+    @Slot(str, str)
+    def setTrialChamberRefs(self, ref1, ref2):
+        """Цель функции в задании номиналов эталонов, затем по ним строится список точек прогона."""
+        self._trial_set_chamber_refs(str(ref1), str(ref2))
+
+    @Slot()
+    def trialChamberStart(self):
+        """Цель функции в запуске прогона с эмуляцией, затем она строит список точек по семи температурам."""
+        self._trial_chamber_start()
+
+    @Slot()
+    def trialChamberCaptureNext(self):
+        """Цель функции в снятии очередной точки прогона, затем она задаёт прибору нужную температуру."""
+        self._trial_chamber_capture_next()
+
+    @Slot()
+    def trialChamberCompute(self):
+        """Цель функции в расчёте таблиц по прогону, затем она выключает эмуляцию и проверяет полноту."""
+        self._trial_chamber_compute()
+
+    @Slot()
+    def trialBackupSettings(self):
+        """Цель функции в запоминании настроек прибора до начала, затем она сохраняет копию в файл."""
+        self._trial_backup_run()
+
+    @Slot()
+    def trialRestoreSettings(self):
+        """Цель функции в возврате запомненных настроек, затем она читает их обратно для сверки."""
+        self._trial_restore_run()
+
+    @Slot()
+    def trialEmulationOff(self):
+        """Цель функции в выключении эмуляции, затем прибор возвращается к настоящим датчикам."""
+        self._trial_emulation_off_run()
+
+    @Slot()
+    def trialResetSteps(self):
+        """Цель функции в сбросе отметок шагов, затем пробную калибровку можно пройти заново."""
+        self._trial_reset_steps()
+
+    @Slot(str)
+    def saveTrialProtocol(self, path):
+        """Цель функции в сохранении протокола пробной калибровки, затем итог можно приложить к отчёту."""
+        self._trial_save_protocol(self._to_local_path(path))
+
+    @Slot(str)
     def setChamberLabel(self, note):
         """Цель функции в пометке того, что сейчас подключено к прибору, затем она попадает в снятую точку."""
         value = str(note).strip()
@@ -3062,20 +3142,6 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
     def clearChamberPoints(self):
         """Цель функции в очистке журнала прогона, затем она готовит окно к новому прогону."""
         self._chamber_clear_points()
-
-    @Slot(bool)
-    def setChamberRehearsal(self, enabled):
-        """Цель функции в включении репетиции, затем температура берётся из поля, а не из прибора."""
-        value = bool(enabled)
-        if value == self._chamber_rehearsal:
-            return
-        self._chamber_rehearsal = value
-        self.chamberChanged.emit()
-
-    @Slot(str)
-    def setChamberRehearsalTemperature(self, text):
-        """Цель функции в задании подставной температуры репетиции, затем точки попадают в нужный узел."""
-        self._chamber_set_rehearsal_temperature(text)
 
     @Slot(bool)
     def setChamberExtendLiquid(self, enabled):

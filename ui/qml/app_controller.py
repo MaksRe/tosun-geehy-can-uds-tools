@@ -23,6 +23,7 @@ from .controller import (
     AppControllerCalibrationMixin,
     AppControllerCanMixin,
     AppControllerChamberMixin,
+    AppControllerTrialMixin,
     AppControllerCollectorMixin,
     AppControllerDiagnosticsMixin,
     AppControllerMediaWizardMixin,
@@ -45,6 +46,7 @@ class AppController(
     AppControllerMediaWizardMixin,
     AppControllerProfileMixin,
     AppControllerChamberMixin,
+    AppControllerTrialMixin,
     AppControllerCanMixin,
     AppControllerRuntimeMixin,
     QObject,
@@ -549,5 +551,7 @@ class AppController(
         self._init_profile_state()
         # Прогон в камере пользуется таблицами профиля, поэтому идёт после него.
         self._init_chamber_state()
+        # Пробная калибровка опирается на прогон и профиль, поэтому готовится последней.
+        self._init_trial_state()
 
         self._rebuild_can_traffic_view()

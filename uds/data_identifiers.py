@@ -101,6 +101,11 @@ class UdsData:
         "fuel_thermal_profile_crc_actual": UdsVar(0x005F, 2, "Сумма, посчитанная прибором сейчас"),
         "fuel_thermal_profile_status": UdsVar(0x0060, 1, "Состояние температурного профиля"),
 
+        # Проверка на столе без климатической камеры. Эмуляция живёт только в ОЗУ
+        # прибора и гаснет при перезапуске и выходе из сессии.
+        "temperature_emulation_x10": UdsVar(0x0061, 2, "Эмуляция температуры, 0.1 °C, 0x8000 выключено"),
+        "fuel_compensated_period": UdsVar(0x0062, 2, "Итоговый период после компенсации и подгонки нуля"),
+
         "vmecusndid"        : UdsVar(0xF188, 18, "Номер ПО ЭБУ изготовителя ТС"),
         "vmecusvndid"       : UdsVar(0xF189, 32, "Номер версии ПО ЭБУ изготовителя ТС"),
         "ssiddid"           : UdsVar(0xF18A, 32, "Название поставщика системы и информация об адресе"),
@@ -192,6 +197,8 @@ class UdsData:
     fuel_thermal_profile_crc = vars.get("fuel_thermal_profile_crc")
     fuel_thermal_profile_crc_actual = vars.get("fuel_thermal_profile_crc_actual")
     fuel_thermal_profile_status = vars.get("fuel_thermal_profile_status")
+    temperature_emulation_x10 = vars.get("temperature_emulation_x10")
+    fuel_compensated_period = vars.get("fuel_compensated_period")
 
     vmecusndid          = vars.get("vmecusndid")
     vmecusvndid         = vars.get("vmecusvndid")

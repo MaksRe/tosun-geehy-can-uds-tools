@@ -36,6 +36,7 @@ Card {
     signal saveChamberLogRequested()
     signal loadChamberLogRequested()
     signal exportChamberTablesRequested()
+    signal saveTrialProtocolRequested()
 
     property int currentSection: 0
 
@@ -64,9 +65,15 @@ Card {
             return root.appController.profileDeviceStatusText
         }
 
-        if (root.appController.chamberBusy)
-            return "Идёт замер точки"
-        return "Снято точек: " + root.appController.chamberPointCount
+        if (index === 3) {
+            if (root.appController.chamberBusy)
+                return "Идёт замер точки"
+            return "Снято точек: " + root.appController.chamberPointCount
+        }
+
+        if (root.appController.trialBusy)
+            return "Идёт проверка"
+        return root.appController.trialSummaryText
     }
 
     cardColor: "#ffffff"
@@ -183,6 +190,10 @@ Card {
                         {
                             "title": "Прогон в камере",
                             "hint": "Снятие точек и расчёт таблиц"
+                        },
+                        {
+                            "title": "Пробная калибровка",
+                            "hint": "Проверка всего порядка на столе"
                         }
                     ]
 
@@ -305,6 +316,18 @@ Card {
                     onSaveLogRequested: root.saveChamberLogRequested()
                     onLoadLogRequested: root.loadChamberLogRequested()
                     onExportTablesRequested: root.exportChamberTablesRequested()
+                }
+
+                TrialCard {
+                    appController: root.appController
+                    cardColor: root.cardColor
+                    cardBorder: root.cardBorder
+                    textMain: root.textMain
+                    textSoft: root.textSoft
+                    inputBg: root.inputBg
+                    inputBorder: root.inputBorder
+                    inputFocus: root.inputFocus
+                    onSaveProtocolRequested: root.saveTrialProtocolRequested()
                 }
             }
         }

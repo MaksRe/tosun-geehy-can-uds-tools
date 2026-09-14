@@ -386,13 +386,16 @@ class AppControllerProfileMixin:
         ]
         return self._profile_start_queue(queue, "Читаю профиль из прибора...")
 
-    def _profile_write_to_device(self) -> bool:
+    def _profile_write_to_device(self, allow_empty: bool = False) -> bool:
         """Записывает профиль в прибор в правильном порядке.
 
         Сумма идёт последней намеренно: пока её нет, прибор таблицы не применяет,
         поэтому оборванная на середине запись не попадёт в работу.
         """
         problems = self._profile_validate()
+        if allow_empty:
+            # Возврат запомненных настроек: пустой профиль там законный, он выключает таблицы.
+            problems = [item for item in problems if "пустые" not in item]
         if problems:
             self._profile_set_status("Записывать нельзя: " + problems[0], "#dc2626")
             return False

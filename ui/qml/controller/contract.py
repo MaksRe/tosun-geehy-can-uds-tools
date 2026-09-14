@@ -106,7 +106,6 @@ class AppControllerContract:
     _chamber_report: Any
     _chamber_file_path: Any
     _chamber_rehearsal: Any
-    _chamber_rehearsal_temp_x10: Any
     _chamber_extend_liquid: Any
     _chamber_span_main: Any
     _chamber_span_media: Any
@@ -118,6 +117,34 @@ class AppControllerContract:
     _chamber_gap_timer: Any
     _chamber_timeout_timer: Any
     chamberChanged: Any
+    trialChanged: Any
+    _trial_read: Any
+    _trial_write: Any
+    _trial_steps_state: Any
+    _trial_busy: Any
+    _trial_status: Any
+    _trial_status_color: Any
+    _trial_log: Any
+    _trial_ops: Any
+    _trial_pending: Any
+    _trial_results: Any
+    _trial_done_handler: Any
+    _trial_backup: Any
+    _trial_expected: Any
+    _trial_capture_target: Any
+    _trial_level_empty: Any
+    _trial_level_full: Any
+    _trial_media_air: Any
+    _trial_media_fuel: Any
+    _trial_rf_deadline: Any
+    _trial_chamber_ref1: Any
+    _trial_chamber_ref2: Any
+    _trial_chamber_plan: Any
+    _trial_chamber_index: Any
+    _trial_gap_timer: Any
+    _trial_wait_timer: Any
+    _trial_timeout_timer: Any
+    _trial_poll_timer: Any
     _diagnostics_counter_delta: Any
     _diagnostics_counter_growing: Any
     _diagnostics_counter_prev: Any

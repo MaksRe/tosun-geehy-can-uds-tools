@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import chamber_fit
-
 from PySide6.QtCore import Property, Signal
 
 from uds.data_identifiers import UdsData
@@ -68,6 +66,7 @@ class AppControllerPropertiesMixin(AppControllerContract):
     mediaWizardChanged = Signal()
     profileChanged = Signal()
     chamberChanged = Signal()
+    trialChanged = Signal()
     softwareVersionChanged = Signal()
 
     @Property("QStringList", notify=devicesChanged)
@@ -861,6 +860,62 @@ class AppControllerPropertiesMixin(AppControllerContract):
         """Цель функции в выдаче текстового отчёта, затем она позволяет скопировать результат проверки целиком."""
         return self._build_diagnostics_report()
 
+    @Property("QVariantList", notify=trialChanged)
+    def trialSteps(self):
+        """Цель функции в передаче шагов пробной калибровки, затем окно показывает итог каждого."""
+        return self._trial_step_rows()
+
+    @Property(bool, notify=trialChanged)
+    def trialBusy(self):
+        """Цель функции в признаке идущей проверки, затем она блокирует кнопки на это время."""
+        return bool(self._trial_busy)
+
+    @Property(str, notify=trialChanged)
+    def trialStatusText(self):
+        """Цель функции в подписи о ходе работы, затем она объясняет текущий шаг."""
+        return str(self._trial_status)
+
+    @Property(str, notify=trialChanged)
+    def trialStatusColor(self):
+        """Цель функции в цвете подписи, затем она отделяет успех от замечаний и отказа."""
+        return str(self._trial_status_color)
+
+    @Property(str, notify=trialChanged)
+    def trialSummaryText(self):
+        """Цель функции в короткой сводке, затем видно, сколько шагов пройдено."""
+        return self._trial_summary()
+
+    @Property(str, notify=trialChanged)
+    def trialBackupText(self):
+        """Цель функции в показе запомненных настроек, затем видно, есть ли к чему вернуться."""
+        backup = self._trial_backup
+        if not backup:
+            return "Настройки прибора ещё не запомнены."
+        values = backup["values"]
+        return (f"Запомнено {backup['saved_at']} для прибора 0x{backup['node']:02X}: "
+                f"0 % = {values['empty']}, 100 % = {values['full']}, подгонка нуля {values['zero_trim']}, "
+                f"вид топлива {values['media_air']} / {values['media_cal']}.")
+
+    @Property(str, notify=trialChanged)
+    def trialChamberRef1Text(self):
+        """Цель функции в номинале первого эталона, затем поле не теряет введённое."""
+        return f"{self._trial_chamber_ref1:g}"
+
+    @Property(str, notify=trialChanged)
+    def trialChamberRef2Text(self):
+        """Цель функции в номинале второго эталона, затем поле не теряет введённое."""
+        return f"{self._trial_chamber_ref2:g}"
+
+    @Property(str, notify=trialChanged)
+    def trialChamberProgressText(self):
+        """Цель функции в показе хода прогона, затем видно, сколько точек осталось."""
+        total = len(self._trial_chamber_plan)
+        if total == 0:
+            return ""
+        if self._trial_chamber_index >= total:
+            return f"Все {total} точек сняты"
+        return f"Точка {self._trial_chamber_index + 1} из {total}"
+
     @Property(str, notify=chamberChanged)
     def chamberLabel(self):
         """Цель функции в показе текущей пометки, затем окно не теряет её при обновлении."""
@@ -900,26 +955,6 @@ class AppControllerPropertiesMixin(AppControllerContract):
     def chamberReportLines(self):
         """Цель функции в перечислении недостающих данных, затем она объясняет отказ расчёта."""
         return [str(item) for item in self._chamber_report]
-
-    @Property(bool, notify=chamberChanged)
-    def chamberRehearsal(self):
-        """Цель функции в признаке репетиции, затем окно предупреждает, что температура подставная."""
-        return bool(self._chamber_rehearsal)
-
-    @Property(str, notify=chamberChanged)
-    def chamberRehearsalTemperatureText(self):
-        """Цель функции в показе подставной температуры репетиции, затем поле не теряет её значение."""
-        return f"{self._chamber_rehearsal_temp_x10 / 10:.0f}"
-
-    @Property("QStringList", notify=chamberChanged)
-    def chamberNodeTitles(self):
-        """Цель функции в списке температур сетки, затем окно даёт быстрый выбор узла для репетиции."""
-        return [chamber_fit.node_text(node) for node in chamber_fit.NODES_X10]
-
-    @Property("QVariantList", notify=chamberChanged)
-    def chamberNodeValues(self):
-        """Цель функции в передаче узлов сетки в градусах, затем окно подставляет их одним нажатием."""
-        return [node / 10.0 for node in chamber_fit.NODES_X10]
 
     @Property(bool, notify=chamberChanged)
     def chamberExtendLiquid(self):

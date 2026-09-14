@@ -127,3 +127,20 @@ def test_runtime_telemetry_is_read_only(did: int):
         f"0x{did:04X} помечен как {option.access.value}, ожидалось только чтение"
     )
     assert not option.can_write
+
+
+def test_bench_check_dids_have_the_right_access():
+    """Эмуляцию программа обязана уметь писать, а итоговый период только читать.
+
+    Итоговый период прибор считает сам. Если окно параметров разрешит его
+    запись, оператор решит, что может его подправить, а прибор такую запись
+    отвергнет.
+    """
+    emulation = get_option_by_did(0x0061)
+    compensated = get_option_by_did(0x0062)
+
+    assert emulation is not None and emulation.size == 2
+    assert emulation.access == AccessMode.READ_WRITE
+    assert compensated is not None and compensated.size == 2
+    assert compensated.access == AccessMode.READ
+

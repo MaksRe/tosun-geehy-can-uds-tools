@@ -59,7 +59,7 @@ class AppControllerChamberMixin(AppControllerContract):
         "Режим",
     )
 
-    # Пометка репетиции в журнале. По ней видно, что температура подставная.
+    # Пометка пробной точки в журнале. По ней видно, что температуру задавала эмуляция.
     CHAMBER_REHEARSAL_MARK = "репетиция"
 
     def _chamber_vars(self):
@@ -87,13 +87,9 @@ class AppControllerChamberMixin(AppControllerContract):
         self._chamber_report: list[str] = []
         self._chamber_file_path = ""
 
-        # Репетиция прогона на столе. Камеры нет, всё изделие при комнатной
-        # температуре, поэтому температура берётся не из прибора, а из поля.
-        # Так весь порядок работы проверяется целиком за несколько минут: точки
-        # снимаются с настоящего прибора, таблицы считаются и пишутся по-честному,
-        # и заранее видно, что именно не сработает на реальном выезде.
+        # Признак пробной калибровки. Его ставит раздел пробной калибровки на время
+        # прогона с эмуляцией температуры в самом приборе, и снятые точки помечаются.
         self._chamber_rehearsal = False
-        self._chamber_rehearsal_temp_x10 = chamber_fit.REFERENCE_X10
 
         # Достройка строк «в жидкости» по постоянному размаху. Нужна, когда в
         # камеру нельзя ставить топливо и погружение при каждой температуре не
@@ -232,12 +228,9 @@ class AppControllerChamberMixin(AppControllerContract):
                 "Точка не записана: прибор не отдал период или температуру.", "#dc2626")
             return
 
+        # Температура всегда берётся из прибора. При пробной калибровке её задаёт
+        # эмуляция в самой прошивке, поэтому точка честно попадает в свой узел.
         rehearsal = bool(self._chamber_rehearsal)
-        if rehearsal:
-            # Температура подставная, но период настоящий: проверяется весь путь
-            # от прибора до записи профиля, кроме самой камеры.
-            fuel_temp = int(self._chamber_rehearsal_temp_x10)
-            board_temp = int(self._chamber_rehearsal_temp_x10)
 
         point = {
             "time": datetime.now().strftime("%H:%M:%S"),
@@ -261,7 +254,7 @@ class AppControllerChamberMixin(AppControllerContract):
             hint = f"узел {chamber_fit.node_text(node)}"
             color = "#16a34a"
 
-        prefix = "Репетиция: точка" if rehearsal else "Точка"
+        prefix = "Пробная точка" if rehearsal else "Точка"
         self._chamber_set_status(
             f"{prefix} «{point['note']}» записана, {hint}. Всего точек: {len(self._chamber_points)}.",
             color,
@@ -480,7 +473,7 @@ class AppControllerChamberMixin(AppControllerContract):
         self._chamber_report = list(result.get("замечания") or [])
         if any(point.get("rehearsal") for point in self._chamber_points):
             self._chamber_report.insert(0, (
-                "в прогоне есть точки репетиции с подставной температурой. "
+                "в прогоне есть точки пробной калибровки с эмуляцией температуры. "
                 "Эти таблицы годятся только для проверки порядка работы, "
                 "в рабочий прибор их писать нельзя"
             ))
@@ -526,31 +519,6 @@ class AppControllerChamberMixin(AppControllerContract):
 
     # ------------------------------------------------------------------ показ
 
-    def _chamber_set_rehearsal_temperature(self, text: str) -> bool:
-        """Разбирает подставную температуру репетиции, градусы Цельсия."""
-        cleaned = str(text).strip().replace(",", ".")
-        try:
-            value = int(round(float(cleaned) * 10))
-        except ValueError:
-            self._chamber_set_status("Температура репетиции должна быть числом.", "#dc2626")
-            return False
-
-        if value < -600 or value > 1200:
-            self._chamber_set_status(
-                "Температура репетиции вне разумного диапазона от -60 до +120 °C.", "#dc2626")
-            return False
-
-        self._chamber_rehearsal_temp_x10 = value
-        node = chamber_fit.nearest_node(value)
-        if node is None:
-            self._chamber_set_status(
-                f"Температура репетиции {value / 10:+.1f} °C не попадает ни в один узел сетки. "
-                "Точки с ней в расчёт не пойдут.", "#d97706")
-        else:
-            self._chamber_set_status(
-                f"Репетиция: точки будут записаны в узел {chamber_fit.node_text(node)}.", "#0f6ab4")
-        return True
-
     def _chamber_set_span(self, which: str, text: str) -> bool:
         """Разбирает введённый размах. Пустая строка означает «взять из измерения»."""
         cleaned = str(text).strip().replace(",", ".")
@@ -582,7 +550,7 @@ class AppControllerChamberMixin(AppControllerContract):
             node = chamber_fit.nearest_node(point["board_temp_x10"])
             rows.append({
                 "time": point["time"],
-                "note": point["note"] + (" (репетиция)" if point.get("rehearsal") else ""),
+                "note": point["note"] + (" (проба)" if point.get("rehearsal") else ""),
                 "main": str(point["main"]),
                 "media": "-" if point["media"] is None else str(point["media"]),
                 "fuelTemp": f"{point['fuel_temp_x10'] / 10:+.1f}",

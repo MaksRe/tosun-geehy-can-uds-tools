@@ -50,7 +50,6 @@ class _ChamberStub(AppControllerChamberMixin):
         self._chamber_span_main = None
         self._chamber_span_media = None
         self._chamber_rehearsal = False
-        self._chamber_rehearsal_temp_x10 = chamber_fit.REFERENCE_X10
         self._profile_status = ""
         self._profile_status_color = ""
 
@@ -218,20 +217,19 @@ def test_coverage_tells_which_tube_state_is_missing():
     assert all(row["tube"] == "нет погружённой" for row in rows)
 
 
-def test_rehearsal_substitutes_the_temperature():
-    """В репетиции температура берётся из поля: на столе она у всех точек одна и та же."""
+def test_trial_point_keeps_device_temperature_and_is_marked():
+    """Пробная точка берёт температуру из прибора: при пробной калибровке её задаёт эмуляция в прошивке."""
     stub = _ChamberStub()
     stub._chamber_label = "300 пФ"
     stub._chamber_rehearsal = True
-    stub._chamber_rehearsal_temp_x10 = -400
-    stub._chamber_samples = [{"main": 7100, "media": 2400, "fuel_temp": 250, "board_temp": 248}]
+    stub._chamber_samples = [{"main": 7100, "media": 2400, "fuel_temp": -400, "board_temp": -400}]
     stub._chamber_store_point()
 
     point = stub._chamber_points[0]
     assert point["fuel_temp_x10"] == -400
     assert point["board_temp_x10"] == -400
     assert point["rehearsal"] is True
-    assert point["main"] == 7100, "период обязан остаться настоящим"
+    assert point["main"] == 7100
 
 
 def test_rehearsal_point_is_marked_in_the_status():
@@ -242,7 +240,7 @@ def test_rehearsal_point_is_marked_in_the_status():
     stub._chamber_samples = [{"main": 4820, "media": 2400, "fuel_temp": 250, "board_temp": 250}]
     stub._chamber_store_point()
 
-    assert "Репетиция" in stub._chamber_status
+    assert "Пробная" in stub._chamber_status
 
 
 def test_rehearsal_mark_survives_the_file(tmp_path: Path):
@@ -271,24 +269,4 @@ def test_rehearsal_warning_is_first_in_the_report():
 
     assert stub._chamber_compute_tables()
     assert stub._chamber_report
-    assert "репетиции" in stub._chamber_report[0]
-
-
-def test_rehearsal_temperature_outside_the_grid_is_reported():
-    """Температура между узлами бесполезна для репетиции, и об этом надо сказать сразу."""
-    stub = _ChamberStub()
-    assert stub._chamber_set_rehearsal_temperature("38")
-    assert "не попадает ни в один узел" in stub._chamber_status
-
-    assert stub._chamber_set_rehearsal_temperature("-40")
-    assert "узел -40 °C" in stub._chamber_status
-
-
-def test_rehearsal_temperature_refuses_nonsense():
-    """Нечисло и запредельная температура не должны попадать в подстановку."""
-    stub = _ChamberStub()
-    before = stub._chamber_rehearsal_temp_x10
-
-    assert not stub._chamber_set_rehearsal_temperature("холодно")
-    assert not stub._chamber_set_rehearsal_temperature("500")
-    assert stub._chamber_rehearsal_temp_x10 == before
+    assert "пробной калибровки" in stub._chamber_report[0]
