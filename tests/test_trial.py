@@ -354,6 +354,23 @@ def test_restore_sets_expectations_for_the_reboot_check():
     assert stub._trial_expected["crc"] == 0x1234
 
 
+def test_restore_says_that_an_empty_profile_is_expected():
+    """Пустой профиль после прогона выглядит как потеря записи, итог обязан это объяснить."""
+    stub = _stub_with_backup()
+    answers = {f"r_{key}": value for key, value in stub._trial_backup["values"].items()}
+    answers.update({"write_started": True, "written": True, "write_status": "Готово.",
+                    "verify_started": True, "verified": True, "status": 0x08})
+    stub._trial_restore_done(answers)
+    _commit(stub)
+    assert "снова пустой" in _detail(stub, "restore")
+
+    stub = _stub_with_backup()
+    stub._trial_backup["profile"]["tube_air_main"][3] = 17
+    stub._trial_restore_done(answers)
+    _commit(stub)
+    assert "пустой" not in _detail(stub, "restore")
+
+
 def test_restore_reports_a_value_that_did_not_come_back():
     stub = _stub_with_backup()
     values = stub._trial_backup["values"]

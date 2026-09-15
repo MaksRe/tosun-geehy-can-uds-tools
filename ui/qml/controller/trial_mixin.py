@@ -1857,9 +1857,13 @@ class AppControllerTrialMixin(AppControllerContract):
             self._trial_expect_trusted = status is not None and bool(int(status) & profile_model.STATUS_TRUSTED)
 
         head = f"Возвращено: {written}. " if written else "Пробная калибровка настройки не меняла, писать было нечего. "
+        # Пустой профиль после возврата выглядит как потеря записи, поэтому это называется прямо.
+        tail = ""
+        if not any(value for name, table in self._trial_backup["profile"].items() if name != "nodes" for value in table):
+            tail = " Профиль до пробы был пустым, поэтому в приборе он снова пустой: так и должно быть."
         self._trial_commit_then(
             "restore", "pass",
-            head + f"Все настройки совпали с запомненными {self._trial_backup['saved_at']}, эмуляция выключена.")
+            head + f"Все настройки совпали с запомненными {self._trial_backup['saved_at']}, эмуляция выключена." + tail)
 
     # ------------------------------------------------------------------ этап: сохранение
 
