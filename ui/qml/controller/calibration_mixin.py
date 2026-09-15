@@ -15,6 +15,7 @@ from colors import RowColor
 from uds.data_identifiers import UdsData
 from uds.uds_identifiers import UdsIdentifiers
 
+from .bus_guard import background_request_recent, note_background_request, uds_exchange_busy
 from .contract import AppControllerContract
 
 class AppControllerCalibrationMixin(AppControllerContract):
@@ -1567,11 +1568,12 @@ class AppControllerCalibrationMixin(AppControllerContract):
             return
         if self._programming_active:
             return
-        # Короткий запрос посреди длинной записи или чтения обрывает её в приборе
-        # (так устроен ISO-TP), поэтому опрос ждёт, пока окно параметров свободно.
-        if self._options_busy:
+        # Прибор держит один канал ISO-TP: запрос, пришедший раньше ответа на чужой,
+        # затирает его. Поэтому опрос молчит, пока другой раздел обменивается с прибором.
+        if uds_exchange_busy(self) or background_request_recent(self):
             return
         self._request_calibration_runtime_snapshot()
+        note_background_request(self)
 
     def _start_calibration_poll_timer(self):
         if self._calibration_poll_timer.interval() != self._calibration_poll_interval_ms:

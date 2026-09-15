@@ -174,6 +174,8 @@ class AppControllerContract:
     _eeprom_commit_boot_warned: Any
     _eeprom_commit_timer: Any
     _options_write_verify: Any
+    _uds_background_tx_s: Any
+    _chamber_attempt: Any
     _trial_live_suspend_until: Any
     _trial_gap_timer: Any
     _trial_wait_timer: Any

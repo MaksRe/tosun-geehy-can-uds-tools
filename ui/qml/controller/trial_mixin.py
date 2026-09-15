@@ -50,6 +50,7 @@ from uds.data_identifiers import UdsData, UdsVar
 from uds.services.read_data_by_id import ServiceReadDataById
 from uds.services.write_data_by_id import ServiceWriteDataById
 
+from .bus_guard import background_request_recent, note_background_request, uds_exchange_busy
 from .contract import AppControllerContract
 from .eeprom_commit_mixin import EEPROM_FLAG_SPI_ERROR, decode_eeprom_state, eeprom_boot_warning
 
@@ -312,7 +313,8 @@ class AppControllerTrialMixin(AppControllerContract):
         self.trialChanged.emit()
         # Ответ на только что отправленный опрос отсчётов ещё в пути. Отказ старой
         # прошивки на него этап принял бы за ответ на свой запрос, поэтому пауза.
-        if time.monotonic() - self._trial_live_last_poll < self.TRIAL_LIVE_GUARD_MS / 1000.0:
+        last_background = max(float(self._trial_live_last_poll), float(getattr(self, "_uds_background_tx_s", 0.0) or 0.0))
+        if time.monotonic() - last_background < self.TRIAL_LIVE_GUARD_MS / 1000.0:
             self._trial_gap_timer.start(self.TRIAL_LIVE_GUARD_MS)
         else:
             self._trial_next_op()
@@ -534,9 +536,7 @@ class AppControllerTrialMixin(AppControllerContract):
 
         if not self._can.is_connect or not self._can.is_trace:
             return
-        if self._trial_busy or self._chamber_busy or self._profile_busy or self._options_busy:
-            return
-        if getattr(self, "_diagnostics_running", False):
+        if uds_exchange_busy(self) or background_request_recent(self):
             return
         # Пока калибровка открывает сессию и доступ, лишние запросы на шину не нужны.
         if bool(self._calibration_active) and not bool(self._calibration_session_ready):
@@ -547,6 +547,7 @@ class AppControllerTrialMixin(AppControllerContract):
         _key, var, _signed = self.TRIAL_LIVE_VARS[self._trial_live_index]
         self._trial_live_index = (self._trial_live_index + 1) % len(self.TRIAL_LIVE_VARS)
         self._trial_live_last_poll = time.monotonic()
+        note_background_request(self)
         try:
             self._trial_read.read_data_by_identifier(self._build_calibration_tx_identifier(), var)
         except Exception:

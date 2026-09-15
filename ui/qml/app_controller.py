@@ -538,6 +538,8 @@ class AppController(
         self._options_fc_retry_left = 0
         # Что записано из окна параметров и ждёт сверки чтением.
         self._options_write_verify = None
+        # Когда ушёл последний фоновый запрос: следующий ждёт ответа на него.
+        self._uds_background_tx_s = 0.0
         self._options_fc_retry_timer = QTimer(self)
         self._options_fc_retry_timer.setSingleShot(False)
         self._options_fc_retry_timer.setInterval(25)

@@ -35,6 +35,7 @@ import chamber_fit
 from uds.data_identifiers import UdsData
 from uds.services.read_data_by_id import ServiceReadDataById
 
+from .bus_guard import BACKGROUND_GUARD_S, background_request_recent
 from .contract import AppControllerContract
 
 
@@ -45,6 +46,10 @@ class AppControllerChamberMixin(AppControllerContract):
 
     # Сколько раз опросить прибор в одной точке. Среднее по ним и попадает в журнал.
     CHAMBER_SAMPLES = 5
+
+    # Сколько раз повторить запрос, оставшийся без ответа. Прибор теряет запрос,
+    # если в тот же миг к нему пришёл чужой, и один такой случай не повод бросать точку.
+    CHAMBER_RETRY_LIMIT = 2
 
     # Сколько строк журнала показывать в окне. Остальные есть в файле.
     CHAMBER_VISIBLE_ROWS = 120
@@ -103,6 +108,8 @@ class AppControllerChamberMixin(AppControllerContract):
         self._chamber_sample: dict[str, int] = {}
         self._chamber_samples: list[dict[str, int]] = []
         self._chamber_samples_left = 0
+        # Сколько раз уже повторён текущий запрос.
+        self._chamber_attempt = 0
 
         self._chamber_gap_timer = QTimer(self)
         self._chamber_gap_timer.setSingleShot(True)
@@ -152,8 +159,15 @@ class AppControllerChamberMixin(AppControllerContract):
 
         self._chamber_samples = []
         self._chamber_samples_left = int(self.CHAMBER_SAMPLES)
+        self._chamber_attempt = 0
         self._chamber_busy = True
-        self._chamber_start_sample()
+        if background_request_recent(self):
+            # Ответ на только что ушедший фоновый запрос ещё в пути: первый запрос его затёр бы.
+            self._chamber_sample = {}
+            self._chamber_queue = list(self._chamber_vars())
+            self._chamber_gap_timer.start(int(BACKGROUND_GUARD_S * 1000))
+        else:
+            self._chamber_start_sample()
         self._chamber_set_status(
             f"Замер точки «{self._chamber_label}», осталось повторов: {self._chamber_samples_left}.",
             "#0f6ab4",
@@ -202,6 +216,10 @@ class AppControllerChamberMixin(AppControllerContract):
                 f"Замер точки «{self._chamber_label}», осталось повторов: {self._chamber_samples_left}.",
                 "#0f6ab4",
             )
+            # Очередь следующего повтора готовится сразу. Раньше пауза после последнего
+            # чтения повтора запускала тот же повтор заново, и точка не заканчивалась никогда.
+            self._chamber_sample = {}
+            self._chamber_queue = list(self._chamber_vars())
             self._chamber_gap_timer.start(self.CHAMBER_REQUEST_GAP_MS)
             return
 
@@ -270,21 +288,26 @@ class AppControllerChamberMixin(AppControllerContract):
         self._chamber_set_status(message, "#dc2626")
 
     def _on_chamber_gap_timeout(self):
-        """Пауза между запросами вышла."""
+        """Пауза между запросами вышла: следующий запрос, а пустая очередь закрывает повтор."""
         if not self._chamber_busy:
             return
-        if self._chamber_queue:
-            self._send_next_chamber_request()
-        else:
-            self._chamber_start_sample()
+        self._send_next_chamber_request()
 
     def _on_chamber_timeout(self):
         """Прибор не ответил на запрос за отведённое время."""
         if (not self._chamber_busy) or (self._chamber_pending is None):
             return
-        _key, var, _signed = self._chamber_pending
+        pending = self._chamber_pending
+        _key, var, _signed = pending
+        if self._chamber_attempt < self.CHAMBER_RETRY_LIMIT:
+            self._chamber_attempt += 1
+            self._chamber_pending = None
+            self._chamber_queue.insert(0, pending)
+            self._chamber_gap_timer.start(self.CHAMBER_REQUEST_GAP_MS)
+            return
         self._chamber_abort(
-            f"Прибор не ответил на DID 0x{int(var.pid) & 0xFFFF:04X}. Точка не записана."
+            f"Прибор не ответил на DID 0x{int(var.pid) & 0xFFFF:04X} и после "
+            f"{self.CHAMBER_RETRY_LIMIT} повторов. Точка не записана."
         )
 
     def _handle_chamber_frame(self, identifier: int, payload):
@@ -311,7 +334,11 @@ class AppControllerChamberMixin(AppControllerContract):
 
         # Отрицательный ответ: параметра нет либо он закрыт в текущей сессии.
         if body[0] == 0x7F:
+            # Отказ на чужую службу (запись, сессию) к этому чтению не относится.
+            if body[1] != 0x22:
+                return
             self._chamber_timeout_timer.stop()
+            self._chamber_attempt = 0
             self._chamber_pending = None
             # Контур вида топлива есть не во всех сборках, без него расчёт возможен.
             if key == "media":
@@ -348,6 +375,7 @@ class AppControllerChamberMixin(AppControllerContract):
 
         self._chamber_timeout_timer.stop()
         self._chamber_pending = None
+        self._chamber_attempt = 0
         self._chamber_sample[key] = int(value)
         self._chamber_gap_timer.start(self.CHAMBER_REQUEST_GAP_MS)
 

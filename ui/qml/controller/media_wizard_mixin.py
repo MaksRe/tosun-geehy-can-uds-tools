@@ -27,6 +27,7 @@ from uds.data_identifiers import UdsData
 from uds.services.read_data_by_id import ServiceReadDataById
 from uds.services.write_data_by_id import ServiceWriteDataById
 
+from .bus_guard import background_request_recent, note_background_request, uds_exchange_busy
 from .contract import AppControllerContract
 
 
@@ -174,7 +175,12 @@ class AppControllerMediaWizardMixin(AppControllerContract):
             return
 
         if self._media_wizard_watching:
+            # Живое показание фоновое: оно уступает шину разделам, которые ведут обмен.
+            if uds_exchange_busy(self, ignore=("media_wizard",)) or background_request_recent(self):
+                self._media_wizard_gap_timer.start(self.MEDIA_WIZARD_WATCH_GAP_MS)
+                return
             self._media_wizard_request("watch", UdsData.fuel_media_flatcap_raw)
+            note_background_request(self)
 
     def _handle_media_wizard_frame(self, identifier: int, payload):
         """Разбирает ответ прибора на запрос мастера."""

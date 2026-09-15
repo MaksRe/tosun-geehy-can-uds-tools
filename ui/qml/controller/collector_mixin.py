@@ -18,6 +18,7 @@ from uds.uds_identifiers import UdsIdentifiers
 from ui.qml.collector_csv_manager import CollectorCombinedCsvManager, CollectorCsvManager
 from ui.qml.collector_sftp_uploader import CollectorSftpConfig
 
+from .bus_guard import uds_exchange_busy
 from .contract import AppControllerContract
 
 
@@ -1136,8 +1137,8 @@ class AppControllerCollectorMixin(AppControllerContract):
             return
         if self._source_address_busy:
             return
-        # Короткий запрос посреди длинной записи или чтения обрывает её в приборе, поэтому ждём.
-        if self._options_busy:
+        # Прибор держит один канал ISO-TP: чужой запрос посреди обмена затирает его, поэтому ждём.
+        if uds_exchange_busy(self):
             return
 
         self._prune_collector_inactive_nodes()

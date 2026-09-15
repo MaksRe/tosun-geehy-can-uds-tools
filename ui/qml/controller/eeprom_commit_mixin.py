@@ -31,6 +31,7 @@ from PySide6.QtCore import QTimer
 from uds.data_identifiers import UdsData
 from uds.services.read_data_by_id import ServiceReadDataById
 
+from .bus_guard import background_request_recent, note_background_request, uds_exchange_busy
 from .contract import AppControllerContract
 
 EEPROM_STATE_DID = 0x0063
@@ -215,14 +216,8 @@ class AppControllerEepromCommitMixin(AppControllerContract):
     # ------------------------------------------------------------------ опрос
 
     def _eeprom_commit_bus_busy(self) -> bool:
-        """Занята ли шина другим разделом: посторонний запрос оборвал бы его длинный обмен."""
-        return bool(
-            self._options_busy or self._options_bulk_busy or self._profile_busy or self._chamber_busy
-            or self._trial_busy or self._media_wizard_busy or self._programming_active
-            or self._source_address_busy or getattr(self, "_diagnostics_running", False)
-            or str(self._calibration_sequence_waiting_action or "")
-            or len(self._calibration_write_verify_pending) > 0
-        )
+        """Занята ли шина другим разделом: посторонний запрос затёр бы его обмен."""
+        return bool(uds_exchange_busy(self, ignore=("eeprom_commit",))) or background_request_recent(self)
 
     def _on_eeprom_commit_tick(self):
         now = time.monotonic()
@@ -268,6 +263,7 @@ class AppControllerEepromCommitMixin(AppControllerContract):
             sent = False
         if sent:
             self._eeprom_commit_request_s = now
+            note_background_request(self)
             if probe:
                 self._eeprom_commit_probes += 1
 
@@ -288,7 +284,8 @@ class AppControllerEepromCommitMixin(AppControllerContract):
         elif phase == "unsupported":
             text, color = self._eeprom_commit_detail, self.EEPROM_COLOR_WARN
         elif self._eeprom_commit_state is not None:
-            text, color = "Память прибора в порядке, записей из программы ещё не было.", self.EEPROM_COLOR_IDLE
+            text, color = ("Память прибора в порядке, после его включения программа в неё не записывала.",
+                           self.EEPROM_COLOR_IDLE)
         else:
             text, color = "Память прибора: состояние появится после запуска калибровки.", self.EEPROM_COLOR_IDLE
 

@@ -126,6 +126,143 @@ def test_point_far_from_the_grid_is_stored_with_a_warning():
     assert "далеко от узлов" in stub._chamber_status
 
 
+# ------------------------------------------------------------------ сам замер: запросы и ответы
+
+class _FakeTimer:
+    def __init__(self):
+        self.active = False
+
+    def start(self, *args):
+        self.active = True
+
+    def stop(self):
+        self.active = False
+
+    def isActive(self):
+        return self.active
+
+
+class _FakeRead:
+    def __init__(self):
+        self.sent = []
+
+    def read_data_by_identifier(self, identifier, var):
+        self.sent.append(var)
+        return True
+
+
+class _FakeCan:
+    is_connect = True
+    is_trace = True
+
+
+class _CaptureStub(_ChamberStub):
+    """Замер целиком: запрос, ответ прибора, пауза, следующий запрос."""
+
+    def __init__(self):
+        super().__init__()
+        self.infoMessage = _Signal()
+        self._can = _FakeCan()
+        self._chamber_read_service = _FakeRead()
+        self._chamber_gap_timer = _FakeTimer()
+        self._chamber_timeout_timer = _FakeTimer()
+        self._chamber_attempt = 0
+        self._chamber_label = "проба на столе"
+
+    def _build_calibration_tx_identifier(self):
+        return 0x18DA6AF1
+
+    def _is_calibration_response_identifier(self, identifier):
+        return True
+
+
+# Что прибор отвечает на каждую величину точки: периоды и температура -40 °C.
+_DEVICE_VALUES = {"main": 13141, "media": 4672, "fuel_temp": -400, "board_temp": -400}
+
+
+def _answer(stub):
+    """Прибор отвечает на последний запрос, затем проходит пауза."""
+    key, var, _signed = stub._chamber_pending
+    size = int(var.size)
+    raw = _DEVICE_VALUES[key] & ((1 << (8 * size)) - 1)
+    did = int(var.pid)
+    payload = [3 + size, 0x62, (did >> 8) & 0xFF, did & 0xFF] + list(raw.to_bytes(size, "little"))
+    stub._chamber_handle = stub._handle_chamber_frame(0x18DAF16A, (payload + [0xFF] * 8)[:8])
+
+    before = len(stub._chamber_read_service.sent)
+    stub._on_chamber_gap_timeout()
+    if stub._chamber_busy and len(stub._chamber_read_service.sent) == before:
+        # Повтор закончен: пауза между повторами, затем первый запрос следующего.
+        stub._on_chamber_gap_timeout()
+
+
+def test_capture_finishes_the_point_after_all_samples():
+    """Раньше пауза после последнего чтения повтора запускала тот же повтор заново.
+
+    Точка не заканчивалась никогда: на пробной калибровке замер 15 секунд
+    показывал «осталось повторов: 5», и этап не проходил.
+    """
+    stub = _CaptureStub()
+    assert stub._chamber_capture_point()
+
+    reads_per_sample = len(stub._chamber_vars())
+    for _step in range(stub.CHAMBER_SAMPLES * reads_per_sample):
+        assert stub._chamber_busy
+        _answer(stub)
+
+    assert not stub._chamber_busy
+    assert len(stub._chamber_read_service.sent) == stub.CHAMBER_SAMPLES * reads_per_sample
+    assert len(stub._chamber_points) == 1
+    point = stub._chamber_points[0]
+    assert point["main"] == 13141
+    assert point["board_temp_x10"] == -400
+
+
+def test_status_counts_the_samples_down():
+    stub = _CaptureStub()
+    stub._chamber_capture_point()
+    for _step in range(len(stub._chamber_vars())):
+        _answer(stub)
+    assert "осталось повторов: 4" in stub._chamber_status
+
+
+def test_lost_request_is_repeated_before_the_point_is_abandoned():
+    """Прибор теряет запрос, если в тот же миг пришёл чужой: один такой случай не повод бросать точку."""
+    stub = _CaptureStub()
+    stub._chamber_capture_point()
+    first = stub._chamber_read_service.sent[-1]
+
+    for _attempt in range(stub.CHAMBER_RETRY_LIMIT):
+        stub._on_chamber_timeout()
+        assert stub._chamber_busy
+        stub._on_chamber_gap_timeout()
+        assert stub._chamber_read_service.sent[-1] is first
+
+    stub._on_chamber_timeout()
+    assert not stub._chamber_busy
+    assert "повторов" in stub._chamber_status
+
+
+def test_answer_after_a_repeat_continues_the_point():
+    stub = _CaptureStub()
+    stub._chamber_capture_point()
+    stub._on_chamber_timeout()
+    stub._on_chamber_gap_timeout()
+    _answer(stub)
+    assert stub._chamber_busy
+    assert stub._chamber_attempt == 0
+    assert len(stub._chamber_read_service.sent) == 3
+
+
+def test_refusal_of_another_service_does_not_break_the_point():
+    """Отказ на запись или смену сессии к чтению замера не относится."""
+    stub = _CaptureStub()
+    stub._chamber_capture_point()
+    stub._handle_chamber_frame(0x18DAF16A, [0x03, 0x7F, 0x2E, 0x33, 0xFF, 0xFF, 0xFF, 0xFF])
+    assert stub._chamber_busy
+    assert stub._chamber_pending is not None
+
+
 def test_last_point_can_be_taken_back():
     """Пометку легко перепутать, поэтому последнюю точку надо уметь убрать."""
     stub = _ChamberStub()
