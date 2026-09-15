@@ -108,6 +108,8 @@ class _TrialStub(AppControllerTrialMixin):
         self._trial_chamber_index = 0
         self._trial_chamber_outcome = None
         self._trial_applied_profile = None
+        self._trial_dirty = set()
+        self._trial_expect_trusted = False
 
         self._trial_auto_active = False
         self._trial_auto_queue = []
@@ -143,6 +145,8 @@ class _TrialStub(AppControllerTrialMixin):
         self._profile_status = ""
         self._profile_verify_report = []
         self._profile_busy = False
+        self._profile_device_crc = None
+        self._profile_device_status = None
 
         self._chamber_points = []
         self._chamber_status = ""
@@ -353,6 +357,65 @@ def test_restore_reports_a_value_that_did_not_come_back():
     assert "подгонка нуля" in _detail(stub, "restore")
 
 
+def test_restore_writes_back_only_what_the_trial_changed():
+    """Лишняя запись это износ памяти и лишний шанс оборваться, но сверяется всё."""
+    stub = _stub_with_backup()
+    stub._trial_dirty = {"level"}
+    stub._trial_restore_stage2({"cur_full": 16136})
+    ops, handler = _last_ops(stub)
+
+    assert handler == "_trial_restore_done"
+    assert {"w_empty", "w_full", "w_zero_trim"} <= set(ops)
+    assert "w_media_air" not in ops
+    assert "write_started" not in ops, "нетронутый профиль перезаписывать нельзя"
+    assert "crc_now" in ops
+    assert "r_media_air" in ops, "сверяются все запомненные настройки"
+
+
+def test_restore_without_profile_rewrite_checks_the_device_sum():
+    stub = _stub_with_backup()
+    stub._trial_backup["device_crc"] = 0x7ED1
+    stub._trial_backup["device_status"] = 0x00
+    stub._trial_dirty = {"level"}
+    answers = {f"r_{key}": value for key, value in stub._trial_backup["values"].items()}
+    answers["crc_now"] = 0x7ED1
+    stub._trial_restore_done(answers)
+
+    assert _status(stub, "restore") == "pass"
+    assert "отметки бака" in _detail(stub, "restore")
+    assert stub._trial_dirty == set()
+    assert stub._trial_expected["crc"] == 0x7ED1
+    assert stub._trial_expect_trusted is False
+
+
+def test_restore_notices_a_profile_that_changed_without_the_trial():
+    stub = _stub_with_backup()
+    stub._trial_backup["device_crc"] = 0x7ED1
+    answers = {f"r_{key}": value for key, value in stub._trial_backup["values"].items()}
+    answers["crc_now"] = 0x1111
+    stub._trial_restore_done(answers)
+    assert _status(stub, "restore") == "fail"
+    assert "сумма профиля" in _detail(stub, "restore")
+
+
+def test_backup_is_not_overwritten_while_trial_values_remain():
+    """Перечитав пробные значения, программа запомнила бы их вместо настоящих настроек."""
+    stub = _stub_with_backup()
+    stub._trial_dirty = {"level"}
+    original = stub._trial_backup
+    assert stub._trial_run_backup()
+    assert _status(stub, "backup") == "warn"
+    assert stub._trial_backup is original
+    assert stub.started == []
+
+
+def test_resetting_steps_does_not_forget_what_was_changed():
+    stub = _TrialStub()
+    stub._trial_dirty = {"media"}
+    stub._trial_reset_steps()
+    assert stub._trial_dirty == {"media"}
+
+
 # ------------------------------------------------------------------ эмуляция
 
 def _emulation_answers(**overrides):
@@ -443,6 +506,47 @@ def test_level_warns_when_raw_and_compensated_differ():
     assert _status(stub, "level") == "warn"
 
 
+def test_level_goes_above_the_media_freeze_threshold():
+    """При пороге заморозки 40 % уровень 25 % заморозил бы коэффициент среды, поэтому берётся 75 %."""
+    stub = _TrialStub()
+    stub._trial_level_stage2({**_samples("raw", 6000), **_samples("comp", 6000),
+                              "cur_full": 9640, "tank_model": 0, "freeze": 40})
+    ops, _handler = _last_ops(stub)
+    assert stub._trial_level_reading["target"] == 750
+    assert (ops["w_empty"]["value"], ops["w_full"]["value"]) == (3000, 7000)
+    assert "level" in stub._trial_dirty
+
+
+def test_level_target_list_follows_the_threshold():
+    stub = _TrialStub()
+    assert stub._trial_level_target(None) == 250
+    assert stub._trial_level_target(5) == 250
+    assert stub._trial_level_target(40) == 750
+    assert stub._trial_level_target(80) == 900
+    assert stub._trial_level_target(90) is None
+
+
+def test_level_refuses_a_threshold_it_cannot_get_above():
+    stub = _TrialStub()
+    stub._trial_level_stage2({**_samples("raw", 6000), **_samples("comp", 6000),
+                              "cur_full": 9640, "tank_model": 0, "freeze": 90})
+    assert _status(stub, "level") == "fail"
+    assert "0x0034" in _detail(stub, "level")
+    assert stub.started == []
+
+
+def test_level_at_three_quarters_passes_and_catches_a_swap():
+    stub = _TrialStub()
+    stub._trial_level_reading = {"raw": 6000, "comp": 6000, "empty": 3000, "full": 7000, "target": 750,
+                                 "freeze": 40, "tank_model": 0}
+    stub._trial_level_done(_level_answers(level=750, rb_empty=3000, rb_full=7000))
+    assert _status(stub, "level") == "pass"
+    assert "порога заморозки вида топлива 40 %" in _detail(stub, "level")
+
+    stub._trial_level_done(_level_answers(level=250, rb_empty=3000, rb_full=7000))
+    assert _status(stub, "level") == "fail"
+
+
 # ------------------------------------------------------------------ вид топлива одним конденсатором
 
 def test_media_points_give_the_target_coefficient():
@@ -471,6 +575,23 @@ def test_media_coefficient_at_target_passes():
     stub._trial_media_points = {"flatcap": 2400, "air": 1300, "cal": 2300}
     stub._trial_media_rf_poll({"rf": 1104})
     assert _status(stub, "media") == "pass"
+
+
+def test_media_freeze_after_a_passed_level_step_names_the_real_problem():
+    """После пройденных отметок бака отправлять оператора их выполнять бессмысленно."""
+    stub = _TrialStub()
+    stub._trial_steps_state["level"]["status"] = "pass"
+    stub._trial_media_stage2({**_samples("m", 2400), "level": 251, "freeze": 40})
+    assert _status(stub, "media") == "fail"
+    assert "проверьте" in _detail(stub, "media")
+    assert "Сначала выполните" not in _detail(stub, "media")
+
+
+def test_media_counts_as_changed_before_its_writes():
+    stub = _TrialStub()
+    stub._trial_media_stage2({**_samples("m", 2400), "level": 750, "freeze": 40})
+    assert "media" in stub._trial_dirty
+    assert stub.started[-1][1] == "_trial_media_stage3"
 
 
 # ------------------------------------------------------------------ снятие точек
@@ -525,6 +646,13 @@ def test_profile_step_remembers_what_was_verified():
                               "verify_started": True, "verified": True, "status": 0x0F})
     assert _status(stub, "profile") == "pass"
     assert stub._trial_applied_profile == stub._profile_values
+
+
+def test_profile_counts_as_changed_once_its_write_starts():
+    stub = _TrialStub()
+    stub._profile_write_to_device = lambda allow_empty=False: True
+    stub._trial_profile_write_call()
+    assert "profile" in stub._trial_dirty
 
 
 def test_apply_requires_the_profile_step():

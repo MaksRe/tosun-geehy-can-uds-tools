@@ -153,6 +153,9 @@ class AppControllerContract:
     _trial_live_index: Any
     _trial_live_last_inject: Any
     _trial_live_last_poll: Any
+    _trial_dirty: Any
+    _trial_expect_trusted: Any
+    _profile_retries_used: Any
     _trial_live_suspend_until: Any
     _trial_gap_timer: Any
     _trial_wait_timer: Any

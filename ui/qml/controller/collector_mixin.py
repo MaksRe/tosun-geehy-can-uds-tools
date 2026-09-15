@@ -1136,6 +1136,9 @@ class AppControllerCollectorMixin(AppControllerContract):
             return
         if self._source_address_busy:
             return
+        # Короткий запрос посреди длинной записи или чтения обрывает её в приборе, поэтому ждём.
+        if self._options_busy:
+            return
 
         self._prune_collector_inactive_nodes()
 

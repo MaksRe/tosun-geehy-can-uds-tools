@@ -72,6 +72,10 @@ class AppControllerProfileMixin:
 
     PROFILE_DEFAULT_NODES = (-400, -200, 0, 250, 500, 700, 850)
 
+    # Сколько раз повторить таблицу, на которую прибор не ответил. Длинную запись
+    # обрывает любой посторонний запрос к прибору, а повтор той же таблицы безопасен.
+    PROFILE_TIMEOUT_RETRY_LIMIT = 2
+
     # ------------------------------------------------------------------ состояние
 
     def _init_profile_state(self):
@@ -93,6 +97,7 @@ class AppControllerProfileMixin:
         self._profile_verify: dict | None = None
         self._profile_verify_report: list[str] = []
         self._profile_queue: list[tuple[str, int, object]] = []
+        self._profile_retries_used = 0
         self._profile_status = "Профиль не прочитан."
         self._profile_status_color = "#64748b"
         self._profile_file_path = ""
@@ -181,6 +186,7 @@ class AppControllerProfileMixin:
             return False
 
         self._profile_queue = list(queue)
+        self._profile_retries_used = 0
         self._profile_busy = True
         self._profile_set_status(status, "#64748b")
         return self._profile_send_next()
@@ -240,6 +246,13 @@ class AppControllerProfileMixin:
 
         if not success:
             did = int(pending_did) & 0xFFFF if pending_did is not None else 0
+            if "таймаут" in str(message).lower() and self._profile_retries_used < self.PROFILE_TIMEOUT_RETRY_LIMIT:
+                self._profile_retries_used += 1
+                self._profile_set_status(
+                    f"Прибор не ответил по 0x{did:04X}, повтор {self._profile_retries_used} из "
+                    f"{self.PROFILE_TIMEOUT_RETRY_LIMIT}...", "#d97706")
+                self._profile_step_timer.start()
+                return
             hint = ""
             if name == self.PROFILE_TABLES[0][0]:
                 # Первая же таблица не читается: чаще всего в приборе прошивка,
@@ -252,6 +265,7 @@ class AppControllerProfileMixin:
             self._profile_store_read(name, bytes(value_bytes or b""))
 
         self._profile_queue.pop(0)
+        self._profile_retries_used = 0
         self._profile_step_timer.start()
 
     def _profile_store_read(self, name: str, payload: bytes):

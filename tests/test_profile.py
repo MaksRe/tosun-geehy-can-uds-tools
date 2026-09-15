@@ -182,7 +182,7 @@ def test_failed_step_stops_the_queue():
     assert stub._profile_read_from_device()
     stub._handle_profile_options_result(
         success=False, request_origin="profile_nodes", pending_action="read",
-        pending_did=0x004B, value_bytes=None, message="таймаут")
+        pending_did=0x004B, value_bytes=None, message="Отрицательный ответ NRC=0x22")
 
     assert not stub._profile_busy
     assert stub._profile_queue == []
@@ -190,6 +190,58 @@ def test_failed_step_stops_the_queue():
     # Даже если такт продолжения уже был назначен, он ничего не отправит.
     stub._on_profile_step_timeout()
     assert stub._profile_queue == []
+
+
+TIMEOUT_MESSAGE = "Таймаут ожидания ответа UDS (не получен SF/FF)."
+
+
+def test_silent_device_gets_more_tries_before_the_queue_stops():
+    """Длинную запись обрывает любой посторонний запрос к прибору, поэтому молчание повторяется.
+
+    Так оборвался возврат настроек при пробной калибровке: опрос калибровки попал
+    посреди записи таблицы 0x004D. Повторять ту же таблицу безопасно.
+    """
+    stub = _ProfileStub()
+    sent: list[str] = []
+    stub._start_options_read_request = (
+        lambda parameter, request_origin, append_history: sent.append(request_origin) or True
+    )
+    assert stub._profile_read_from_device()
+
+    for _attempt in range(stub.PROFILE_TIMEOUT_RETRY_LIMIT):
+        stub._handle_profile_options_result(
+            success=False, request_origin="profile_nodes", pending_action="read",
+            pending_did=0x004B, value_bytes=None, message=TIMEOUT_MESSAGE)
+        assert stub._profile_busy, "после молчания прибора очередь ещё жива"
+        stub._on_profile_step_timeout()
+
+    assert sent == ["profile_nodes"] * (1 + stub.PROFILE_TIMEOUT_RETRY_LIMIT)
+
+    stub._handle_profile_options_result(
+        success=False, request_origin="profile_nodes", pending_action="read",
+        pending_did=0x004B, value_bytes=None, message=TIMEOUT_MESSAGE)
+    assert not stub._profile_busy
+    assert "Таймаут" in stub._profile_status
+
+
+def test_retry_budget_belongs_to_one_table():
+    """Повторы, потраченные на одну таблицу, не должны отнимать их у следующей."""
+    stub = _ProfileStub()
+    stub._start_options_read_request = lambda *args, **kwargs: True
+    assert stub._profile_read_from_device()
+
+    for _attempt in range(stub.PROFILE_TIMEOUT_RETRY_LIMIT):
+        stub._handle_profile_options_result(
+            success=False, request_origin="profile_nodes", pending_action="read",
+            pending_did=0x004B, value_bytes=None, message=TIMEOUT_MESSAGE)
+    stub._handle_profile_options_result(
+        success=True, request_origin="profile_nodes", pending_action="read",
+        pending_did=0x004B, value_bytes=bytes(14), message="ok")
+
+    stub._handle_profile_options_result(
+        success=False, request_origin="profile_board_main", pending_action="read",
+        pending_did=0x004C, value_bytes=None, message=TIMEOUT_MESSAGE)
+    assert stub._profile_busy
 
 
 def test_write_order_puts_checksum_last():

@@ -82,10 +82,14 @@ class AppControllerTrialMixin(AppControllerContract):
     # Пауза между этапами автоматического прогона: итог успевает отобразиться.
     TRIAL_AUTO_PAUSE_MS = 400
 
-    # Отметки бака ставятся вокруг показания конденсатора несимметрично: уровень
-    # обязан стать ровно 25 %, а перепутанные местами отметки дали бы 75 %.
-    TRIAL_LEVEL_BELOW = 1000
-    TRIAL_LEVEL_ABOVE = 3000
+    # Отметки бака ставятся вокруг показания конденсатора несимметрично, чтобы
+    # перепутанные местами отметки дали другой уровень: 25 % против 75 %.
+    # Уровень обязан быть выше порога заморозки вида топлива, иначе прибор не
+    # обновляет коэффициент среды и следующий этап проверить нельзя. Поэтому
+    # берётся первый уровень из списка, который выше порога с запасом.
+    TRIAL_LEVEL_SPAN = 4000
+    TRIAL_LEVEL_TARGETS_PERMILLE = (250, 750, 900)
+    TRIAL_LEVEL_FREEZE_MARGIN_PERMILLE = 50
     TRIAL_LEVEL_EXPECTED_PERMILLE = 250
 
     # Точки вида топлива ставятся так, чтобы коэффициент среды стал 1,100, а не
@@ -137,11 +141,12 @@ class AppControllerTrialMixin(AppControllerContract):
          "эмуляция выключается."),
         ("level", "Отметки бака записываются и применяются",
          "Ставит отметки 0 % и 100 % вокруг показания конденсатора на основном контуре так, что "
-         "уровень обязан стать ровно 25 %."),
+         "уровень обязан стать заранее известным: 25 %, а если порог заморозки вида топлива выше, "
+         "то 75 или 90 %."),
         ("media", "Вид топлива записывается и применяется",
          "Ставит точки «воздух» и «топливо» вокруг показания конденсатора на контуре вида топлива так, "
-         "что коэффициент среды обязан стать 1,100. Идёт после отметок бака: при пустом баке "
-         "коэффициент среды заморожен."),
+         "что коэффициент среды обязан стать 1,100. Идёт после отметок бака: пока уровень ниже порога "
+         "заморозки, коэффициент среды не обновляется."),
         ("chamber", "Снятие точек с эмуляцией температуры",
          "Задаёт прибору все семь температур сетки и снимает точку при каждой. Каждая точка обязана "
          "попасть в свой узел, а показание одного и того же конденсатора не должно гулять."),
@@ -152,7 +157,8 @@ class AppControllerTrialMixin(AppControllerContract):
          "При десяти температурах сверяет период после ступени платы и итоговый период прибора с "
          "расчётом по формулам прошивки."),
         ("restore", "Вернуть как было",
-         "Записывает запомненные настройки обратно и читает их для сверки. Эмуляция выключается."),
+         "Записывает обратно то, что пробная калибровка поменяла, и сверяет все запомненные настройки. "
+         "Эмуляция выключается."),
         ("persist", "Всё сохраняется после перезагрузки",
          "Перезапускает прибор и читает записанное заново. Эмуляция после перезапуска обязана быть "
          "выключена. После этого калибровку нужно запустить снова."),
@@ -200,6 +206,10 @@ class AppControllerTrialMixin(AppControllerContract):
         self._trial_chamber_index = 0
         self._trial_chamber_outcome: tuple[str, str] | None = None
         self._trial_applied_profile: dict | None = None
+        # Что пробная калибровка успела поменять в приборе: при возврате пишется только это.
+        self._trial_dirty: set[str] = set()
+        # Обязан ли прибор после перезапуска держать профиль в работе.
+        self._trial_expect_trusted = False
 
         self._trial_auto_active = False
         self._trial_auto_queue: list[str] = []
@@ -716,6 +726,8 @@ class AppControllerTrialMixin(AppControllerContract):
         self._trial_chamber_index = 0
         self._trial_chamber_outcome = None
         self._trial_applied_profile = None
+        self._trial_expect_trusted = False
+        # Список изменённого не сбрасывается: сброс отметок не возвращает настройки в прибор.
         self._trial_status = "Отметки этапов сброшены."
         self._trial_status_color = self.COLOR_IDLE
         self.trialChanged.emit()
@@ -947,7 +959,20 @@ class AppControllerTrialMixin(AppControllerContract):
         ("media_cal", UdsData.fuel_media_flatcap_cal_count, False),
     )
 
+    def _trial_dirty_text(self) -> str:
+        names = {"level": "отметки бака", "media": "точки вида топлива", "profile": "профиль"}
+        return ", ".join(names[key] for key in ("level", "media", "profile") if key in self._trial_dirty)
+
     def _trial_run_backup(self) -> bool:
+        if self._trial_dirty and self._trial_backup:
+            # В приборе ещё пробные значения прошлого прогона: перечитав их, программа
+            # запомнила бы пробу вместо настоящих настроек.
+            self._trial_set_step(
+                "backup", "warn",
+                f"Настройки не перечитаны: в приборе остались пробные значения прошлого прогона "
+                f"({self._trial_dirty_text()}). Использую копию от {self._trial_backup['saved_at']}, "
+                "в конце вернётся она.")
+            return True
         ops = [self._op_read(f"b_{key}", var, signed) for key, var, signed in self.BACKUP_VARS]
         ops += [
             self._op_call("profile_started", "_trial_backup_profile_call"),
@@ -983,6 +1008,9 @@ class AppControllerTrialMixin(AppControllerContract):
             "profile": {name: list(table) for name, table in self._profile_values.items()},
             "generation": int(self._profile_generation),
             "crc": int(self._profile_calc_crc()),
+            # Сумма и состояние так, как их хранит сам прибор: у нетронутого профиля сумма бывает нулевой.
+            "device_crc": self._profile_device_crc,
+            "device_status": self._profile_device_status,
             "saved_at": datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
             "node": int(self._resolve_calibration_target_sa()) & 0xFF,
         }
@@ -1098,9 +1126,19 @@ class AppControllerTrialMixin(AppControllerContract):
 
     # ------------------------------------------------------------------ этап: отметки бака
 
-    def _trial_level_marks(self, compensated: int) -> tuple[int, int]:
-        """Отметки 0 % и 100 % вокруг показания конденсатора, при которых уровень ровно 25 %."""
-        return int(compensated) - self.TRIAL_LEVEL_BELOW, int(compensated) + self.TRIAL_LEVEL_ABOVE
+    def _trial_level_target(self, freeze_pct) -> int | None:
+        """Уровень проверки в десятых процента: первый из списка выше порога заморозки. None - не подобрать."""
+        floor = (int(freeze_pct) * 10 if freeze_pct is not None else 0) + self.TRIAL_LEVEL_FREEZE_MARGIN_PERMILLE
+        for target in self.TRIAL_LEVEL_TARGETS_PERMILLE:
+            if target >= floor:
+                return target
+        return None
+
+    def _trial_level_marks(self, compensated: int,
+                           target_permille: int = TRIAL_LEVEL_EXPECTED_PERMILLE) -> tuple[int, int]:
+        """Отметки 0 % и 100 % вокруг показания конденсатора, при которых уровень равен заданному."""
+        below = self.TRIAL_LEVEL_SPAN * int(target_permille) // 1000
+        return int(compensated) - below, int(compensated) + (self.TRIAL_LEVEL_SPAN - below)
 
     def _trial_level_order(self, current_full, new_empty: int, new_full: int) -> list[dict]:
         """Порядок записи отметок, который прибор примет.
@@ -1122,7 +1160,8 @@ class AppControllerTrialMixin(AppControllerContract):
         for index in range(self.TRIAL_SAMPLES):
             ops.append(self._op_read(f"raw{index}", UdsData.curr_fuel_tank))
             ops.append(self._op_read(f"comp{index}", UdsData.fuel_compensated_period))
-        ops += [self._op_read("cur_full", UdsData.full_fuel_tank), self._op_read("tank_model", VAR_TANK_MODEL)]
+        ops += [self._op_read("cur_full", UdsData.full_fuel_tank), self._op_read("tank_model", VAR_TANK_MODEL),
+                self._op_read("freeze", VAR_FREEZE_PCT)]
         self._trial_mark_running("level", f"Снимаю показание основного контура, {self.TRIAL_SAMPLES} замеров подряд...")
         return self._trial_start_ops(ops, "_trial_level_stage2")
 
@@ -1135,7 +1174,18 @@ class AppControllerTrialMixin(AppControllerContract):
                 "Прибор не отдал период основного контура. Проверьте, что конденсатор подключён и шина работает.")
             return
 
-        empty, full = self._trial_level_marks(comp)
+        freeze = self._trial_value(res, "freeze")
+        target = self._trial_level_target(freeze)
+        if target is None:
+            limit = (self.TRIAL_LEVEL_TARGETS_PERMILLE[-1] - self.TRIAL_LEVEL_FREEZE_MARGIN_PERMILLE) // 10
+            self._trial_set_step(
+                "level", "fail",
+                f"Порог заморозки вида топлива {freeze} % слишком высокий: уровень выше него на столе не "
+                f"поставить, и коэффициент среды не проверить. Временно уменьшите порог (параметр 0x0034) "
+                f"до {limit} % или ниже.")
+            return
+
+        empty, full = self._trial_level_marks(comp, target)
         if empty < 1 or full > 0xFFFF:
             self._trial_set_step(
                 "level", "fail",
@@ -1144,9 +1194,11 @@ class AppControllerTrialMixin(AppControllerContract):
             return
 
         self._trial_level_reading = {
-            "raw": raw, "comp": comp, "empty": empty, "full": full,
+            "raw": raw, "comp": comp, "empty": empty, "full": full, "target": target, "freeze": freeze,
             "tank_model": self._trial_value(res, "tank_model"),
         }
+        # Отметки меняются с первой же записи, поэтому возвращать их нужно и при отказе на середине.
+        self._trial_dirty.add("level")
         ops = self._trial_level_order(self._trial_value(res, "cur_full"), empty, full)
         ops += [
             self._op_wait(self.TRIAL_SETTLE_MS),
@@ -1157,8 +1209,9 @@ class AppControllerTrialMixin(AppControllerContract):
                 for index in range(self.TRIAL_SAMPLES)]
         self._trial_mark_running(
             "level",
-            f"Итоговый период {comp}, сырой {raw}. Ставлю отметки 0 % = {empty} и 100 % = {full}, "
-            f"при них уровень обязан стать {self.TRIAL_LEVEL_EXPECTED_PERMILLE / 10:.0f} %...")
+            f"Итоговый период {comp}, сырой {raw}, порог заморозки вида топлива "
+            f"{'нет данных' if freeze is None else f'{freeze} %'}. Ставлю отметки 0 % = {empty} и "
+            f"100 % = {full}, при них уровень обязан стать {target / 10:.0f} %...")
         self._trial_start_ops(ops, "_trial_level_done")
 
     def _trial_level_done(self, res: dict):
@@ -1177,7 +1230,7 @@ class AppControllerTrialMixin(AppControllerContract):
                 problems.append(f"в приборе отметка {word} = {got}, а записывали {want}")
 
         level = self._trial_mean(res, "lvl", self.TRIAL_SAMPLES)
-        expected = self.TRIAL_LEVEL_EXPECTED_PERMILLE
+        expected = int(reading.get("target", self.TRIAL_LEVEL_EXPECTED_PERMILLE))
         model = reading["tank_model"]
         if model == 0:
             if level is None:
@@ -1187,6 +1240,8 @@ class AppControllerTrialMixin(AppControllerContract):
                                 f"{expected / 10:.1f} %")
             else:
                 notes.append(f"уровень {level / 10:.1f} % при расчётных {expected / 10:.1f} %")
+                if reading.get("freeze") is not None:
+                    notes.append(f"это выше порога заморозки вида топлива {reading['freeze']} %")
         elif model is not None:
             notes.append("выбрана модель уровня по двум контурам, уровень здесь не сверяется")
 
@@ -1237,10 +1292,15 @@ class AppControllerTrialMixin(AppControllerContract):
         level = self._trial_value(res, "level")
         freeze = self._trial_value(res, "freeze")
         if level is not None and freeze is not None and level < int(freeze) * 10:
+            if self._trial_steps_state["level"]["status"] in ("pass", "warn"):
+                advice = ("Этап «Отметки бака» ставил уровень выше порога, а сейчас он ниже: проверьте "
+                          "конденсатор на основном контуре и повторите оба этапа.")
+            else:
+                advice = "Сначала выполните этап «Отметки бака»: он поднимает уровень выше порога."
             self._trial_set_step(
                 "media", "fail",
-                f"Уровень {level / 10:.1f} % ниже порога заморозки {freeze} %, коэффициент среды не "
-                "обновляется. Сначала выполните этап «Отметки бака»: он ставит уровень 25 %.")
+                f"Уровень {level / 10:.1f} % ниже порога заморозки {freeze} %, поэтому прибор не обновляет "
+                f"коэффициент среды. {advice}")
             return
 
         air, cal = self._trial_media_points_for(flatcap)
@@ -1252,6 +1312,7 @@ class AppControllerTrialMixin(AppControllerContract):
             return
 
         self._trial_media_points = {"flatcap": flatcap, "air": air, "cal": cal}
+        self._trial_dirty.add("media")
         ops = [
             self._op_write("w_air", UdsData.fuel_media_flatcap_air_count, air),
             self._op_write("w_cal", UdsData.fuel_media_flatcap_cal_count, cal),
@@ -1437,6 +1498,8 @@ class AppControllerTrialMixin(AppControllerContract):
         self._trial_results["loaded"] = True
 
     def _trial_profile_write_call(self):
+        # С этой минуты профиль в приборе считается изменённым, даже если запись оборвётся.
+        self._trial_dirty.add("profile")
         self._trial_results["write_started"] = bool(self._profile_write_to_device())
 
     def _trial_profile_verify_call(self):
@@ -1484,6 +1547,7 @@ class AppControllerTrialMixin(AppControllerContract):
             "generation": int(self._profile_generation),
             "algorithm": 1,
         })
+        self._trial_expect_trusted = True
         self._trial_set_step(
             "profile", "pass",
             f"Проверочный профиль записан: все семь таблиц совпали с прочитанными из прибора, сумма "
@@ -1606,22 +1670,39 @@ class AppControllerTrialMixin(AppControllerContract):
 
     def _trial_restore_stage2(self, res: dict):
         values = self._trial_backup["values"]
-        ops = self._trial_level_order(self._trial_value(res, "cur_full"), values["empty"], values["full"])
-        ops += [
-            self._op_write("w_zero_trim", UdsData.fuel_zero_trim_count, values["zero_trim"]),
-            self._op_write("w_media_air", UdsData.fuel_media_flatcap_air_count, values["media_air"]),
-            self._op_write("w_media_cal", UdsData.fuel_media_flatcap_cal_count, values["media_cal"]),
-            self._op_write("w_media_enable", UdsData.fuel_media_comp_enable, values["media_enable"]),
-            self._op_call("profile_loaded", "_trial_restore_profile_load_call"),
-            self._op_call("write_started", "_trial_restore_profile_write_call"),
-            self._op_await("await_profile", "written", self.TRIAL_PROFILE_TIMEOUT_MS),
-            self._op_call("write_status", "_trial_profile_status_call"),
-            self._op_call("verify_started", "_trial_profile_verify_call"),
-            self._op_await("await_profile", "verified", self.TRIAL_PROFILE_TIMEOUT_MS),
-            self._op_read("status", UdsData.fuel_thermal_profile_status),
-        ]
+        dirty = set(self._trial_dirty)
+        # Обратно пишется только то, что пробная калибровка поменяла: лишняя запись это
+        # износ памяти прибора и лишний шанс оборваться. Сверяется всё.
+        ops = []
+        if "level" in dirty:
+            ops += self._trial_level_order(self._trial_value(res, "cur_full"), values["empty"], values["full"])
+            # Подгонка нуля пишется вместе с отметками: её смысл привязан к ним.
+            ops.append(self._op_write("w_zero_trim", UdsData.fuel_zero_trim_count, values["zero_trim"]))
+        if "media" in dirty:
+            ops += [
+                self._op_write("w_media_air", UdsData.fuel_media_flatcap_air_count, values["media_air"]),
+                self._op_write("w_media_cal", UdsData.fuel_media_flatcap_cal_count, values["media_cal"]),
+                self._op_write("w_media_enable", UdsData.fuel_media_comp_enable, values["media_enable"]),
+            ]
+        if "profile" in dirty:
+            ops += [
+                self._op_call("profile_loaded", "_trial_restore_profile_load_call"),
+                self._op_call("write_started", "_trial_restore_profile_write_call"),
+                self._op_await("await_profile", "written", self.TRIAL_PROFILE_TIMEOUT_MS),
+                self._op_call("write_status", "_trial_profile_status_call"),
+                self._op_call("verify_started", "_trial_profile_verify_call"),
+                self._op_await("await_profile", "verified", self.TRIAL_PROFILE_TIMEOUT_MS),
+                self._op_read("status", UdsData.fuel_thermal_profile_status),
+            ]
+        else:
+            ops.append(self._op_read("crc_now", VAR_CRC))
         ops += [self._op_read(f"r_{key}", var, signed) for key, var, signed in self.BACKUP_VARS]
-        self._trial_mark_running("restore", "Пишу отметки бака, подгонку нуля, точки вида топлива и профиль...")
+
+        what = self._trial_dirty_text()
+        self._trial_mark_running(
+            "restore",
+            (f"Пишу обратно: {what}. " if what else "Пробная калибровка настройки не меняла, писать нечего. ")
+            + "Затем читаю все запомненные настройки для сверки...")
         self._trial_start_ops(ops, "_trial_restore_done")
 
     def _trial_restore_profile_load_call(self):
@@ -1644,24 +1725,44 @@ class AppControllerTrialMixin(AppControllerContract):
             got = self._trial_value(res, f"r_{key}")
             if got != values[key]:
                 problems.append(f"{names[key]}: в приборе {got}, а запомнено {values[key]}")
-        # Пустой профиль прибор считает доверенным, поэтому признак проверяется так же.
-        problems.extend(self._trial_profile_verdict(res, "запомненного профиля"))
+        rewrote_profile = "write_started" in res
+        device_crc = self._trial_backup.get("device_crc")
+        if rewrote_profile:
+            # Пустой профиль прибор считает доверенным, поэтому признак проверяется так же.
+            problems.extend(self._trial_profile_verdict(res, "запомненного профиля"))
+        elif device_crc is not None:
+            # Профиль не перезаписывался: достаточно, что сумма в приборе прежняя.
+            crc_now = self._trial_value(res, "crc_now")
+            if crc_now != int(device_crc):
+                shown = "нет данных" if crc_now is None else f"0x{crc_now:04X}"
+                problems.append(f"сумма профиля в приборе {shown}, а до пробы была 0x{int(device_crc):04X}")
 
         if problems:
             self._trial_set_step("restore", "fail", "; ".join(problems) + ".")
             return
 
+        written = self._trial_dirty_text()
+        self._trial_dirty = set()
         # После возврата перезапуск проверяет, что в памяти остались именно исходные настройки.
         self._trial_applied_profile = None
         self._trial_expected = {
             "empty": values["empty"], "full": values["full"], "media_enable": values["media_enable"],
             "media_air": values["media_air"], "media_cal": values["media_cal"],
-            "crc": self._profile_calc_crc(), "generation": int(self._profile_generation), "algorithm": 1,
         }
+        if rewrote_profile:
+            self._trial_expected.update(
+                {"crc": self._profile_calc_crc(), "generation": int(self._profile_generation), "algorithm": 1})
+            self._trial_expect_trusted = True
+        else:
+            if device_crc is not None:
+                self._trial_expected["crc"] = int(device_crc)
+            status = self._trial_backup.get("device_status")
+            self._trial_expect_trusted = status is not None and bool(int(status) & profile_model.STATUS_TRUSTED)
+
+        head = f"Возвращено: {written}. " if written else "Пробная калибровка настройки не меняла, писать было нечего. "
         self._trial_set_step(
             "restore", "pass",
-            f"Настройки на {self._trial_backup['saved_at']} возвращены и прочитаны обратно, профиль совпал, "
-            "эмуляция выключена.")
+            head + f"Все настройки совпали с запомненными {self._trial_backup['saved_at']}, эмуляция выключена.")
 
     # ------------------------------------------------------------------ этап: сохранение
 
@@ -1715,7 +1816,7 @@ class AppControllerTrialMixin(AppControllerContract):
         emul = self._trial_value(res, "p_emul")
         if emul != TRIAL_EMULATION_OFF_VALUE:
             problems.append("эмуляция температуры пережила перезапуск, а должна гаснуть")
-        if "crc" in self._trial_expected:
+        if self._trial_expect_trusted:
             status = self._trial_value(res, "p_status")
             if status is None or not (status & profile_model.STATUS_TRUSTED):
                 problems.append("после перезапуска прибор не взял профиль в работу")

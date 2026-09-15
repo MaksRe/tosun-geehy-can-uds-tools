@@ -1556,6 +1556,10 @@ class AppControllerCalibrationMixin(AppControllerContract):
             return
         if self._programming_active:
             return
+        # Короткий запрос посреди длинной записи или чтения обрывает её в приборе
+        # (так устроен ISO-TP), поэтому опрос ждёт, пока окно параметров свободно.
+        if self._options_busy:
+            return
         self._request_calibration_runtime_snapshot()
 
     def _start_calibration_poll_timer(self):
