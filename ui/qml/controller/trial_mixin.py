@@ -65,6 +65,8 @@ VAR_TANK_MODEL = UdsVar(0x0053, 1, "Модель уровня")
 VAR_ALGORITHM = UdsVar(0x005C, 2, "Алгоритм измерения")
 VAR_GENERATION = UdsVar(0x005D, 2, "Поколение профиля")
 VAR_CRC = UdsVar(0x005E, 2, "Сумма профиля")
+# Есть и в основной программе (ответ 0), и в загрузчике (ответ 1): по нему видно, кто отвечает.
+VAR_ACTIVE_PROGRAM = UdsVar(0x001A, 1, "Тип активной программы: 0 основная, 1 загрузчик")
 
 
 class AppControllerTrialMixin(AppControllerContract):
@@ -72,7 +74,11 @@ class AppControllerTrialMixin(AppControllerContract):
     TRIAL_TIMEOUT_MS = 800
     # После смены эмулируемой температуры: прибор пересчитывает цепочку раз в 50 мс.
     TRIAL_SETTLE_MS = 400
-    TRIAL_RESET_WAIT_MS = 4000
+    # Первый взгляд после команды перезапуска: загрузчик ждёт 1 с, затем стартует основная программа.
+    TRIAL_RESET_WAIT_MS = 1500
+    # Сколько ждать возвращения прибора в основную программу и как часто спрашивать.
+    TRIAL_REBOOT_TIMEOUT_S = 15.0
+    TRIAL_REBOOT_POLL_MS = 300
     TRIAL_SAMPLES = 5
     TRIAL_PERIOD_TOLERANCE = 3
     TRIAL_LEVEL_TOLERANCE_PERMILLE = 30
@@ -219,6 +225,8 @@ class AppControllerTrialMixin(AppControllerContract):
         self._trial_commit_ctx: dict | None = None
         # Счётчик ошибок записи памяти на момент последней проверки.
         self._trial_ee_errors: int | None = None
+        # Ход ожидания прибора после перезапуска.
+        self._trial_reboot: dict | None = None
 
         self._trial_auto_active = False
         self._trial_auto_queue: list[str] = []
@@ -1872,16 +1880,83 @@ class AppControllerTrialMixin(AppControllerContract):
                 "persist", "fail",
                 "Сверять нечего: сначала выполните этапы с записью в прибор или возврат настроек.")
             return False
-        ops = [self._op_reset("reset")]
-        ops += [self._op_read(f"p_{key}", var, signed) for key, var, signed in self.PERSIST_VARS]
+        # Сначала прибор опрашивается, пока не ответит из основной программы. Иначе чтения
+        # уйдут в пустоту или в загрузчик, и по ним не понять, что с прибором.
+        self._trial_reboot = {"started": None, "deadline": None, "boot_seen": False, "last": "", "elapsed": None}
+        ops = [self._op_reset("reset"), self._op_read("boot", VAR_ACTIVE_PROGRAM)]
+        self._trial_mark_running(
+            "persist",
+            f"Перезапускаю прибор и жду, пока он вернётся в основную программу, до "
+            f"{self.TRIAL_REBOOT_TIMEOUT_S:.0f} с...")
+        return self._trial_start_ops(ops, "_trial_persist_wait")
+
+    def _trial_persist_read_ops(self) -> list[dict]:
+        ops = [self._op_read(f"p_{key}", var, signed) for key, var, signed in self.PERSIST_VARS]
         ops += [
             self._op_read("p_status", UdsData.fuel_thermal_profile_status),
             self._op_read("p_emul", UdsData.temperature_emulation_x10, signed=True),
             self._op_read("p_ee", UdsData.eeprom_state),
         ]
-        self._trial_mark_running(
-            "persist", f"Перезапускаю прибор и жду {self.TRIAL_RESET_WAIT_MS // 1000} с, затем читаю записанное заново...")
-        return self._trial_start_ops(ops, "_trial_persist_done")
+        return ops
+
+    def _trial_persist_wait(self, res: dict):
+        """Ждёт ответа основной программы после перезапуска и называет, что с прибором, если его нет."""
+        ctx = self._trial_reboot
+        now = time.monotonic()
+        if ctx["started"] is None:
+            if res.get("reset") is not True:
+                self._trial_set_step(
+                    "persist", "fail", f"Команда перезапуска не отправлена ({self._trial_error_text(res, 'reset')}).")
+                return
+            ctx["started"] = now - self.TRIAL_RESET_WAIT_MS / 1000.0
+            ctx["deadline"] = ctx["started"] + self.TRIAL_REBOOT_TIMEOUT_S
+
+        program = self._trial_value(res, "boot")
+        if program == 0:
+            ctx["elapsed"] = now - ctx["started"]
+            self._trial_live_suspend_until = 0.0
+            self._trial_mark_running(
+                "persist",
+                f"Прибор вернулся в основную программу через {ctx['elapsed']:.1f} с. "
+                .replace(".", ",", 1) + "Читаю записанное заново...")
+            self._trial_start_ops(self._trial_persist_read_ops(), "_trial_persist_done")
+            return
+
+        if program == 1:
+            ctx["boot_seen"] = True
+            ctx["last"] = "отвечает загрузчик"
+        elif program is None:
+            ctx["last"] = self._trial_error_text(res, "boot")
+        else:
+            ctx["last"] = f"непонятный тип программы {program}"
+
+        if now < ctx["deadline"]:
+            # Пока прибор перезапускается, отсчёты не опрашиваются: запросы только мешали бы.
+            self._trial_live_suspend_until = ctx["deadline"]
+            self._trial_start_ops(
+                [self._op_wait(self.TRIAL_REBOOT_POLL_MS), self._op_read("boot", VAR_ACTIVE_PROGRAM)],
+                "_trial_persist_wait")
+            return
+
+        self._trial_live_suspend_until = 0.0
+        self._invalidate_calibration_session_after_nrc(
+            "Калибровка: прибор перезапущен пробной калибровкой. Для дальнейшей записи запустите калибровку заново.")
+        timeout = f"{self.TRIAL_REBOOT_TIMEOUT_S:.0f}"
+        boot_answer = res.get("boot")
+        if program == 1:
+            detail = (f"За {timeout} с прибор не вернулся в основную программу: отвечает загрузчик, он не запустил "
+                      "основную программу после перезапуска. Выключите и включите питание платы. Если прибор и после "
+                      "этого остаётся в загрузчике, залейте прошивку заново через раздел прошивки.")
+        elif ctx["boot_seen"]:
+            detail = (f"Прибор ответил из загрузчика, потом замолчал ({ctx['last']}) и за {timeout} с так и не "
+                      "вернулся в основную программу. Выключите и включите питание платы и сохраните протокол.")
+        elif isinstance(boot_answer, tuple) and boot_answer and boot_answer[0] == "nrc":
+            detail = f"Прибор после перезапуска отвечает, но отказом: {ctx['last']}. Сохраните протокол."
+        else:
+            detail = (f"Прибор не отвечает {timeout} с после команды перезапуска: ни основная программа, ни загрузчик. "
+                      "Похоже, он завис при перезапуске. Выключите и включите питание платы. Если после этого прибор "
+                      "отвечает, сохраните протокол: по нему будет видно, на каком шаге он замолчал.")
+        self._trial_set_step("persist", "fail", detail)
 
     def _trial_persist_done(self, res: dict):
         problems = []
@@ -1890,27 +1965,31 @@ class AppControllerTrialMixin(AppControllerContract):
                  "media_air": "«воздух»", "media_cal": "«топливо»", "crc": "сумма профиля",
                  "generation": "поколение профиля", "algorithm": "номер алгоритма"}
 
-        if res.get("reset") is not True:
+        # Перезапуск подтверждён ещё при ожидании прибора: чтения идут уже отдельной очередью.
+        reboot_started = (self._trial_reboot or {}).get("started") is not None
+        if res.get("reset") is not True and not reboot_started:
             problems.append(f"команда перезапуска не отправлена ({self._trial_error_text(res, 'reset')})")
 
         for key, want in self._trial_expected.items():
             got = self._trial_value(res, f"p_{key}")
             name = names.get(key, key)
             if got is None:
-                problems.append(f"{name}: прибор после перезапуска не ответил")
+                problems.append(f"{name}: после перезапуска {self._trial_error_text(res, f'p_{key}')}")
             elif got != want:
                 problems.append(f"{name}: после перезапуска {got}, а было записано {want}")
             else:
                 lines.append(f"{name} {got}")
 
         emul = self._trial_value(res, "p_emul")
-        if emul != TRIAL_EMULATION_OFF_VALUE:
+        if emul is None:
+            problems.append(f"эмуляция: после перезапуска {self._trial_error_text(res, 'p_emul')}")
+        elif emul != TRIAL_EMULATION_OFF_VALUE:
             problems.append("эмуляция температуры пережила перезапуск, а должна гаснуть")
 
         # Оборванная перезапуском запись видна при включении: прибор сбрасывает повреждённое к заводским.
         ee = self._trial_ee_decode(self._trial_value(res, "p_ee"))
         if ee is None:
-            problems.append("после перезапуска прибор не сообщил состояние памяти")
+            problems.append(f"состояние памяти: после перезапуска {self._trial_error_text(res, 'p_ee')}")
         else:
             warning = eeprom_boot_warning(ee)
             if warning:
@@ -1926,12 +2005,15 @@ class AppControllerTrialMixin(AppControllerContract):
         self._invalidate_calibration_session_after_nrc(
             "Калибровка: прибор перезапущен пробной калибровкой. Для дальнейшей записи запустите калибровку заново.")
 
+        elapsed = (self._trial_reboot or {}).get("elapsed")
+        back = (f"Прибор вернулся в основную программу через {elapsed:.1f} с. ".replace(".", ",", 1)
+                if elapsed is not None else "")
         if problems:
-            self._trial_set_step("persist", "fail", "; ".join(problems) + ".")
+            self._trial_set_step("persist", "fail", back + "; ".join(problems) + ".")
         else:
             self._trial_set_step(
                 "persist", "pass",
-                "После перезапуска на месте: " + ", ".join(lines) + ". Эмуляция погашена. "
+                back + "После перезапуска на месте: " + ", ".join(lines) + ". Эмуляция погашена. "
                 "Для дальнейшей записи запустите калибровку заново.")
 
     # ------------------------------------------------------------------ выключение эмуляции

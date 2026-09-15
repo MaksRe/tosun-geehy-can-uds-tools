@@ -22,6 +22,10 @@ from ui.qml.controller import trial_mixin as tm  # noqa: E402
 LATENCY_MS = int(sys.argv[1]) if len(sys.argv) > 1 else 5
 RUN_S = float(sys.argv[2]) if len(sys.argv) > 2 else 240.0
 PENDING_S = float(sys.argv[3]) if len(sys.argv) > 3 else 0.12
+# Сколько прибор молчит после команды перезапуска, прежде чем ответит загрузчик.
+REBOOT_S = float(sys.argv[4]) if len(sys.argv) > 4 else 0.5
+# 1 - после перезапуска прибор остаётся в загрузчике навсегда.
+STUCK_IN_BOOT = len(sys.argv) > 5 and sys.argv[5] == "1"
 
 RX_ID = 0x18DAF16A
 RAW_MAIN = 13141
@@ -53,6 +57,9 @@ class Device:
         self.dropped = 0
         self.resets = 0
         self.nrc = 0
+        # После перезапуска: до offline_until прибор молчит, до boot_until отвечает загрузчик.
+        self.offline_until = 0.0
+        self.boot_until = 0.0
 
         self.put(pid(UdsData.empty_fuel_tank), struct.pack("<H", 12128))
         self.put(pid(UdsData.full_fuel_tank), struct.pack("<H", 16128))
@@ -148,6 +155,7 @@ class Device:
                                                             if self.trusted() else [0x01]),
             pm.DID_CRC_ACTUAL: struct.pack("<H", self.actual_crc()),
             pid(UdsData.eeprom_state): bytes([2 if time.monotonic() < self.pending_until else 0, 0, 0, 0]),
+            pid(tm.VAR_ACTIVE_PROGRAM): bytes([0]),
         }
         if did in computed:
             return computed[did]
@@ -173,6 +181,8 @@ class Device:
     # ------------------------------------------------------------------ ISO-TP
 
     def on_frame(self, data):
+        if time.monotonic() < self.offline_until:
+            return
         pci = data[0] >> 4
         if pci == 0:
             if self.rx_buffer is not None:
@@ -202,9 +212,14 @@ class Device:
 
     def accept(self, body):
         sid = body[0]
+        in_boot = (STUCK_IN_BOOT and self.resets > 0) or time.monotonic() < self.boot_until
         if sid == 0x22:
             did = (body[1] << 8) | body[2]
-            data = self.read(did)
+            if in_boot:
+                # Загрузчик знает только тип активной программы и адрес.
+                data = bytes([1]) if did == pid(tm.VAR_ACTIVE_PROGRAM) else None
+            else:
+                data = self.read(did)
             response = [0x7F, 0x22, 0x31] if data is None else [0x62, body[1], body[2]] + list(data)
         elif sid == 0x2E:
             did = (body[1] << 8) | body[2]
@@ -233,6 +248,8 @@ class Device:
         if payload[0] == 0x51:
             self.resets += 1
             self.emul = None
+            self.offline_until = time.monotonic() + REBOOT_S
+            self.boot_until = self.offline_until + 1.0
         if len(payload) <= 7:
             self.deliver([len(payload)] + payload)
             return

@@ -112,6 +112,7 @@ class _TrialStub(AppControllerTrialMixin):
         self._trial_expect_trusted = False
         self._trial_commit_ctx = None
         self._trial_ee_errors = None
+        self._trial_reboot = None
 
         self._trial_auto_active = False
         self._trial_auto_queue = []
@@ -722,6 +723,69 @@ def test_persist_fails_when_emulation_survives_the_reset():
     stub._trial_persist_done({"reset": True, "p_empty": 5000, "p_emul": -400, "p_status": 0x08})
     assert _status(stub, "persist") == "fail"
     assert stub.invalidated
+
+
+def _persist_stub():
+    stub = _TrialStub()
+    stub._trial_expected = {"empty": 5000}
+    assert stub._trial_run_persist()
+    assert stub.started[-1][1] == "_trial_persist_wait"
+    return stub
+
+
+def test_persist_reads_only_after_the_main_program_answers():
+    """Чтения до возвращения основной программы уходят в пустоту, и по ним не понять, что с прибором."""
+    stub = _persist_stub()
+    stub._trial_persist_wait({"reset": True, "boot": ("timeout",)})
+    assert _status(stub, "persist") == "running"
+    assert [op["kind"] for op in stub.started[-1][0]] == ["wait", "read"]
+
+    stub._trial_persist_wait({"boot": 1})
+    assert stub._trial_reboot["boot_seen"]
+
+    stub._trial_persist_wait({"boot": 0})
+    ops, handler = _last_ops(stub)
+    assert handler == "_trial_persist_done"
+    assert "p_empty" in ops
+    assert stub._trial_reboot["elapsed"] is not None
+
+
+def test_persist_passes_after_waiting_for_the_main_program():
+    """Чтения идут отдельной очередью, без признака отправки перезапуска: этап обязан это учитывать."""
+    stub = _persist_stub()
+    stub._trial_persist_wait({"reset": True, "boot": 0})
+    stub._trial_persist_done({"p_empty": 5000, "p_emul": TRIAL_EMULATION_OFF_VALUE, "p_status": 0x08, "p_ee": 0})
+    assert _status(stub, "persist") == "pass"
+    assert "вернулся в основную программу" in _detail(stub, "persist")
+
+
+def test_persist_names_a_device_left_in_the_bootloader():
+    stub = _persist_stub()
+    stub._trial_persist_wait({"reset": True, "boot": 1})
+    stub._trial_reboot["deadline"] = time.monotonic() - 1.0
+    stub._trial_persist_wait({"boot": 1})
+    assert _status(stub, "persist") == "fail"
+    assert "загрузчик" in _detail(stub, "persist")
+    assert stub.invalidated
+
+
+def test_persist_names_a_device_that_went_silent():
+    stub = _persist_stub()
+    stub._trial_persist_wait({"reset": True, "boot": ("timeout",)})
+    stub._trial_reboot["deadline"] = time.monotonic() - 1.0
+    stub._trial_persist_wait({"boot": ("timeout",)})
+    assert _status(stub, "persist") == "fail"
+    assert "не отвечает" in _detail(stub, "persist")
+    assert "питание" in _detail(stub, "persist")
+
+
+def test_persist_names_refusals_with_their_code():
+    stub = _TrialStub()
+    stub._trial_expected = {"empty": 5000}
+    stub._trial_persist_done({"reset": True, "p_empty": ("nrc", 0x31), "p_emul": TRIAL_EMULATION_OFF_VALUE,
+                              "p_status": 0x08, "p_ee": 0})
+    assert _status(stub, "persist") == "fail"
+    assert "0x31" in _detail(stub, "persist")
 
 
 def test_persist_passes_and_closes_the_session():

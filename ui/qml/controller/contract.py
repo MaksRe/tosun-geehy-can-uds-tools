@@ -160,6 +160,7 @@ class AppControllerContract:
     _media_wizard_written: Any
     _trial_commit_ctx: Any
     _trial_ee_errors: Any
+    _trial_reboot: Any
     eepromCommitChanged: Any
     _eeprom_commit_read: Any
     _eeprom_commit_node: Any
