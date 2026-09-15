@@ -156,6 +156,24 @@ class AppControllerContract:
     _trial_dirty: Any
     _trial_expect_trusted: Any
     _profile_retries_used: Any
+    _profile_verify_after_write: Any
+    _media_wizard_written: Any
+    _trial_commit_ctx: Any
+    _trial_ee_errors: Any
+    eepromCommitChanged: Any
+    _eeprom_commit_read: Any
+    _eeprom_commit_node: Any
+    _eeprom_commit_phase: Any
+    _eeprom_commit_detail: Any
+    _eeprom_commit_warn: Any
+    _eeprom_commit_state: Any
+    _eeprom_commit_deadline: Any
+    _eeprom_commit_errors_before: Any
+    _eeprom_commit_request_s: Any
+    _eeprom_commit_probes: Any
+    _eeprom_commit_boot_warned: Any
+    _eeprom_commit_timer: Any
+    _options_write_verify: Any
     _trial_live_suspend_until: Any
     _trial_gap_timer: Any
     _trial_wait_timer: Any

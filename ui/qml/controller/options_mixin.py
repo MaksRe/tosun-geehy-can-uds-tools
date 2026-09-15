@@ -5,6 +5,8 @@ import struct
 import time
 from datetime import datetime
 
+from PySide6.QtCore import QTimer
+
 from j1939.j1939_can_identifier import J1939CanIdentifier
 from uds.options_catalog import UdsOptionParameter, get_option_by_did, get_option_by_index
 from uds.uds_identifiers import UdsIdentifiers
@@ -15,6 +17,8 @@ from .workers import UdsOptionProxy
 class AppControllerOptionsMixin(AppControllerContract):
     OPTIONS_OPERATION_TIMEOUT_MS = 4000
     OPTIONS_BULK_TIMEOUT_RETRY_LIMIT = 1
+    # Пауза перед чтением обратно записанного параметра: обмен записи должен закончиться.
+    OPTIONS_WRITE_VERIFY_DELAY_MS = 60
     OPTIONS_FLOW_CONTROL_STMIN = 0x0A  # 10 ms between CF frames for better stability on busy bus.
 
     def _set_options_bulk_busy(self, value: bool):
@@ -153,6 +157,9 @@ class AppControllerOptionsMixin(AppControllerContract):
                         if len(uds_payload) < 3:
                             return
                         did = ((int(uds_payload[1]) & 0xFF) << 8) | (int(uds_payload[2]) & 0xFF)
+                        # Подтверждение чужого параметра не должно засчитываться как своё.
+                        if self._options_pending_did is not None and did != (int(self._options_pending_did) & 0xFFFF):
+                            return
                         self._finish_options_operation(True, f"Запись DID 0x{did:04X} выполнена")
                         return
                     if len(uds_payload) > 0 and (int(uds_payload[0]) & 0xFF) == 0x7F:
@@ -181,6 +188,10 @@ class AppControllerOptionsMixin(AppControllerContract):
                 if original_sid != 0x2E:
                     return
                 nrc = int(uds_payload[2]) & 0xFF if len(uds_payload) > 2 else 0
+                if nrc == 0x78:
+                    # Прибор просит подождать окончательного ответа, это не отказ.
+                    self._touch_options_timeout()
+                    return
                 self._finish_options_operation(False, f"Негативный ответ UDS (NRC=0x{nrc:02X})")
                 return
 
@@ -999,7 +1010,7 @@ class AppControllerOptionsMixin(AppControllerContract):
             value_bytes = bytes(self._options_pending_write_bytes)
             details = "Запись подтверждена"
 
-        if parameter is not None and request_origin != "bulk":
+        if parameter is not None and request_origin not in ("bulk", "single_verify"):
             self._append_option_history(action, parameter, result, details, color, value_bytes=value_bytes)
 
         # Для DID 0xF195 синхронизируем компактный виджет версии ПО на главной форме.
@@ -1096,8 +1107,73 @@ class AppControllerOptionsMixin(AppControllerContract):
         if request_origin == "bulk" and pending_action == "read" and pending_did is not None:
             self._on_options_bulk_read_finished(success, pending_did, str(message), value_bytes)
 
-        if not success and request_origin != "bulk":
+        if not success and request_origin not in ("bulk", "single_verify"):
             self.infoMessage.emit("Параметры UDS", str(message))
+
+        if request_origin == "single_write" and pending_action == "write" and success and pending_did is not None:
+            # Подтверждение приёма ещё не значит, что прибор хранит записанное: читаем обратно.
+            self._options_write_verify = {
+                "did": int(pending_did), "bytes": bytes(value_bytes or b""), "target_sa": pending_target_sa,
+            }
+            QTimer.singleShot(self.OPTIONS_WRITE_VERIFY_DELAY_MS, self._start_options_write_verify)
+        elif request_origin == "single_verify" and pending_action == "read":
+            self._finish_options_write_verify(bool(success), value_bytes, str(message))
+
+    @staticmethod
+    def _options_stored_matches_written(written: bytes, stored: bytes) -> bool:
+        """Совпадает ли прочитанное с записанным. Хвост сверх записанного прибор заполняет нулями."""
+        written = bytes(written or b"")
+        stored = bytes(stored or b"")
+        if len(stored) < len(written) or stored[:len(written)] != written:
+            return False
+        return all(byte == 0 for byte in stored[len(written):])
+
+    def _start_options_write_verify(self):
+        """Читает только что записанный параметр: прибор мог принять запись и не сохранить значение."""
+        pending = self._options_write_verify
+        if not pending:
+            return
+        parameter = get_option_by_did(int(pending["did"]))
+        if parameter is None or not parameter.can_read:
+            self._options_write_verify = None
+            return
+        if self._options_busy or self._options_bulk_busy:
+            self._options_write_verify = None
+            self._append_option_history(
+                "Проверка записи", parameter, "Пропущена", "Окно параметров было занято другой операцией",
+                "#d97706", value_bytes=None)
+            return
+        if not self._start_options_read_request(
+                parameter, request_origin="single_verify", append_history=False,
+                target_sa_override=pending["target_sa"]):
+            self._options_write_verify = None
+            self._append_option_history(
+                "Проверка записи", parameter, "Ошибка", "Не удалось отправить чтение для сверки",
+                "#dc2626", value_bytes=None)
+
+    def _finish_options_write_verify(self, success: bool, value_bytes, message: str):
+        pending = self._options_write_verify
+        self._options_write_verify = None
+        if not pending:
+            return
+        did = int(pending["did"]) & 0xFFFF
+        parameter = get_option_by_did(did)
+        written = bytes(pending["bytes"])
+        stored = bytes(value_bytes or b"")
+
+        if not success:
+            result, color, details = "Ошибка", "#dc2626", f"Не удалось прочитать обратно: {message}"
+        elif self._options_stored_matches_written(written, stored):
+            result, color, details = "OK", "#16a34a", "Прибор хранит записанное значение"
+        else:
+            result, color = "Ошибка", "#dc2626"
+            details = f"Прибор хранит {stored.hex(' ').upper() or '-'}, а записывали {written.hex(' ').upper() or '-'}"
+
+        if parameter is not None:
+            self._append_option_history(
+                "Проверка записи", parameter, result, details, color, value_bytes=stored or None)
+        if result != "OK":
+            self.infoMessage.emit("Параметры UDS", f"Проверка записи DID 0x{did:04X}: {details}.")
 
     def _cancel_options_operation(self, message: str):
         if self._options_bulk_busy:

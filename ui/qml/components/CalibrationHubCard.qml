@@ -87,7 +87,7 @@ Card {
         // --- Общая шапка: действует на все разделы ---
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 78
+            Layout.preferredHeight: 96
             radius: 12
             color: "#f2f7ff"
             border.width: 1
@@ -122,6 +122,27 @@ Card {
                         font.pixelSize: 12
                         font.family: "Bahnschrift"
                         elide: Text.ElideRight
+                    }
+
+                    // Легла ли запись в микросхему памяти прибора, а не только в его оперативную память.
+                    Text {
+                        id: commitText
+                        Layout.fillWidth: true
+                        readonly property var commit: root.appController ? root.appController.eepromCommit : ({})
+                        text: commitText.commit.text || ""
+                        color: commitText.commit.color || root.textSoft
+                        font.pixelSize: 12
+                        font.bold: commitText.commit.phase === "failed"
+                        font.family: "Bahnschrift"
+                        elide: Text.ElideRight
+
+                        HoverHandler {
+                            id: commitHover
+                        }
+
+                        ToolTip.visible: commitHover.hovered && commitText.truncated
+                        ToolTip.text: commitText.text
+                        ToolTip.delay: 400
                     }
                 }
 

@@ -167,6 +167,8 @@ UDS_OPTIONS: list[UdsOptionParameter] = [
                        "Только ОЗУ, гаснет при перезапуске и выходе из сессии, 0x8000 выключает"),
     UdsOptionParameter(0x0062, 2, "Итоговый период после компенсации и подгонки нуля", AccessMode.READ,
                        "По нему считается уровень, на стенде сверяется с расчётом"),
+    UdsOptionParameter(0x0063, 4, "Состояние записи в память прибора", AccessMode.READ,
+                       "Не записано, флаги сбоя и сброса при включении, сброшено параметров, ошибки записи"),
     UdsOptionParameter(0xF188, 18, "Номер ПО ЭБУ", AccessMode.READ_WRITE),
     UdsOptionParameter(0xF189, 32, "Версия ПО ЭБУ", AccessMode.READ_WRITE),
     UdsOptionParameter(0xF18A, 32, "Поставщик системы и адрес", AccessMode.READ_WRITE),

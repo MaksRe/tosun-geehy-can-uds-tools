@@ -24,6 +24,7 @@ from .controller import (
     AppControllerCanMixin,
     AppControllerChamberMixin,
     AppControllerTrialMixin,
+    AppControllerEepromCommitMixin,
     AppControllerCollectorMixin,
     AppControllerDiagnosticsMixin,
     AppControllerMediaWizardMixin,
@@ -47,6 +48,7 @@ class AppController(
     AppControllerProfileMixin,
     AppControllerChamberMixin,
     AppControllerTrialMixin,
+    AppControllerEepromCommitMixin,
     AppControllerCanMixin,
     AppControllerRuntimeMixin,
     QObject,
@@ -186,7 +188,8 @@ class AppController(
         self._calibration_level_0_known = False
         self._calibration_level_100_known = False
         self._calibration_write_verify_pending: dict[int, int] = {}
-        self._calibration_verify_tolerance = 1
+        # Прибор хранит отметки и подгонку нуля ровно так, как их записали: допуска при сверке нет.
+        self._calibration_verify_tolerance = 0
         self._calibration_wizard_stage = 0
         self._calibration_wizard_hint = "Запустите калибровку, чтобы начать пошаговый процесс."
         self._calibration_session_ready = False
@@ -533,6 +536,8 @@ class AppController(
         self._source_address_timeout_timer.setInterval(2500)
         self._source_address_timeout_timer.timeout.connect(self._on_source_address_timeout)
         self._options_fc_retry_left = 0
+        # Что записано из окна параметров и ждёт сверки чтением.
+        self._options_write_verify = None
         self._options_fc_retry_timer = QTimer(self)
         self._options_fc_retry_timer.setSingleShot(False)
         self._options_fc_retry_timer.setInterval(25)
@@ -553,5 +558,7 @@ class AppController(
         self._init_chamber_state()
         # Пробная калибровка опирается на прогон и профиль, поэтому готовится последней.
         self._init_trial_state()
+        # Контроль сохранения замечает записи всех разделов, поэтому готовится после них.
+        self._init_eeprom_commit_state()
 
         self._rebuild_can_traffic_view()

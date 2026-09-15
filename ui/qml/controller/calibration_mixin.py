@@ -1167,6 +1167,17 @@ class AppControllerCalibrationMixin(AppControllerContract):
                             )
                         else:
                             extra_hint = f" Повторно выполните Security Access 0x27 для узла 0x{target_sa:02X}."
+                elif nrc == 0x22 and did == int(UdsData.empty_fuel_tank.pid):
+                    # Прибор отвергает отметку 0 %, если она не ниже текущей отметки 100 %.
+                    extra_hint = (
+                        " Новая отметка 0 % не ниже отметки 100 %, которая сейчас в приборе. "
+                        "Сначала запишите новую отметку 100 %, затем 0 %."
+                    )
+                elif nrc == 0x22 and did == int(UdsData.full_fuel_tank.pid):
+                    extra_hint = (
+                        " Новая отметка 100 % не выше отметки 0 %, которая сейчас в приборе. "
+                        "Сначала запишите новую отметку 0 %, затем 100 %."
+                    )
                 elif nrc == 0x22 and did is not None:
                     extra_hint = (
                         " Проверьте условия записи на стороне МК: "
@@ -1571,6 +1582,19 @@ class AppControllerCalibrationMixin(AppControllerContract):
     def _stop_calibration_poll_timer(self):
         if self._calibration_poll_timer.isActive():
             self._calibration_poll_timer.stop()
+
+    @staticmethod
+    def _calibration_restore_order(empty_value: int, full_value: int, current_full) -> list[tuple[int, int]]:
+        """Порядок записи отметок из резервной копии, который прибор примет.
+
+        Прибор отвергает отметку 0 %, если она не ниже текущей отметки 100 %. Поэтому,
+        когда новая отметка 0 % не ниже текущей 100 %, сначала пишется 100 %.
+        """
+        write_empty = (int(UdsData.empty_fuel_tank.pid), int(empty_value))
+        write_full = (int(UdsData.full_fuel_tank.pid), int(full_value))
+        if current_full is not None and int(empty_value) >= int(current_full):
+            return [write_full, write_empty]
+        return [write_empty, write_full]
 
     def _send_next_calibration_restore_write(self):
         if not self._calibration_restore_active:

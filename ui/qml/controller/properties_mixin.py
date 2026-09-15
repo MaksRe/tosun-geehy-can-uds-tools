@@ -68,6 +68,7 @@ class AppControllerPropertiesMixin(AppControllerContract):
     chamberChanged = Signal()
     trialChanged = Signal()
     trialLiveChanged = Signal()
+    eepromCommitChanged = Signal()
     softwareVersionChanged = Signal()
 
     @Property("QStringList", notify=devicesChanged)
@@ -905,6 +906,11 @@ class AppControllerPropertiesMixin(AppControllerContract):
     def trialLive(self):
         """Цель функции в постоянном показе отсчётов обоих контуров, затем видно, что прибор жив."""
         return self._trial_live_view()
+
+    @Property("QVariantMap", notify=eepromCommitChanged)
+    def eepromCommit(self):
+        """Цель функции в показе сохранения в память прибора, затем видно, легла ли запись в микросхему."""
+        return self._eeprom_commit_view()
 
     @Property(str, notify=chamberChanged)
     def chamberLabel(self):

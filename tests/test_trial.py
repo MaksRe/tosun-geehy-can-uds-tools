@@ -110,6 +110,8 @@ class _TrialStub(AppControllerTrialMixin):
         self._trial_applied_profile = None
         self._trial_dirty = set()
         self._trial_expect_trusted = False
+        self._trial_commit_ctx = None
+        self._trial_ee_errors = None
 
         self._trial_auto_active = False
         self._trial_auto_queue = []
@@ -213,12 +215,17 @@ def _log_text(stub):
     return "\n".join(entry["text"] for entry in stub._trial_log)
 
 
+def _commit(stub, ee=0):
+    """Ответ прибора о состоянии памяти после записи: по умолчанию всё записано."""
+    stub._trial_commit_poll({"ee": ee})
+
+
 # ------------------------------------------------------------------ связь и доступ
 
 def test_link_passes_on_new_firmware():
     stub = _TrialStub()
     stub._trial_link_done({"status": 0x08, "emul": TRIAL_EMULATION_OFF_VALUE, "legacy": ("nrc", 0x31),
-                           "fuel_t": 213, "board_t": 248})
+                           "fuel_t": 213, "board_t": 248, "ee": 0})
     assert _status(stub, "link") == "pass"
 
 
@@ -226,7 +233,7 @@ def test_link_catches_old_firmware():
     """Ответ на номер прежнего K1 означает старую прошивку, и дальше идти нельзя."""
     stub = _TrialStub()
     stub._trial_link_done({"status": 0x08, "emul": TRIAL_EMULATION_OFF_VALUE, "legacy": 1234,
-                           "fuel_t": 213, "board_t": 248})
+                           "fuel_t": 213, "board_t": 248, "ee": 0})
     assert _status(stub, "link") == "fail"
     assert "старая прошивка" in _detail(stub, "link")
 
@@ -234,7 +241,7 @@ def test_link_catches_old_firmware():
 def test_link_catches_missing_emulation():
     stub = _TrialStub()
     stub._trial_link_done({"status": 0x08, "emul": ("nrc", 0x31), "legacy": ("nrc", 0x31),
-                           "fuel_t": 213, "board_t": 248})
+                           "fuel_t": 213, "board_t": 248, "ee": 0})
     assert _status(stub, "link") == "fail"
     assert "эмуляции" in _detail(stub, "link")
 
@@ -338,6 +345,7 @@ def test_restore_sets_expectations_for_the_reboot_check():
     answers.update({"write_started": True, "written": True, "write_status": "Готово.",
                     "verify_started": True, "verified": True, "status": 0x08})
     stub._trial_restore_done(answers)
+    _commit(stub)
 
     assert _status(stub, "restore") == "pass"
     assert stub._trial_expected["empty"] == 4820
@@ -380,6 +388,7 @@ def test_restore_without_profile_rewrite_checks_the_device_sum():
     answers = {f"r_{key}": value for key, value in stub._trial_backup["values"].items()}
     answers["crc_now"] = 0x7ED1
     stub._trial_restore_done(answers)
+    _commit(stub)
 
     assert _status(stub, "restore") == "pass"
     assert "отметки бака" in _detail(stub, "restore")
@@ -489,6 +498,7 @@ def _level_answers(level=250, **overrides):
 def test_level_passes_at_a_quarter_and_remembers_marks():
     stub = _level_stub()
     stub._trial_level_done(_level_answers())
+    _commit(stub)
     assert _status(stub, "level") == "pass"
     assert stub._trial_expected == {"empty": 5000, "full": 9000}
 
@@ -503,6 +513,7 @@ def test_level_catches_a_swapped_scale():
 def test_level_warns_when_raw_and_compensated_differ():
     stub = _level_stub(raw=6050, comp=6000)
     stub._trial_level_done(_level_answers())
+    _commit(stub)
     assert _status(stub, "level") == "warn"
 
 
@@ -540,6 +551,7 @@ def test_level_at_three_quarters_passes_and_catches_a_swap():
     stub._trial_level_reading = {"raw": 6000, "comp": 6000, "empty": 3000, "full": 7000, "target": 750,
                                  "freeze": 40, "tank_model": 0}
     stub._trial_level_done(_level_answers(level=750, rb_empty=3000, rb_full=7000))
+    _commit(stub)
     assert _status(stub, "level") == "pass"
     assert "порога заморозки вида топлива 40 %" in _detail(stub, "level")
 
@@ -574,6 +586,7 @@ def test_media_coefficient_at_target_passes():
     stub = _TrialStub()
     stub._trial_media_points = {"flatcap": 2400, "air": 1300, "cal": 2300}
     stub._trial_media_rf_poll({"rf": 1104})
+    _commit(stub)
     assert _status(stub, "media") == "pass"
 
 
@@ -644,13 +657,14 @@ def test_profile_step_remembers_what_was_verified():
     stub = _TrialStub()
     stub._trial_profile_done({"write_started": True, "written": True, "write_status": "Готово.",
                               "verify_started": True, "verified": True, "status": 0x0F})
+    _commit(stub)
     assert _status(stub, "profile") == "pass"
     assert stub._trial_applied_profile == stub._profile_values
 
 
 def test_profile_counts_as_changed_once_its_write_starts():
     stub = _TrialStub()
-    stub._profile_write_to_device = lambda allow_empty=False: True
+    stub._profile_write_to_device = lambda **kwargs: True
     stub._trial_profile_write_call()
     assert "profile" in stub._trial_dirty
 
@@ -714,9 +728,85 @@ def test_persist_passes_and_closes_the_session():
     stub = _TrialStub()
     stub._trial_expected = {"empty": 5000, "crc": 0x1234}
     stub._trial_persist_done({"reset": True, "p_empty": 5000, "p_crc": 0x1234,
-                              "p_emul": TRIAL_EMULATION_OFF_VALUE, "p_status": 0x0F})
+                              "p_emul": TRIAL_EMULATION_OFF_VALUE, "p_status": 0x0F, "p_ee": 0})
     assert _status(stub, "persist") == "pass"
     assert stub.invalidated
+
+
+# ------------------------------------------------------------------ запись в память
+
+def _ee(pending=0, flags=0, damaged=0, errors=0):
+    """Число состояния памяти так, как его возвращает чтение 0x0063."""
+    return pending | (flags << 8) | (damaged << 16) | (errors << 24)
+
+
+def test_step_is_not_declared_before_the_device_writes_its_memory():
+    """Ответ «записано» означает только оперативную память: итог ждёт микросхему."""
+    stub = _TrialStub()
+    stub._trial_commit_then("level", "pass", "Отметки записаны.")
+    assert _status(stub, "level") == "running"
+    assert stub.started[-1][1] == "_trial_commit_poll"
+
+    _commit(stub, _ee(pending=2))
+    assert _status(stub, "level") == "running"
+    ops = [op["kind"] for op in stub.started[-1][0]]
+    assert ops == ["wait", "read"]
+
+    _commit(stub, _ee())
+    assert _status(stub, "level") == "pass"
+    assert "проверено чтением" in _detail(stub, "level")
+
+
+def test_memory_that_never_finishes_fails_the_step():
+    stub = _TrialStub()
+    stub._trial_commit_then("media", "pass", "Точки записаны.")
+    stub._trial_commit_ctx["deadline"] = time.monotonic() - 1.0
+    _commit(stub, _ee(pending=1))
+    assert _status(stub, "media") == "fail"
+    assert "не записал в память" in _detail(stub, "media")
+
+
+def test_memory_chip_error_fails_the_step():
+    stub = _TrialStub()
+    stub._trial_commit_then("profile", "pass", "Профиль записан.")
+    _commit(stub, _ee(flags=0x01))
+    assert _status(stub, "profile") == "fail"
+    assert "не отвечает" in _detail(stub, "profile")
+
+
+def test_memory_write_repeats_are_reported():
+    stub = _TrialStub()
+    stub._trial_ee_errors = 0
+    stub._trial_commit_then("restore", "pass", "Возвращено.")
+    _commit(stub, _ee(errors=3))
+    assert _status(stub, "restore") == "warn"
+    assert "повторов: 3" in _detail(stub, "restore")
+
+
+def test_link_requires_the_memory_state():
+    stub = _TrialStub()
+    stub._trial_link_done({"status": 0x08, "emul": TRIAL_EMULATION_OFF_VALUE, "legacy": ("nrc", 0x31),
+                           "fuel_t": 213, "board_t": 248, "ee": ("nrc", 0x31)})
+    assert _status(stub, "link") == "fail"
+    assert "0x0063" in _detail(stub, "link")
+
+
+def test_link_warns_about_memory_reset_at_power_on():
+    stub = _TrialStub()
+    stub._trial_link_done({"status": 0x08, "emul": TRIAL_EMULATION_OFF_VALUE, "legacy": ("nrc", 0x31),
+                           "fuel_t": 213, "board_t": 248, "ee": _ee(flags=0x04, damaged=2)})
+    assert _status(stub, "link") == "warn"
+    assert "сбросил их к заводским: 2" in _detail(stub, "link")
+
+
+def test_persist_catches_a_write_torn_by_the_reset():
+    """Оборванная перезапуском запись видна по сбросу повреждённых параметров при включении."""
+    stub = _TrialStub()
+    stub._trial_expected = {"empty": 5000}
+    stub._trial_persist_done({"reset": True, "p_empty": 5000, "p_emul": TRIAL_EMULATION_OFF_VALUE,
+                              "p_status": 0x08, "p_ee": _ee(flags=0x04, damaged=1)})
+    assert _status(stub, "persist") == "fail"
+    assert "после перезапуска" in _detail(stub, "persist")
 
 
 # ------------------------------------------------------------------ автоматический прогон
@@ -734,7 +824,7 @@ def test_auto_run_moves_to_the_next_step_after_a_pass():
     stub = _TrialStub()
     stub._trial_auto_start()
     stub._trial_link_done({"status": 0x08, "emul": TRIAL_EMULATION_OFF_VALUE, "legacy": ("nrc", 0x31),
-                           "fuel_t": 213, "board_t": 248})
+                           "fuel_t": 213, "board_t": 248, "ee": 0})
     assert stub._trial_auto_timer.started == 1
     stub._on_trial_auto_timer()
     assert stub._trial_auto_current == "backup"
@@ -777,7 +867,7 @@ def test_auto_run_stops_after_the_current_step_on_request():
     stub._trial_auto_start()
     stub._trial_auto_stop()
     stub._trial_link_done({"status": 0x08, "emul": TRIAL_EMULATION_OFF_VALUE, "legacy": ("nrc", 0x31),
-                           "fuel_t": 213, "board_t": 248})
+                           "fuel_t": 213, "board_t": 248, "ee": 0})
     stub._on_trial_auto_timer()
 
     assert not stub._trial_auto_active

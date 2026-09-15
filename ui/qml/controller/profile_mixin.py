@@ -98,6 +98,8 @@ class AppControllerProfileMixin:
         self._profile_verify_report: list[str] = []
         self._profile_queue: list[tuple[str, int, object]] = []
         self._profile_retries_used = 0
+        # После записи профиль сразу читается обратно и сверяется.
+        self._profile_verify_after_write = False
         self._profile_status = "Профиль не прочитан."
         self._profile_status_color = "#64748b"
         self._profile_file_path = ""
@@ -198,6 +200,12 @@ class AppControllerProfileMixin:
             self._profile_step_timer.stop()
             if self._profile_verify is not None:
                 self._profile_finish_verify()
+            elif self._profile_verify_after_write:
+                # Прибор подтвердил приём каждой таблицы, но это не значит, что в нём лежит записанное.
+                self._profile_verify_after_write = False
+                if not self._profile_verify_on_device():
+                    self._profile_set_status(
+                        "Профиль записан, но сверка не запустилась. Нажмите «Проверить запись».", "#d97706")
             else:
                 self._profile_set_status("Готово.", "#16a34a")
             return True
@@ -231,6 +239,7 @@ class AppControllerProfileMixin:
         self._profile_busy = False
         self._profile_queue = []
         self._profile_verify = None
+        self._profile_verify_after_write = False
         self._profile_step_timer.stop()
         self._profile_set_status(f"Операция прервана: {reason}", "#dc2626")
 
@@ -400,7 +409,7 @@ class AppControllerProfileMixin:
         ]
         return self._profile_start_queue(queue, "Читаю профиль из прибора...")
 
-    def _profile_write_to_device(self, allow_empty: bool = False) -> bool:
+    def _profile_write_to_device(self, allow_empty: bool = False, verify: bool = True) -> bool:
         """Записывает профиль в прибор в правильном порядке.
 
         Сумма идёт последней намеренно: пока её нет, прибор таблицы не применяет,
@@ -428,8 +437,11 @@ class AppControllerProfileMixin:
         ]
 
         self._profile_generation = generation
-        return self._profile_start_queue(
+        started = self._profile_start_queue(
             queue, f"Записываю профиль, поколение {generation}, сумма 0x{crc:04X}...")
+        # Кто сверяет запись сам (пробная калибровка), передаёт verify=False.
+        self._profile_verify_after_write = bool(started and verify)
+        return started
 
     # ------------------------------------------------------------------ файл
 

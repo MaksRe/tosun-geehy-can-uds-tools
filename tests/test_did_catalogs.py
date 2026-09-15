@@ -144,3 +144,7 @@ def test_bench_check_dids_have_the_right_access():
     assert compensated is not None and compensated.size == 2
     assert compensated.access == AccessMode.READ
 
+    eeprom_state = get_option_by_did(0x0063)
+    assert eeprom_state is not None and eeprom_state.size == 4
+    assert eeprom_state.access == AccessMode.READ
+

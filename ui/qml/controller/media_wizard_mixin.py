@@ -75,6 +75,8 @@ class AppControllerMediaWizardMixin(AppControllerContract):
         self._media_wizard_air = None
         self._media_wizard_cal = None
         self._media_wizard_enabled = None
+        # Значение последней записи: прочитанное обратно обязано с ним совпасть.
+        self._media_wizard_written = None
 
         self._media_wizard_gap_timer = QTimer(self)
         self._media_wizard_gap_timer.setSingleShot(True)
@@ -318,6 +320,7 @@ class AppControllerMediaWizardMixin(AppControllerContract):
 
     def _media_wizard_on_write_confirmed(self, action: str, var, value):
         """Прибор принял запись: читаем параметр обратно для подтверждения."""
+        self._media_wizard_written = None if value is None else int(value)
         if action == "write_air":
             self._media_wizard_set_status("Точка в воздухе записана, проверяю.", self.MEDIA_WIZARD_COLOR_IDLE)
             self._media_wizard_request("verify_air", UdsData.fuel_media_flatcap_air_count)
@@ -349,6 +352,16 @@ class AppControllerMediaWizardMixin(AppControllerContract):
                 f"Прочитано из прибора: воздух {self._media_wizard_air}, "
                 f"жидкость {self._media_wizard_cal}, разница {self._media_wizard_span_text()}.",
                 self.MEDIA_WIZARD_COLOR_IDLE,
+            )
+            return
+
+        # Подтверждение приёма ещё не значит, что прибор хранит записанное: сверяем.
+        written = self._media_wizard_written
+        self._media_wizard_written = None
+        if written is not None and int(value) != int(written):
+            self._media_wizard_finish(
+                f"Прибор ответил, что записал {written}, но хранит {int(value)}. Запись не сохранилась, повторите.",
+                self.MEDIA_WIZARD_COLOR_BAD,
             )
             return
 

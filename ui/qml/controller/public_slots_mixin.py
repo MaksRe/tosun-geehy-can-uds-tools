@@ -1777,9 +1777,8 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._calibration_target_node_sa = int(target_sa)
 
         self._calibration_restore_active = True
-        self._calibration_restore_queue = [
-            (int(UdsData.empty_fuel_tank.pid), backup0),
-            (int(UdsData.full_fuel_tank.pid), backup100),
+        current_full = int(self._calibration_level_100) if bool(self._calibration_level_100_known) else None
+        self._calibration_restore_queue = self._calibration_restore_order(backup0, backup100, current_full) + [
             (int(UdsData.fuel_zero_trim_count.pid), backup_zero_trim),
         ]
         self._calibration_restore_current_did = None
@@ -2122,6 +2121,8 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._options_pending_did = int(parameter.did)
         self._options_pending_target_sa = int(target_sa) & 0xFF
         self._options_pending_write_bytes = self._encode_option_value_bytes(write_value, int(parameter.size))
+        # По этому признаку после подтверждения запись читается обратно и сверяется.
+        self._options_request_origin = "single_write"
         self._options_busy = True
         self._options_status = f"Запись DID 0x{int(parameter.did):04X} (SA 0x{int(target_sa) & 0xFF:02X})..."
         self.optionOperationChanged.emit()
@@ -2133,6 +2134,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             self._options_pending_did = None
             self._options_pending_target_sa = None
             self._options_pending_write_bytes = b""
+            self._options_request_origin = ""
             self._options_status = "Ошибка отправки запроса записи"
             self.optionOperationChanged.emit()
             self.infoMessage.emit("Параметры UDS", "Не удалось отправить запрос записи DID.")

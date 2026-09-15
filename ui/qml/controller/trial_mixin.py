@@ -51,6 +51,7 @@ from uds.services.read_data_by_id import ServiceReadDataById
 from uds.services.write_data_by_id import ServiceWriteDataById
 
 from .contract import AppControllerContract
+from .eeprom_commit_mixin import EEPROM_FLAG_SPI_ERROR, decode_eeprom_state, eeprom_boot_warning
 
 # На шине «эмуляция выключена» передаётся как 0x8000, а читается как -32768.
 TRIAL_EMULATION_OFF_WIRE = 0x8000
@@ -79,6 +80,9 @@ class AppControllerTrialMixin(AppControllerContract):
     TRIAL_PROFILE_TIMEOUT_MS = 30000
     TRIAL_CHAMBER_TIMEOUT_MS = 15000
     TRIAL_ACCESS_TIMEOUT_MS = 20000
+    # Сколько ждать, пока прибор перенесёт принятые значения в микросхему памяти.
+    TRIAL_COMMIT_TIMEOUT_S = 5.0
+    TRIAL_COMMIT_POLL_MS = 150
     # Пауза между этапами автоматического прогона: итог успевает отобразиться.
     TRIAL_AUTO_PAUSE_MS = 400
 
@@ -128,8 +132,8 @@ class AppControllerTrialMixin(AppControllerContract):
 
     TRIAL_STEPS = (
         ("link", "Прибор на связи, прошивка новая",
-         "Только читает. Убеждается, что прибор отвечает, в нём есть эмуляция температуры и нет "
-         "прежней компенсации K1."),
+         "Только читает. Убеждается, что прибор отвечает, в нём есть эмуляция температуры и контроль "
+         "записи в память, нет прежней компенсации K1, а память при включении не сбрасывалась."),
         ("backup", "Запомнить текущие настройки",
          "Читает отметки бака, подгонку нуля, точки вида топлива и профиль и сохраняет копию в файл. "
          "В конце пробной калибровки всё это вернётся в прибор."),
@@ -210,6 +214,10 @@ class AppControllerTrialMixin(AppControllerContract):
         self._trial_dirty: set[str] = set()
         # Обязан ли прибор после перезапуска держать профиль в работе.
         self._trial_expect_trusted = False
+        # Итог этапа, который объявится после записи в микросхему памяти.
+        self._trial_commit_ctx: dict | None = None
+        # Счётчик ошибок записи памяти на момент последней проверки.
+        self._trial_ee_errors: int | None = None
 
         self._trial_auto_active = False
         self._trial_auto_queue: list[str] = []
@@ -905,6 +913,71 @@ class AppControllerTrialMixin(AppControllerContract):
             text += " (остановка после этапа)"
         return text
 
+    # ------------------------------------------------------------------ запись в память
+
+    @staticmethod
+    def _trial_ee_decode(raw) -> dict | None:
+        """Состояние памяти из числа, прочитанного младшим байтом вперёд."""
+        if raw is None:
+            return None
+        return decode_eeprom_state(int(raw).to_bytes(4, "little", signed=False))
+
+    def _trial_commit_then(self, key: str, status: str, detail: str):
+        """Объявляет итог этапа только после того, как прибор записал всё в микросхему памяти.
+
+        Прибор отвечает на запись сразу, как принял значение в оперативную память, и
+        чтение обратно возвращает то же самое. Выключи прибор в этот момент, и значение
+        пропадёт. Поэтому этап ждёт, пока прибор перенесёт всё в микросхему и проверит
+        её чтением.
+        """
+        self._trial_commit_ctx = {
+            "key": key, "status": status, "detail": detail,
+            "deadline": time.monotonic() + self.TRIAL_COMMIT_TIMEOUT_S,
+        }
+        self._trial_mark_running(
+            key, "Прибор принял значения. Жду, пока он запишет их в микросхему памяти и проверит чтением...")
+        if not self._trial_start_ops([self._op_read("ee", UdsData.eeprom_state)], "_trial_commit_poll"):
+            self._trial_set_step(key, "fail", "Проверить запись в память не удалось: обмен не запустился. " + detail)
+
+    def _trial_commit_poll(self, res: dict):
+        ctx = self._trial_commit_ctx
+        key = ctx["key"]
+        accepted = f" Прибор принял значения: {ctx['detail']}"
+        ee = self._trial_ee_decode(self._trial_value(res, "ee"))
+
+        if ee is None:
+            self._trial_set_step(
+                key, "fail",
+                f"Прибор не сообщил, записано ли это в память ({self._trial_error_text(res, 'ee')})." + accepted)
+            return
+        if ee["flags"] & EEPROM_FLAG_SPI_ERROR:
+            self._trial_set_step(
+                key, "fail", "Микросхема памяти прибора не отвечает: записанное пропадёт при выключении." + accepted)
+            return
+        if ee["pending"] > 0:
+            if time.monotonic() < ctx["deadline"]:
+                self._trial_start_ops(
+                    [self._op_wait(self.TRIAL_COMMIT_POLL_MS), self._op_read("ee", UdsData.eeprom_state)],
+                    "_trial_commit_poll")
+                return
+            self._trial_set_step(
+                key, "fail",
+                f"За {self.TRIAL_COMMIT_TIMEOUT_S:.0f} с прибор не записал в память параметров: {ee['pending']}."
+                + accepted)
+            return
+
+        status, detail = ctx["status"], ctx["detail"]
+        baseline = self._trial_ee_errors
+        if baseline is not None and ee["errors"] > baseline:
+            status = "warn"
+            detail += (f" Записано в память, но микросхема подтвердила запись не с первого раза "
+                       f"(повторов: {ee['errors'] - baseline}): проверьте питание платы.")
+        else:
+            detail += " Записано в память прибора и проверено чтением из неё."
+        self._trial_ee_errors = ee["errors"]
+        self._trial_commit_ctx = None
+        self._trial_set_step(key, status, detail)
+
     # ------------------------------------------------------------------ этап: связь
 
     def _trial_run_link(self) -> bool:
@@ -914,8 +987,10 @@ class AppControllerTrialMixin(AppControllerContract):
             self._op_read("legacy", VAR_LEGACY_K1),
             self._op_read("fuel_t", UdsData.raw_temperature, signed=True),
             self._op_read("board_t", UdsData.raw_board_temperature, signed=True),
+            self._op_read("ee", UdsData.eeprom_state),
         ]
-        self._trial_mark_running("link", "Читаю состояние профиля, эмуляцию, номер прежнего K1 и обе температуры...")
+        self._trial_mark_running(
+            "link", "Читаю состояние профиля, эмуляцию, номер прежнего K1, обе температуры и состояние памяти...")
         return self._trial_start_ops(ops, "_trial_link_done")
 
     def _trial_link_done(self, res: dict):
@@ -938,6 +1013,19 @@ class AppControllerTrialMixin(AppControllerContract):
                 problems.append(f"нет температуры {name}")
             elif not (-400 <= value <= 850):
                 problems.append(f"температура {name} {self._trial_temp_text(value)} вне рабочего диапазона")
+
+        ee = self._trial_ee_decode(self._trial_value(res, "ee"))
+        if ee is None:
+            problems.append("в прошивке нет контроля записи в память (параметр 0x0063), прошейте новую версию")
+        else:
+            self._trial_ee_errors = ee["errors"]
+            if ee["flags"] & EEPROM_FLAG_SPI_ERROR:
+                problems.append("микросхема памяти прибора не отвечает: записанное не сохранится")
+            warning = eeprom_boot_warning(ee)
+            if warning:
+                notes.append(warning[0].lower() + warning[1:].rstrip("."))
+            if ee["errors"] > 0:
+                notes.append(f"с включения прибор уже отметил ошибок записи в память: {ee['errors']}")
 
         summary = (f"температура топлива {self._trial_temp_text(self._trial_value(res, 'fuel_t'))}, "
                    f"платы {self._trial_temp_text(self._trial_value(res, 'board_t'))}")
@@ -1260,9 +1348,9 @@ class AppControllerTrialMixin(AppControllerContract):
         text = (f"Показание конденсатора {reading['comp']}, отметки 0 % = {empty} и 100 % = {full} записаны "
                 f"и прочитаны обратно; " + "; ".join(notes))
         if warning:
-            self._trial_set_step("level", "warn", text + "; " + warning + ".")
+            self._trial_commit_then("level", "warn", text + "; " + warning + ".")
         else:
-            self._trial_set_step("level", "pass", text + ".")
+            self._trial_commit_then("level", "pass", text + ".")
 
     # ------------------------------------------------------------------ этап: вид топлива
 
@@ -1360,7 +1448,7 @@ class AppControllerTrialMixin(AppControllerContract):
         target = self.TRIAL_MEDIA_TARGET_X1000
         rf = self._trial_value(res, "rf")
         if rf is not None and abs(rf - target) <= self.TRIAL_RF_TOLERANCE_X1000:
-            self._trial_set_step(
+            self._trial_commit_then(
                 "media", "pass",
                 f"Показание конденсатора {points['flatcap']}, точки «воздух» = {points['air']} и «топливо» = "
                 f"{points['cal']} записаны и прочитаны обратно; коэффициент среды {rf / 1000:.3f} при "
@@ -1500,7 +1588,7 @@ class AppControllerTrialMixin(AppControllerContract):
     def _trial_profile_write_call(self):
         # С этой минуты профиль в приборе считается изменённым, даже если запись оборвётся.
         self._trial_dirty.add("profile")
-        self._trial_results["write_started"] = bool(self._profile_write_to_device())
+        self._trial_results["write_started"] = bool(self._profile_write_to_device(verify=False))
 
     def _trial_profile_verify_call(self):
         self._trial_results["verify_started"] = bool(self._profile_verify_on_device())
@@ -1548,7 +1636,7 @@ class AppControllerTrialMixin(AppControllerContract):
             "algorithm": 1,
         })
         self._trial_expect_trusted = True
-        self._trial_set_step(
+        self._trial_commit_then(
             "profile", "pass",
             f"Проверочный профиль записан: все семь таблиц совпали с прочитанными из прибора, сумма "
             f"0x{self._profile_calc_crc():04X} сошлась, прибор взял таблицы в работу.")
@@ -1714,7 +1802,7 @@ class AppControllerTrialMixin(AppControllerContract):
 
     def _trial_restore_profile_write_call(self):
         # Запомненный профиль мог быть пустым, а пустой профиль окно профиля писать отказывается.
-        self._trial_results["write_started"] = bool(self._profile_write_to_device(allow_empty=True))
+        self._trial_results["write_started"] = bool(self._profile_write_to_device(allow_empty=True, verify=False))
 
     def _trial_restore_done(self, res: dict):
         values = self._trial_backup["values"]
@@ -1760,7 +1848,7 @@ class AppControllerTrialMixin(AppControllerContract):
             self._trial_expect_trusted = status is not None and bool(int(status) & profile_model.STATUS_TRUSTED)
 
         head = f"Возвращено: {written}. " if written else "Пробная калибровка настройки не меняла, писать было нечего. "
-        self._trial_set_step(
+        self._trial_commit_then(
             "restore", "pass",
             head + f"Все настройки совпали с запомненными {self._trial_backup['saved_at']}, эмуляция выключена.")
 
@@ -1788,6 +1876,7 @@ class AppControllerTrialMixin(AppControllerContract):
         ops += [
             self._op_read("p_status", UdsData.fuel_thermal_profile_status),
             self._op_read("p_emul", UdsData.temperature_emulation_x10, signed=True),
+            self._op_read("p_ee", UdsData.eeprom_state),
         ]
         self._trial_mark_running(
             "persist", f"Перезапускаю прибор и жду {self.TRIAL_RESET_WAIT_MS // 1000} с, затем читаю записанное заново...")
@@ -1816,6 +1905,17 @@ class AppControllerTrialMixin(AppControllerContract):
         emul = self._trial_value(res, "p_emul")
         if emul != TRIAL_EMULATION_OFF_VALUE:
             problems.append("эмуляция температуры пережила перезапуск, а должна гаснуть")
+
+        # Оборванная перезапуском запись видна при включении: прибор сбрасывает повреждённое к заводским.
+        ee = self._trial_ee_decode(self._trial_value(res, "p_ee"))
+        if ee is None:
+            problems.append("после перезапуска прибор не сообщил состояние памяти")
+        else:
+            warning = eeprom_boot_warning(ee)
+            if warning:
+                problems.append("после перезапуска: " + warning[0].lower() + warning[1:].rstrip("."))
+            if ee["flags"] & EEPROM_FLAG_SPI_ERROR:
+                problems.append("после перезапуска микросхема памяти не отвечает")
         if self._trial_expect_trusted:
             status = self._trial_value(res, "p_status")
             if status is None or not (status & profile_model.STATUS_TRUSTED):
