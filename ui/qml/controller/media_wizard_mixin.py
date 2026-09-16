@@ -149,6 +149,10 @@ class AppControllerMediaWizardMixin(AppControllerContract):
         self._media_wizard_gap_timer.stop()
         self._media_wizard_timeout_timer.stop()
         self._media_wizard_set_status(text, color)
+        # Операция кончилась любым исходом, но наблюдение оператор не выключал:
+        # без этого отсчёты замирали навсегда, а кнопка выглядела включённой.
+        if self._media_wizard_watching:
+            self._media_wizard_gap_timer.start(self.MEDIA_WIZARD_WATCH_GAP_MS)
 
     def _on_media_wizard_timeout(self):
         """Прибор не ответил вовремя."""
