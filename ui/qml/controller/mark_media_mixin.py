@@ -306,7 +306,7 @@ class AppControllerMarkMediaMixin(AppControllerContract):
             if air is None or air <= 0:
                 self._mark_media_finish(
                     text + " Точка «воздух» (0x002F) в приборе не записана: без неё модель по двум "
-                    "контурам уровень не посчитает. Снимите её в разделе «Вид топлива».",
+                    "контурам уровень не посчитает. Снимите её в разделе «Уровень и вид топлива».",
                     self.MARK_MEDIA_COLOR_WARN, RowColor.yellow,
                 )
                 return

@@ -46,26 +46,23 @@ Card {
         if (!root.appController)
             return "Ожидание контроллера"
 
-        if (index === 0)
-            return root.appController.calibrationActive
-                ? "Сценарий активен"
-                : (root.appController.calibrationSelectedNodeText || "Не запущена")
-
-        if (index === 1) {
+        if (index === 0) {
             if (root.appController.mediaWizardBusy)
                 return "Идёт запись точки"
+            if (!root.appController.calibrationActive)
+                return root.appController.calibrationSelectedNodeText || "Не запущена"
             return root.appController.mediaWizardCanEnable
                 ? "Точки сняты: " + root.appController.mediaWizardEnabledText
-                : "Опорные точки не сняты"
+                : "Сценарий активен, точки вида топлива не сняты"
         }
 
-        if (index === 2) {
+        if (index === 1) {
             if (root.appController.profileBusy)
                 return "Идёт обмен с прибором"
             return root.appController.profileDeviceStatusText
         }
 
-        if (index === 3) {
+        if (index === 2) {
             if (root.appController.chamberBusy)
                 return "Идёт замер точки"
             return "Снято точек: " + root.appController.chamberPointCount
@@ -197,12 +194,8 @@ Card {
                 Repeater {
                     model: [
                         {
-                            "title": "Уровень бака",
-                            "hint": "Отметки 0 % и 100 %, подгонка нуля, резервные копии"
-                        },
-                        {
-                            "title": "Вид топлива",
-                            "hint": "Плоский конденсатор: воздух и топливо"
+                            "title": "Уровень и вид топлива",
+                            "hint": "Отметки 0 % и 100 %, плоский конденсатор, подгонка нуля"
                         },
                         {
                             "title": "Температурный профиль",
@@ -287,21 +280,10 @@ Card {
                 Layout.minimumWidth: 600
                 currentIndex: root.currentSection
 
-                CalibrationCard {
+                // Отметки бака и точки плоского конденсатора снимаются в одних положениях
+                // датчика, поэтому живут в одном разделе.
+                TankCalibrationCard {
                     appController: root.appController
-                    showNodeControls: false
-                    cardColor: root.cardColor
-                    cardBorder: root.cardBorder
-                    textMain: root.textMain
-                    textSoft: root.textSoft
-                    inputBg: root.inputBg
-                    inputBorder: root.inputBorder
-                    inputFocus: root.inputFocus
-                }
-
-                MediaWizardCard {
-                    appController: root.appController
-                    showNodeControls: false
                     cardColor: root.cardColor
                     cardBorder: root.cardBorder
                     textMain: root.textMain

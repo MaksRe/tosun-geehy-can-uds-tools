@@ -1369,7 +1369,7 @@ class AppControllerTrialMixin(AppControllerContract):
         warning = ""
         drift = abs(reading["raw"] - reading["comp"])
         if drift > self.TRIAL_PERIOD_TOLERANCE:
-            warning = (f"итоговый период отличается от сырого на {drift} отсчётов: раздел «Уровень бака» "
+            warning = (f"итоговый период отличается от сырого на {drift} отсчётов: раздел «Уровень и вид топлива» "
                        "снимает отметки по сырому периоду, и при таком расхождении уровень там сместится")
 
         if problems:
