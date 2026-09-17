@@ -162,7 +162,7 @@ class AppControllerMediaWizardMixin(AppControllerContract):
         action, var, _value = self._media_wizard_pending
         self._media_wizard_pending = None
 
-        if action == "watch":
+        if action in ("watch", "age"):
             # Наблюдение не критично: пробуем ещё раз на следующем шаге.
             self._media_wizard_gap_timer.start(self.MEDIA_WIZARD_WATCH_GAP_MS)
             return
@@ -183,7 +183,12 @@ class AppControllerMediaWizardMixin(AppControllerContract):
             if uds_exchange_busy(self, ignore=("media_wizard",)) or background_request_recent(self):
                 self._media_wizard_gap_timer.start(self.MEDIA_WIZARD_WATCH_GAP_MS)
                 return
-            self._media_wizard_request("watch", UdsData.fuel_media_flatcap_raw)
+            if self._live_age_due("flatcap"):
+                # Показание фильтрованное и при остановке контура застывает: изредка спрашиваем возраст измерения.
+                self._live_age_note_request()
+                self._media_wizard_request("age", UdsData.measurement_age)
+            else:
+                self._media_wizard_request("watch", UdsData.fuel_media_flatcap_raw)
             note_background_request(self)
 
     def _handle_media_wizard_frame(self, identifier: int, payload):
@@ -211,6 +216,10 @@ class AppControllerMediaWizardMixin(AppControllerContract):
             self._media_wizard_timeout_timer.stop()
             self._media_wizard_pending = None
             code = body[2] if len(body) > 2 else 0
+            if action == "age":
+                # Старая прошивка не знает возраста измерения: наблюдение идёт дальше без него.
+                self._media_wizard_gap_timer.start(self.MEDIA_WIZARD_WATCH_GAP_MS)
+                return
             if action == "watch":
                 self._media_wizard_watching = False
                 self._media_wizard_set_status(
@@ -257,13 +266,20 @@ class AppControllerMediaWizardMixin(AppControllerContract):
 
     def _media_wizard_on_value(self, action: str, var, value: int):
         """Обрабатывает прочитанное значение в зависимости от текущего шага."""
+        if action == "age":
+            # Сам возраст разобрал учёт свежести, здесь только продолжаем наблюдение.
+            self._media_wizard_gap_timer.start(self.MEDIA_WIZARD_WATCH_GAP_MS)
+            return
+
         if action == "watch":
+            self._live_note_value("flatcap", value)
             self._media_wizard_live_raw = int(value)
             self.mediaWizardChanged.emit()
             self._media_wizard_gap_timer.start(self.MEDIA_WIZARD_WATCH_GAP_MS)
             return
 
         if action == "sample":
+            self._live_note_value("flatcap", value)
             self._media_wizard_samples.append(int(value))
             self._media_wizard_live_raw = int(value)
             self._media_wizard_live_spread = max(self._media_wizard_samples) - min(self._media_wizard_samples)

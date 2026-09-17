@@ -804,6 +804,12 @@ class AppControllerCalibrationMixin(AppControllerContract):
             return
         self._configure_calibration_uds_services()
         tx_identifier = self._build_calibration_tx_identifier()
+        # Период фильтрованный и при остановке контура застывает: время от времени
+        # вместо него спрашиваем возраст измерения, по нему видно, мерит ли контур.
+        if self._live_age_due("level"):
+            self._live_age_note_request()
+            self._calibration_read_service.read_data_by_identifier(tx_identifier, UdsData.measurement_age)
+            return
         self._calibration_read_service.read_data_by_identifier(tx_identifier, UdsData.curr_fuel_tank)
 
     def _reset_calibration_zero_trim_air_zero_adjust_state(self):
@@ -1313,6 +1319,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
             changed = False
 
             if did == int(UdsData.curr_fuel_tank.pid):
+                self._live_note_value("level", value)
                 if self._calibration_current_level != value:
                     self._calibration_current_level = value
                     changed = True

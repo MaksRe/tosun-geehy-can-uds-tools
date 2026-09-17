@@ -169,6 +169,8 @@ UDS_OPTIONS: list[UdsOptionParameter] = [
                        "По нему считается уровень, на стенде сверяется с расчётом"),
     UdsOptionParameter(0x0063, 4, "Состояние записи в память прибора", AccessMode.READ,
                        "Не записано, флаги сбоя и сброса при включении, сброшено параметров, ошибки записи"),
+    UdsOptionParameter(0x0064, 4, "Возраст последнего измерения контуров, мс", AccessMode.READ,
+                       "По 2 байта: основной контур, контур вида топлива. 0xFFFF - измерений не было"),
     UdsOptionParameter(0xF188, 18, "Номер ПО ЭБУ", AccessMode.READ_WRITE),
     UdsOptionParameter(0xF189, 32, "Версия ПО ЭБУ", AccessMode.READ_WRITE),
     UdsOptionParameter(0xF18A, 32, "Поставщик системы и адрес", AccessMode.READ_WRITE),

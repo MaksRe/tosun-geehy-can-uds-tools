@@ -65,6 +65,7 @@ class AppControllerPropertiesMixin(AppControllerContract):
     diagnosticsChanged = Signal()
     mediaWizardChanged = Signal()
     markMediaChanged = Signal()
+    liveFreshnessChanged = Signal()
     profileChanged = Signal()
     chamberChanged = Signal()
     trialChanged = Signal()
@@ -1044,6 +1045,16 @@ class AppControllerPropertiesMixin(AppControllerContract):
     def calibrationMarkMediaStatusColor(self):
         """Цвет итога записи вида топлива к отметке."""
         return str(self._mark_media_status_color)
+
+    @Property("QVariantMap", notify=liveFreshnessChanged)
+    def calibrationLiveFreshness(self):
+        """Свежесть числа «Текущий»: приходят ли ответы и мерит ли основной контур."""
+        return self._live_freshness_view("level", float(self._calibration_poll_interval_ms) / 1000.0)
+
+    @Property("QVariantMap", notify=liveFreshnessChanged)
+    def mediaWizardLiveFreshness(self):
+        """Свежесть живого показания плоского конденсатора и работа контура вида топлива."""
+        return self._live_freshness_view("flatcap", float(self.MEDIA_WIZARD_WATCH_GAP_MS) / 1000.0)
 
     @Property(bool, notify=mediaWizardChanged)
     def mediaWizardWatching(self):

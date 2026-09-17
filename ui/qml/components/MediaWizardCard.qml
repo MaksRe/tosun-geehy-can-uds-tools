@@ -127,7 +127,7 @@ Card {
         // --- Живое измерение ---
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 78
+            Layout.preferredHeight: 98
             radius: 12
             color: "#f2f7ff"
             border.width: 1
@@ -155,6 +155,12 @@ Card {
                         font.pixelSize: 26
                         font.bold: true
                         font.family: "Bahnschrift"
+                    }
+
+                    // Застывшее число неотличимо от зависшего контура без этой строки.
+                    LiveFreshnessLine {
+                        Layout.fillWidth: true
+                        info: root.appController ? root.appController.mediaWizardLiveFreshness : ({})
                     }
                 }
 

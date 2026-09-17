@@ -72,6 +72,13 @@ class _WizardStub(AppControllerMediaWizardMixin):
         self._media_wizard_pending = (action, var, value)
         return True
 
+    # Учёт свежести проверяется отдельно, здесь он не мешает.
+    def _live_note_value(self, key, value):
+        pass
+
+    def _live_age_due(self, key):
+        return False
+
 
 def test_live_readings_continue_after_a_failed_point():
     """Ошибка при снятии точки не должна останавливать обновление отсчётов."""

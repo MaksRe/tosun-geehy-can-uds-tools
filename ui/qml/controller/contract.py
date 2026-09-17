@@ -188,6 +188,11 @@ class AppControllerContract:
     _mark_media_status_color: Any
     _mark_media_gap_timer: Any
     _mark_media_timeout_timer: Any
+    liveFreshnessChanged: Any
+    _live_tracks: Any
+    _live_age: Any
+    _live_age_counters: Any
+    _live_freshness_timer: Any
     _options_write_verify: Any
     _uds_background_tx_s: Any
     _chamber_attempt: Any

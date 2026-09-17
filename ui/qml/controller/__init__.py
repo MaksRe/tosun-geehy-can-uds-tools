@@ -6,6 +6,7 @@ from .collector_mixin import AppControllerCollectorMixin
 from .contract import AppControllerContract
 from .eeprom_commit_mixin import AppControllerEepromCommitMixin
 from .diagnostics_mixin import AppControllerDiagnosticsMixin
+from .live_freshness_mixin import AppControllerLiveFreshnessMixin
 from .mark_media_mixin import AppControllerMarkMediaMixin
 from .media_wizard_mixin import AppControllerMediaWizardMixin
 from .options_mixin import AppControllerOptionsMixin
@@ -24,6 +25,7 @@ __all__ = [
     "AppControllerContract",
     "AppControllerDiagnosticsMixin",
     "AppControllerEepromCommitMixin",
+    "AppControllerLiveFreshnessMixin",
     "AppControllerMarkMediaMixin",
     "AppControllerMediaWizardMixin",
     "AppControllerOptionsMixin",

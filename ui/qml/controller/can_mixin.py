@@ -70,6 +70,7 @@ class AppControllerCanMixin(AppControllerContract):
             self._handle_diagnostics_frame(identifier, payload)
             self._handle_media_wizard_frame(identifier, payload)
             self._handle_mark_media_frame(identifier, payload)
+            self._handle_live_age_frame(identifier, payload)
             self._handle_chamber_frame(identifier, payload)
             self._handle_trial_frame(identifier, payload)
             self._handle_trial_live_frame(identifier, payload)

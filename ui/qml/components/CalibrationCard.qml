@@ -504,6 +504,12 @@ Item {
                     }
                 }
 
+                // Свежесть числа «Текущий»: приходят ли ответы и мерит ли основной контур.
+                LiveFreshnessLine {
+                    Layout.fillWidth: true
+                    info: root.appController ? root.appController.calibrationLiveFreshness : ({})
+                }
+
                 // Итог записи вида топлива к последней отметке: нужен модели уровня по двум контурам.
                 Text {
                     Layout.fillWidth: true

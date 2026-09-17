@@ -148,3 +148,8 @@ def test_bench_check_dids_have_the_right_access():
     assert eeprom_state is not None and eeprom_state.size == 4
     assert eeprom_state.access == AccessMode.READ
 
+    # Ответ обязан влезать в один кадр ISO-TP: живые опросы разбирают только одиночные кадры.
+    measurement_age = get_option_by_did(0x0064)
+    assert measurement_age is not None and measurement_age.size == 4
+    assert measurement_age.access == AccessMode.READ
+

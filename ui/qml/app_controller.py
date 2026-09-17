@@ -27,6 +27,7 @@ from .controller import (
     AppControllerEepromCommitMixin,
     AppControllerCollectorMixin,
     AppControllerDiagnosticsMixin,
+    AppControllerLiveFreshnessMixin,
     AppControllerMarkMediaMixin,
     AppControllerMediaWizardMixin,
     AppControllerOptionsMixin,
@@ -47,6 +48,7 @@ class AppController(
     AppControllerDiagnosticsMixin,
     AppControllerMediaWizardMixin,
     AppControllerMarkMediaMixin,
+    AppControllerLiveFreshnessMixin,
     AppControllerProfileMixin,
     AppControllerChamberMixin,
     AppControllerTrialMixin,
@@ -557,6 +559,8 @@ class AppController(
         self._init_media_wizard_state()
         # Вид топлива в момент отметок бака пишется цепочкой после сверки отметки.
         self._init_mark_media_state()
+        # Свежесть живых чисел: пришёл ли ответ и мерит ли контур.
+        self._init_live_freshness_state()
 
         # Окно температурного профиля держит таблицы и сумму внутри модуля.
         self._init_profile_state()
