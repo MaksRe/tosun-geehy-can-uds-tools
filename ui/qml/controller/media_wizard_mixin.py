@@ -8,10 +8,13 @@
 ошибиться, а неверная опора тихо искажает уровень топлива во всём диапазоне.
 
 ЧТО ДЕЛАЕТ МАСТЕР
-Сам снимает серию показаний, проверяет что они устоялись, записывает результат
-в нужный параметр и читает его обратно для подтверждения. Включить поправку он
-разрешает только когда точка в жидкости заметно выше точки в воздухе: иначе
-опоры недостоверны.
+Пока идёт калибровка, постоянно опрашивает плоский конденсатор и считает
+скользящее среднее за несколько секунд, как для основного контура: «Захват,
+среднее» и разброс в этом окне. Оператор переносит среднее в поле кнопкой
+«Взять захват» или вписывает число сам, мастер записывает точку и читает её
+обратно для подтверждения. Точку в жидкости не ниже точки в воздухе он не
+пишет, а включить поправку разрешает, только когда жидкость заметно выше
+воздуха: иначе опоры недостоверны.
 
 ЧЕГО МАСТЕР НЕ ДЕЛАЕТ
 Он не поднимает сессию и не открывает доступ на запись. Это делает сценарий
@@ -20,6 +23,8 @@
 """
 
 from __future__ import annotations
+
+import time
 
 from PySide6.QtCore import QTimer
 
@@ -32,13 +37,13 @@ from .contract import AppControllerContract
 
 
 class AppControllerMediaWizardMixin(AppControllerContract):
-    # Сколько показаний берём в серию и с каким шагом, мс.
-    MEDIA_WIZARD_SAMPLES = 12
-    MEDIA_WIZARD_SAMPLE_GAP_MS = 120
     MEDIA_WIZARD_TIMEOUT_MS = 800
 
-    # Разброс серии, выше которого считаем что показание ещё не устоялось, отсчёты.
+    # Разброс показаний в окне захвата, выше которого число ещё не устоялось, отсчёты.
     MEDIA_WIZARD_STABLE_SPREAD = 40
+
+    # Окно скользящего среднего, пока окно основного контура неизвестно, с.
+    MEDIA_WIZARD_CAPTURE_WINDOW_S = 4.0
 
     # Минимальная разница между жидкостью и воздухом, отсчёты.
     # Дизельное топливо примерно вдвое поднимает ёмкость плоского конденсатора,
@@ -72,9 +77,11 @@ class AppControllerMediaWizardMixin(AppControllerContract):
         self._media_wizard_status_color = self.MEDIA_WIZARD_COLOR_IDLE
 
         self._media_wizard_pending = None
-        self._media_wizard_samples = []
         self._media_wizard_live_raw = None
-        self._media_wizard_live_spread = None
+        # Показания для скользящего среднего: (время, число).
+        self._media_wizard_recent = []
+        self._media_wizard_captured = None
+        self._media_wizard_captured_spread = None
 
         self._media_wizard_air = None
         self._media_wizard_cal = None
@@ -84,7 +91,6 @@ class AppControllerMediaWizardMixin(AppControllerContract):
 
         self._media_wizard_gap_timer = QTimer(self)
         self._media_wizard_gap_timer.setSingleShot(True)
-        self._media_wizard_gap_timer.setInterval(self.MEDIA_WIZARD_SAMPLE_GAP_MS)
         self._media_wizard_gap_timer.timeout.connect(self._on_media_wizard_gap_timeout)
 
         self._media_wizard_timeout_timer = QTimer(self)
@@ -148,12 +154,11 @@ class AppControllerMediaWizardMixin(AppControllerContract):
         self._media_wizard_busy = False
         self._media_wizard_action = ""
         self._media_wizard_pending = None
-        self._media_wizard_samples = []
         self._media_wizard_gap_timer.stop()
         self._media_wizard_timeout_timer.stop()
         self._media_wizard_set_status(text, color)
-        # Операция кончилась любым исходом, но наблюдение оператор не выключал:
-        # без этого отсчёты замирали навсегда, а кнопка выглядела включённой.
+        # Операция кончилась любым исходом, а опрос калибровки идёт дальше:
+        # без этого отсчёты замирали бы навсегда.
         if self._media_wizard_watching:
             self._media_wizard_gap_timer.start(self._media_wizard_watch_gap_ms())
 
@@ -176,23 +181,21 @@ class AppControllerMediaWizardMixin(AppControllerContract):
         )
 
     def _on_media_wizard_gap_timeout(self):
-        """Пауза вышла: продолжаем серию или очередное наблюдение."""
-        if self._media_wizard_busy:
-            self._media_wizard_request("sample", UdsData.fuel_media_flatcap_raw)
+        """Пауза вышла: очередное наблюдение за плоским конденсатором."""
+        # Пока идёт запись точки, наблюдение молчит: запись сама продолжит его в конце.
+        if self._media_wizard_busy or not self._media_wizard_watching:
             return
-
-        if self._media_wizard_watching:
-            # Живое показание фоновое: оно уступает шину разделам, которые ведут обмен.
-            if uds_exchange_busy(self, ignore=("media_wizard",)) or background_request_recent(self):
-                self._media_wizard_gap_timer.start(self._media_wizard_watch_gap_ms())
-                return
-            if self._live_age_due("flatcap"):
-                # Показание фильтрованное и при остановке контура застывает: изредка спрашиваем возраст измерения.
-                self._live_age_note_request()
-                self._media_wizard_request("age", UdsData.measurement_age)
-            else:
-                self._media_wizard_request("watch", UdsData.fuel_media_flatcap_raw)
-            note_background_request(self)
+        # Живое показание фоновое: оно уступает шину разделам, которые ведут обмен.
+        if uds_exchange_busy(self, ignore=("media_wizard",)) or background_request_recent(self):
+            self._media_wizard_gap_timer.start(self._media_wizard_watch_gap_ms())
+            return
+        if self._live_age_due("flatcap"):
+            # Показание фильтрованное и при остановке контура застывает: изредка спрашиваем возраст измерения.
+            self._live_age_note_request()
+            self._media_wizard_request("age", UdsData.measurement_age)
+        else:
+            self._media_wizard_request("watch", UdsData.fuel_media_flatcap_raw)
+        note_background_request(self)
 
     def _handle_media_wizard_frame(self, identifier: int, payload):
         """Разбирает ответ прибора на запрос мастера."""
@@ -265,6 +268,30 @@ class AppControllerMediaWizardMixin(AppControllerContract):
             return "Прибор отказал: значение вне допустимого диапазона."
         return f"Прибор отказал в операции (код 0x{code:02X})."
 
+    # ------------------------------------------------------------------ захват
+
+    def _media_wizard_capture_window_s(self) -> float:
+        """Окно скользящего среднего: то же, что у основного контура."""
+        window = getattr(self, "_calibration_recent_window_sec", None)
+        return float(window) if window else self.MEDIA_WIZARD_CAPTURE_WINDOW_S
+
+    def _media_wizard_note_sample(self, value: int, now: float | None = None):
+        """Добавляет показание в окно и пересчитывает среднее и разброс."""
+        now = time.monotonic() if now is None else float(now)
+        window = self._media_wizard_capture_window_s()
+        self._media_wizard_recent.append((now, int(value)))
+        self._media_wizard_recent = [
+            (stamp, sample) for stamp, sample in self._media_wizard_recent[-100:] if now - stamp <= window
+        ]
+        samples = [sample for _stamp, sample in self._media_wizard_recent]
+        # Как у основного контура: по одному показанию среднего ещё нет.
+        if len(samples) < 2:
+            self._media_wizard_captured = None
+            self._media_wizard_captured_spread = None
+            return
+        self._media_wizard_captured = int(round(sum(samples) / float(len(samples))))
+        self._media_wizard_captured_spread = max(samples) - min(samples)
+
     # ------------------------------------------------------------------ логика шагов
 
     def _media_wizard_on_value(self, action: str, var, value: int):
@@ -277,86 +304,24 @@ class AppControllerMediaWizardMixin(AppControllerContract):
         if action == "watch":
             self._live_note_value("flatcap", value)
             self._media_wizard_live_raw = int(value)
+            self._media_wizard_note_sample(int(value))
             self.mediaWizardChanged.emit()
             self._media_wizard_gap_timer.start(self._media_wizard_watch_gap_ms())
-            return
-
-        if action == "sample":
-            self._live_note_value("flatcap", value)
-            self._media_wizard_samples.append(int(value))
-            self._media_wizard_live_raw = int(value)
-            self._media_wizard_live_spread = max(self._media_wizard_samples) - min(self._media_wizard_samples)
-            self._media_wizard_set_status(
-                f"Снимаю показание: {len(self._media_wizard_samples)} из {self.MEDIA_WIZARD_SAMPLES}.",
-                self.MEDIA_WIZARD_COLOR_IDLE,
-            )
-
-            if len(self._media_wizard_samples) < self.MEDIA_WIZARD_SAMPLES:
-                self._media_wizard_gap_timer.start(self.MEDIA_WIZARD_SAMPLE_GAP_MS)
-                return
-
-            self._media_wizard_apply_series()
             return
 
         if action in ("verify_air", "verify_cal", "verify_enable"):
             self._media_wizard_on_verified(action, int(value))
 
-    def _media_wizard_apply_series(self):
-        """Проверяет устойчивость серии и записывает её среднее в нужный параметр."""
-        samples = list(self._media_wizard_samples)
-        spread = max(samples) - min(samples)
-        average = int(round(sum(samples) / float(len(samples))))
-        self._media_wizard_live_spread = spread
-
-        if spread > self.MEDIA_WIZARD_STABLE_SPREAD:
-            self._media_wizard_finish(
-                f"Показание не устоялось: разброс {spread} отсч. при допуске {self.MEDIA_WIZARD_STABLE_SPREAD}. "
-                "Дайте прибору успокоиться и повторите.",
-                self.MEDIA_WIZARD_COLOR_WARN,
-            )
-            return
-
-        if average <= 0:
-            self._media_wizard_finish(
-                "Контур вида топлива не даёт измерения. Проверьте плоский конденсатор.",
-                self.MEDIA_WIZARD_COLOR_BAD,
-            )
-            return
-
-        if self._media_wizard_action == "air":
-            self._media_wizard_samples = []
-            self._media_wizard_set_status(
-                f"Записываю точку в воздухе: {average} отсч.", self.MEDIA_WIZARD_COLOR_IDLE
-            )
-            self._media_wizard_request("write_air", UdsData.fuel_media_flatcap_air_count, average)
-            return
-
-        # Точку в жидкости не пишем, если она не выше точки в воздухе: такая
-        # пара опор даёт бессмысленный коэффициент среды.
-        if self._media_wizard_air is not None and average <= int(self._media_wizard_air):
-            self._media_wizard_finish(
-                f"Показание в жидкости {average} не выше показания в воздухе {int(self._media_wizard_air)}. "
-                "Проверьте, что конденсатор действительно погружён.",
-                self.MEDIA_WIZARD_COLOR_BAD,
-            )
-            return
-
-        self._media_wizard_samples = []
-        self._media_wizard_set_status(
-            f"Записываю точку в жидкости: {average} отсч.", self.MEDIA_WIZARD_COLOR_IDLE
-        )
-        self._media_wizard_request("write_cal", UdsData.fuel_media_flatcap_cal_count, average)
-
     def _media_wizard_on_write_confirmed(self, action: str, var, value):
         """Прибор принял запись: читаем параметр обратно для подтверждения."""
         self._media_wizard_written = None if value is None else int(value)
         if action == "write_air":
-            self._media_wizard_set_status("Точка в воздухе записана, проверяю.", self.MEDIA_WIZARD_COLOR_IDLE)
+            self._media_wizard_set_status("Точка «воздух» записана, проверяю.", self.MEDIA_WIZARD_COLOR_IDLE)
             self._media_wizard_request("verify_air", UdsData.fuel_media_flatcap_air_count)
             return
 
         if action == "write_cal":
-            self._media_wizard_set_status("Точка в жидкости записана, проверяю.", self.MEDIA_WIZARD_COLOR_IDLE)
+            self._media_wizard_set_status("Точка «топливо» записана, проверяю.", self.MEDIA_WIZARD_COLOR_IDLE)
             self._media_wizard_request("verify_cal", UdsData.fuel_media_flatcap_cal_count)
             return
 
@@ -379,7 +344,7 @@ class AppControllerMediaWizardMixin(AppControllerContract):
             self._media_wizard_enabled = int(value)
             self._media_wizard_finish(
                 f"Прочитано из прибора: воздух {self._media_wizard_air}, "
-                f"жидкость {self._media_wizard_cal}, разница {self._media_wizard_span_text()}.",
+                f"топливо {self._media_wizard_cal}, разница {self._media_wizard_span_text()}.",
                 self.MEDIA_WIZARD_COLOR_IDLE,
             )
             return
@@ -397,7 +362,8 @@ class AppControllerMediaWizardMixin(AppControllerContract):
         if action == "verify_air":
             self._media_wizard_air = int(value)
             self._media_wizard_finish(
-                f"Точка в воздухе сохранена: {int(value)} отсч. Теперь погрузите конденсатор в топливо.",
+                f"Точка «воздух» плоского конденсатора сохранена: {int(value)} отсч. "
+                "Теперь погрузите датчик в топливо.",
                 self.MEDIA_WIZARD_COLOR_OK,
             )
             return
@@ -407,13 +373,14 @@ class AppControllerMediaWizardMixin(AppControllerContract):
             span = None if self._media_wizard_air is None else int(value) - int(self._media_wizard_air)
             if span is not None and span < self.MEDIA_WIZARD_MIN_SPAN:
                 self._media_wizard_finish(
-                    f"Точка в жидкости сохранена, но разница с воздухом всего {span} отсч. "
+                    f"Точка «топливо» сохранена, но разница с точкой «воздух» всего {span} отсч. "
                     f"Ожидается не меньше {self.MEDIA_WIZARD_MIN_SPAN}. Проверьте погружение и повторите.",
                     self.MEDIA_WIZARD_COLOR_WARN,
                 )
                 return
+            span_text = "" if span is None else f" Разница с точкой «воздух» {span} отсч."
             self._media_wizard_finish(
-                f"Точка в жидкости сохранена: {int(value)} отсч. Разница с воздухом {span} отсч. "
+                f"Точка «топливо» плоского конденсатора сохранена: {int(value)} отсч.{span_text} "
                 "Можно включать поправку.",
                 self.MEDIA_WIZARD_COLOR_OK,
             )
@@ -459,20 +426,55 @@ class AppControllerMediaWizardMixin(AppControllerContract):
             self._media_wizard_pending = None
         self.mediaWizardChanged.emit()
 
-    def _media_wizard_capture(self, target: str):
-        """Запускает снятие серии для точки в воздухе или в жидкости."""
+    def _media_wizard_save(self, target: str, value_text: str):
+        """Записывает точку «воздух» или «топливо»: число из поля, а без него текущее показание."""
         if self._media_wizard_busy:
             return
         if not self._media_wizard_require_write_access():
             return
 
+        place = "воздух" if target == "air" else "топливо"
+        raw_text = str(value_text).strip()
+        if raw_text:
+            try:
+                value = int(raw_text, 16 if raw_text.lower().startswith("0x") else 10)
+            except ValueError:
+                self._media_wizard_set_status(
+                    f"Точка «{place}»: в поле должно быть целое число отсчётов.", self.MEDIA_WIZARD_COLOR_WARN)
+                return
+        elif self._media_wizard_live_raw is not None:
+            value = int(self._media_wizard_live_raw)
+        else:
+            self._media_wizard_set_status(
+                f"Точка «{place}»: показания плоского конденсатора ещё нет. Дождитесь числа в карточке.",
+                self.MEDIA_WIZARD_COLOR_WARN)
+            return
+
+        if not 1 <= value <= 0xFFFF:
+            self._media_wizard_set_status(
+                f"Точка «{place}»: {value} вне диапазона 1...65535.", self.MEDIA_WIZARD_COLOR_BAD)
+            return
+
+        # Точку в жидкости не пишем, если она не выше точки в воздухе: такая
+        # пара опор даёт бессмысленный коэффициент среды.
+        if target != "air" and self._media_wizard_air is not None and value <= int(self._media_wizard_air):
+            self._media_wizard_set_status(
+                f"Точка «топливо» {value} не выше точки «воздух» {int(self._media_wizard_air)}. "
+                "Проверьте, что плоский конденсатор погружён полностью.",
+                self.MEDIA_WIZARD_COLOR_BAD,
+            )
+            return
+
         self._media_wizard_busy = True
-        self._media_wizard_action = str(target)
-        self._media_wizard_samples = []
-        self._media_wizard_pending = None
-        place = "воздухе" if target == "air" else "топливе"
-        self._media_wizard_set_status(f"Снимаю серию показаний в {place}...", self.MEDIA_WIZARD_COLOR_IDLE)
-        self._media_wizard_request("sample", UdsData.fuel_media_flatcap_raw)
+        self._media_wizard_action = target
+        # Запись идёт своим запросом: очередное наблюдение сейчас столкнулось бы с ней.
+        self._media_wizard_gap_timer.stop()
+        self._media_wizard_set_status(
+            f"Записываю точку «{place}» плоского конденсатора: {value} отсч.", self.MEDIA_WIZARD_COLOR_IDLE)
+        if target == "air":
+            self._media_wizard_request("write_air", UdsData.fuel_media_flatcap_air_count, value)
+        else:
+            self._media_wizard_request("write_cal", UdsData.fuel_media_flatcap_cal_count, value)
 
     def _media_wizard_set_enabled(self, enabled: bool):
         """Включает или выключает поправку по виду топлива."""
@@ -483,13 +485,14 @@ class AppControllerMediaWizardMixin(AppControllerContract):
 
         if enabled and not self._media_wizard_points_are_valid():
             self._media_wizard_set_status(
-                "Сначала снимите обе точки: жидкость должна быть заметно выше воздуха.",
+                "Сначала снимите обе точки: топливо должно быть заметно выше воздуха.",
                 self.MEDIA_WIZARD_COLOR_WARN,
             )
             return
 
         self._media_wizard_busy = True
         self._media_wizard_action = "enable"
+        self._media_wizard_gap_timer.stop()
         self._media_wizard_set_status(
             "Включаю поправку..." if enabled else "Выключаю поправку...", self.MEDIA_WIZARD_COLOR_IDLE
         )
@@ -501,6 +504,7 @@ class AppControllerMediaWizardMixin(AppControllerContract):
             return
         self._media_wizard_busy = True
         self._media_wizard_action = "refresh"
+        self._media_wizard_gap_timer.stop()
         self._media_wizard_set_status("Читаю сохранённые точки...", self.MEDIA_WIZARD_COLOR_IDLE)
         self._media_wizard_request("verify_air", UdsData.fuel_media_flatcap_air_count)
 

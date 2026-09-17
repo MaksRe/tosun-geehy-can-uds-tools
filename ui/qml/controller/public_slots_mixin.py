@@ -3152,15 +3152,15 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         """Цель функции в правке одного значения таблицы, затем она пересчитывает контрольную сумму."""
         self._profile_set_cell(int(row), int(column), str(text))
 
-    @Slot()
-    def captureMediaWizardAir(self):
-        """Цель функции в снятии опорной точки в воздухе, затем она усредняет серию и записывает DID 0x002F."""
-        self._media_wizard_capture("air")
+    @Slot(str)
+    def saveMediaWizardAir(self, value_text):
+        """Цель функции в записи точки «воздух» плоского конденсатора, затем пишет DID 0x002F и сверяет чтением."""
+        self._media_wizard_save("air", str(value_text))
 
-    @Slot()
-    def captureMediaWizardLiquid(self):
-        """Цель функции в снятии опорной точки в жидкости, затем она усредняет серию и записывает DID 0x0030."""
-        self._media_wizard_capture("liquid")
+    @Slot(str)
+    def saveMediaWizardLiquid(self, value_text):
+        """Цель функции в записи точки «топливо» плоского конденсатора, затем пишет DID 0x0030 и сверяет чтением."""
+        self._media_wizard_save("liquid", str(value_text))
 
     @Slot(bool)
     def setMediaWizardEnabled(self, enabled):

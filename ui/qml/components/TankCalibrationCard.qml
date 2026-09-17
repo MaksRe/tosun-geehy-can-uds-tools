@@ -39,6 +39,8 @@ Item {
     readonly property bool mediaBusy: root.appController ? root.appController.mediaWizardBusy : false
     // Оба контура опрашиваются, пока запущена калибровка.
     readonly property bool calibrationActive: root.appController ? root.appController.calibrationActive : false
+    // Стадия сценария калибровки: по ней отметки показывают, записаны ли они в этом сеансе.
+    readonly property int wizardStage: root.appController ? root.appController.calibrationWizardStage : 0
     // Два столбца, пока хватает ширины; на узком окне шаги идут друг под другом.
     readonly property bool wide: contentColumn.width >= 820
 
@@ -307,7 +309,7 @@ Item {
 
                         RowLayout {
                             Layout.fillWidth: true
-                            spacing: 12
+                            spacing: 24
 
                             ColumnLayout {
                                 spacing: 0
@@ -326,6 +328,36 @@ Item {
                                     font.bold: true
                                     font.family: "Bahnschrift"
                                 }
+                            }
+
+                            // Скользящее среднее, как у основного контура: из него точка переносится в поле.
+                            ColumnLayout {
+                                spacing: 0
+
+                                Text {
+                                    text: "Захват, среднее"
+                                    color: root.textSoft
+                                    font.pixelSize: 11
+                                    font.family: "Bahnschrift"
+                                }
+
+                                Text {
+                                    text: root.appController ? root.appController.mediaWizardCapturedText : "-"
+                                    color: "#0f766e"
+                                    font.pixelSize: 26
+                                    font.bold: true
+                                    font.family: "Bahnschrift"
+                                }
+                            }
+
+                            Text {
+                                Layout.alignment: Qt.AlignBottom
+                                Layout.bottomMargin: 4
+                                text: root.appController ? root.appController.mediaWizardCapturedSpreadText : ""
+                                color: root.appController && root.appController.mediaWizardCapturedSpreadWarn ? "#b45309" : root.textSoft
+                                font.pixelSize: 11
+                                font.bold: root.appController !== null && root.appController.mediaWizardCapturedSpreadWarn
+                                font.family: "Bahnschrift"
                             }
 
                             Item { Layout.fillWidth: true }
@@ -349,7 +381,7 @@ Item {
 
                         Text {
                             Layout.fillWidth: true
-                            text: "Точки снимайте, когда оба числа перестанут заметно меняться."
+                            text: "Сохраняйте, когда «Захват, среднее» обоих контуров перестанет заметно меняться."
                             color: root.textSoft
                             font.pixelSize: 11
                             font.family: "Bahnschrift"
@@ -399,12 +431,17 @@ Item {
                             wrapMode: Text.WordWrap
                         }
 
-                        LevelMarkBlock {
+                        CaptureValueBlock {
                             id: mark0
-                            appController: root.appController
                             title: "Основной контур: отметка 0 %"
-                            writtenStage: 2
+                            chipText: root.wizardStage >= 4 ? "ОК" : (root.wizardStage >= 2 ? "Записан" : "Ожидание")
+                            chipOk: root.wizardStage >= 2
                             savedText: root.appController ? root.appController.calibrationLevel0Text : "-"
+                            capturedText: root.appController ? root.appController.calibrationCapturedLevelText : "-"
+                            captureHint: "Подставить в поле усреднённое показание основного контура"
+                            accent: "#0284c7"
+                            saveEnabled: root.appController !== null
+                            readEnabled: root.appController !== null
                             textMain: root.textMain
                             textSoft: root.textSoft
                             inputBg: root.inputBg
@@ -416,68 +453,24 @@ Item {
                             }
                         }
 
-                        Rectangle {
-                            Layout.fillWidth: true
-                            implicitHeight: airLayout.implicitHeight + 16
-                            radius: 10
-                            color: "#ffffff"
-                            border.width: 1
-                            border.color: "#d6e2ef"
-
-                            // Бирюзовая полоса: блок относится к плоскому конденсатору, как и его живая карточка.
-                            Rectangle {
-                                anchors.left: parent.left
-                                anchors.top: parent.top
-                                anchors.bottom: parent.bottom
-                                anchors.margins: 6
-                                width: 4
-                                radius: 2
-                                color: "#0f766e"
-                            }
-
-                            // Название отдельной строкой: рядом с длинной кнопкой оно не помещалось.
-                            ColumnLayout {
-                                id: airLayout
-                                anchors.fill: parent
-                                anchors.margins: 8
-                                anchors.leftMargin: 18
-                                spacing: 6
-
-                                Text {
-                                    Layout.fillWidth: true
-                                    text: "Плоский конденсатор: точка «воздух»"
-                                    color: root.textMain
-                                    font.pixelSize: 14
-                                    font.bold: true
-                                    font.family: "Bahnschrift"
-                                    elide: Text.ElideRight
-                                }
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 6
-
-                                    Text {
-                                        Layout.fillWidth: true
-                                        text: "Контур вида топлива, в приборе: " + (root.appController ? root.appController.mediaWizardAirText : "-")
-                                        color: root.textSoft
-                                        font.pixelSize: 11
-                                        font.family: "Bahnschrift"
-                                        elide: Text.ElideRight
-                                    }
-
-                                    FancyButton {
-                                        Layout.preferredWidth: 260
-                                        Layout.preferredHeight: 34
-                                        text: "Снять точку плоского конденсатора"
-                                        toolTipText: "Серия показаний плоского конденсатора на сухом датчике, запись в точку «воздух»"
-                                        tone: "#16a34a"
-                                        toneHover: "#15803d"
-                                        tonePressed: "#166534"
-                                        enabled: root.appController !== null && root.writeAllowed && !root.mediaBusy
-                                        onClicked: if (root.appController) root.appController.captureMediaWizardAir()
-                                    }
-                                }
+                        // Точка плоского конденсатора снимается так же, как отметка: захват в поле, затем «Сохранить».
+                        CaptureValueBlock {
+                            id: pointAir
+                            title: "Плоский конденсатор: точка «воздух»"
+                            savedText: root.appController ? root.appController.mediaWizardAirText : "-"
+                            capturedText: root.appController ? root.appController.mediaWizardCapturedText : "-"
+                            captureHint: "Подставить в поле усреднённое показание плоского конденсатора"
+                            accent: "#0f766e"
+                            saveEnabled: root.appController !== null && !root.mediaBusy
+                            readEnabled: root.appController !== null && !root.mediaBusy
+                            textMain: root.textMain
+                            textSoft: root.textSoft
+                            inputBg: root.inputBg
+                            inputBorder: root.inputBorder
+                            inputFocus: root.inputFocus
+                            onReadRequested: if (root.appController) root.appController.refreshMediaWizardSaved()
+                            onSaveRequested: function(valueText) {
+                                if (root.appController) root.appController.saveMediaWizardAir(valueText)
                             }
                         }
 
@@ -518,12 +511,17 @@ Item {
                             wrapMode: Text.WordWrap
                         }
 
-                        LevelMarkBlock {
+                        CaptureValueBlock {
                             id: mark100
-                            appController: root.appController
                             title: "Основной контур: отметка 100 %"
-                            writtenStage: 3
+                            chipText: root.wizardStage >= 4 ? "ОК" : (root.wizardStage >= 3 ? "Записан" : "Ожидание")
+                            chipOk: root.wizardStage >= 3
                             savedText: root.appController ? root.appController.calibrationLevel100Text : "-"
+                            capturedText: root.appController ? root.appController.calibrationCapturedLevelText : "-"
+                            captureHint: "Подставить в поле усреднённое показание основного контура"
+                            accent: "#0284c7"
+                            saveEnabled: root.appController !== null
+                            readEnabled: root.appController !== null
                             textMain: root.textMain
                             textSoft: root.textSoft
                             inputBg: root.inputBg
@@ -535,68 +533,24 @@ Item {
                             }
                         }
 
-                        Rectangle {
-                            Layout.fillWidth: true
-                            implicitHeight: liquidLayout.implicitHeight + 16
-                            radius: 10
-                            color: "#ffffff"
-                            border.width: 1
-                            border.color: "#d6e2ef"
-
-                            // Бирюзовая полоса: блок относится к плоскому конденсатору, как и его живая карточка.
-                            Rectangle {
-                                anchors.left: parent.left
-                                anchors.top: parent.top
-                                anchors.bottom: parent.bottom
-                                anchors.margins: 6
-                                width: 4
-                                radius: 2
-                                color: "#0f766e"
-                            }
-
-                            // Название отдельной строкой: рядом с длинной кнопкой оно не помещалось.
-                            ColumnLayout {
-                                id: liquidLayout
-                                anchors.fill: parent
-                                anchors.margins: 8
-                                anchors.leftMargin: 18
-                                spacing: 6
-
-                                Text {
-                                    Layout.fillWidth: true
-                                    text: "Плоский конденсатор: точка «топливо»"
-                                    color: root.textMain
-                                    font.pixelSize: 14
-                                    font.bold: true
-                                    font.family: "Bahnschrift"
-                                    elide: Text.ElideRight
-                                }
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 6
-
-                                    Text {
-                                        Layout.fillWidth: true
-                                        text: "Контур вида топлива, в приборе: " + (root.appController ? root.appController.mediaWizardCalText : "-")
-                                        color: root.textSoft
-                                        font.pixelSize: 11
-                                        font.family: "Bahnschrift"
-                                        elide: Text.ElideRight
-                                    }
-
-                                    FancyButton {
-                                        Layout.preferredWidth: 260
-                                        Layout.preferredHeight: 34
-                                        text: "Снять точку плоского конденсатора"
-                                        toolTipText: "Серия показаний плоского конденсатора в топливе, запись в точку «топливо»"
-                                        tone: "#16a34a"
-                                        toneHover: "#15803d"
-                                        tonePressed: "#166534"
-                                        enabled: root.appController !== null && root.writeAllowed && !root.mediaBusy
-                                        onClicked: if (root.appController) root.appController.captureMediaWizardLiquid()
-                                    }
-                                }
+                        // Точка плоского конденсатора снимается так же, как отметка: захват в поле, затем «Сохранить».
+                        CaptureValueBlock {
+                            id: pointLiquid
+                            title: "Плоский конденсатор: точка «топливо»"
+                            savedText: root.appController ? root.appController.mediaWizardCalText : "-"
+                            capturedText: root.appController ? root.appController.mediaWizardCapturedText : "-"
+                            captureHint: "Подставить в поле усреднённое показание плоского конденсатора"
+                            accent: "#0f766e"
+                            saveEnabled: root.appController !== null && !root.mediaBusy
+                            readEnabled: root.appController !== null && !root.mediaBusy
+                            textMain: root.textMain
+                            textSoft: root.textSoft
+                            inputBg: root.inputBg
+                            inputBorder: root.inputBorder
+                            inputFocus: root.inputFocus
+                            onReadRequested: if (root.appController) root.appController.refreshMediaWizardSaved()
+                            onSaveRequested: function(valueText) {
+                                if (root.appController) root.appController.saveMediaWizardLiquid(valueText)
                             }
                         }
 

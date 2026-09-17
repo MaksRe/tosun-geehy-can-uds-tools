@@ -75,10 +75,11 @@ class AppControllerContract:
     _media_wizard_enabled: Any
     _media_wizard_gap_timer: Any
     _media_wizard_live_raw: Any
-    _media_wizard_live_spread: Any
+    _media_wizard_recent: Any
+    _media_wizard_captured: Any
+    _media_wizard_captured_spread: Any
     _media_wizard_pending: Any
     _media_wizard_read_service: Any
-    _media_wizard_samples: Any
     _media_wizard_status: Any
     _media_wizard_status_color: Any
     _media_wizard_timeout_timer: Any

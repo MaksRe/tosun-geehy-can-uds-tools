@@ -4,30 +4,41 @@ import QtQuick.Layouts 1.15
 import "."
 
 /*
-  Блок одной отметки бака: 0 % или 100 %.
+  Блок одного сохраняемого значения: отметка бака или точка плоского конденсатора.
   Назначение:
-  - показывает, что лежит в приборе и записана ли отметка в этом сеансе;
-  - подставляет в поле усреднённый захват основного контура или принимает число вручную;
-  - отдаёт команды прочитать и записать отметку.
+  - показывает, что лежит в приборе, и короткое состояние;
+  - подставляет в поле усреднённый захват своего контура или принимает число вручную;
+  - отдаёт команды прочитать и записать значение.
+
+  Отметки и точки устроены одинаково, чтобы оператор делал одно и то же: дождался
+  захвата, нажал «Взять захват», затем «Сохранить».
 
   Публичные свойства:
-  - appController: контроллер приложения;
-  - title: подпись отметки;
-  - writtenStage: с какой стадии сценария отметка считается записанной;
+  - title: подпись значения, с названием контура;
+  - chipText/chipOk: короткое состояние и его цвет;
   - savedText: значение в приборе;
+  - capturedText: усреднённый захват контура или «-»;
+  - captureHint: подсказка к кнопке захвата;
+  - accent: цвет полосы слева, как у карточки своего контура;
+  - saveEnabled/readEnabled: доступность кнопок;
   - textMain/textSoft/inputBg/inputBorder/inputFocus: палитра окна.
 
   Сигналы:
-  - readRequested(): прочитать отметку из прибора;
+  - readRequested(): прочитать значение из прибора;
   - saveRequested(valueText): записать; пустая строка означает текущее показание прибора.
 */
 Rectangle {
     id: root
 
-    property var appController
     property string title: ""
-    property int writtenStage: 2
+    property string chipText: ""
+    property bool chipOk: false
     property string savedText: "-"
+    property string capturedText: "-"
+    property string captureHint: "Подставить в поле усреднённое показание"
+    property color accent: "#0284c7"
+    property bool saveEnabled: true
+    property bool readEnabled: true
     property color textMain: "#1f2d3d"
     property color textSoft: "#607084"
     property color inputBg: "#f7fbff"
@@ -37,9 +48,6 @@ Rectangle {
     signal readRequested()
     signal saveRequested(string valueText)
 
-    readonly property int stage: root.appController ? root.appController.calibrationWizardStage : 0
-    readonly property string captured: root.appController ? root.appController.calibrationCapturedLevelText : "-"
-
     // Подставляет значение из резервной копии, пока оператор не печатает в поле.
     function setValueIfIdle(value) {
         if (!valueField.activeFocus)
@@ -47,13 +55,13 @@ Rectangle {
     }
 
     Layout.fillWidth: true
-    implicitHeight: markLayout.implicitHeight + 16
+    implicitHeight: blockLayout.implicitHeight + 16
     radius: 10
     color: "#ffffff"
     border.width: 1
     border.color: "#d6e2ef"
 
-    // Синяя полоса: отметка относится к основному контуру, как и его живая карточка.
+    // Полоса слева в цвет карточки своего контура: сразу видно, к какому конденсатору относится блок.
     Rectangle {
         anchors.left: parent.left
         anchors.top: parent.top
@@ -61,11 +69,11 @@ Rectangle {
         anchors.margins: 6
         width: 4
         radius: 2
-        color: "#0284c7"
+        color: root.accent
     }
 
     ColumnLayout {
-        id: markLayout
+        id: blockLayout
         anchors.fill: parent
         anchors.margins: 8
         anchors.leftMargin: 18
@@ -76,32 +84,34 @@ Rectangle {
             spacing: 6
 
             Text {
+                Layout.fillWidth: true
+                Layout.minimumWidth: 80
                 text: root.title
                 color: root.textMain
                 font.pixelSize: 14
                 font.bold: true
                 font.family: "Bahnschrift"
+                elide: Text.ElideRight
             }
 
             Rectangle {
+                visible: root.chipText !== ""
                 radius: 7
-                color: root.stage >= root.writtenStage ? "#dcfce7" : "#e2e8f0"
-                border.color: root.stage >= root.writtenStage ? "#86efac" : "#cbd5e1"
-                implicitWidth: chipText.implicitWidth + 12
+                color: root.chipOk ? "#dcfce7" : "#e2e8f0"
+                border.color: root.chipOk ? "#86efac" : "#cbd5e1"
+                implicitWidth: chipLabel.implicitWidth + 12
                 implicitHeight: 22
 
                 Text {
-                    id: chipText
+                    id: chipLabel
                     anchors.centerIn: parent
-                    text: root.stage >= 4 ? "ОК" : (root.stage >= root.writtenStage ? "Записан" : "Ожидание")
-                    color: root.stage >= root.writtenStage ? "#166534" : "#475569"
+                    text: root.chipText
+                    color: root.chipOk ? "#166534" : "#475569"
                     font.pixelSize: 10
                     font.bold: true
                     font.family: "Bahnschrift"
                 }
             }
-
-            Item { Layout.fillWidth: true }
 
             Text {
                 text: "В приборе: " + root.savedText
@@ -117,7 +127,7 @@ Rectangle {
                 tone: "#0f766e"
                 toneHover: "#115e59"
                 tonePressed: "#134e4a"
-                enabled: root.appController !== null
+                enabled: root.readEnabled
                 onClicked: root.readRequested()
             }
         }
@@ -133,11 +143,11 @@ Rectangle {
                 tone: "#0284c7"
                 toneHover: "#0369a1"
                 tonePressed: "#075985"
-                toolTipText: "Подставить в поле усреднённое показание основного контура"
-                enabled: root.captured !== "-"
+                toolTipText: root.captureHint
+                enabled: root.capturedText !== "-"
                 onClicked: {
                     valueSwitch.checked = true
-                    valueField.text = root.captured
+                    valueField.text = root.capturedText
                 }
             }
 
@@ -168,7 +178,7 @@ Rectangle {
                 tone: "#16a34a"
                 toneHover: "#15803d"
                 tonePressed: "#166534"
-                enabled: root.appController !== null
+                enabled: root.saveEnabled
                 onClicked: root.saveRequested(valueSwitch.checked ? valueField.text : "")
             }
         }

@@ -1076,17 +1076,37 @@ class AppControllerPropertiesMixin(AppControllerContract):
         """Цель функции в живом показании плоского конденсатора, затем она позволяет дождаться устоявшегося значения."""
         if self._media_wizard_live_raw is None:
             return "-"
-        return f"{int(self._media_wizard_live_raw)} отсч."
+        # Без единиц, как у основного контура: оба числа стоят рядом и читаются одинаково.
+        return str(int(self._media_wizard_live_raw))
+
+    @Property(str, notify=mediaWizardChanged)
+    def mediaWizardCapturedText(self):
+        """Цель функции в усреднённом захвате плоского конденсатора, затем из него точка переносится в поле."""
+        return "-" if self._media_wizard_captured is None else str(int(self._media_wizard_captured))
+
+    @Property(str, notify=mediaWizardChanged)
+    def mediaWizardCapturedSpreadText(self):
+        """Цель функции в разбросе показаний за окно захвата, затем видно, устоялось ли число."""
+        spread = self._media_wizard_captured_spread
+        if spread is None:
+            return ""
+        return f"разброс {int(spread)} отсч. за {int(round(self._media_wizard_capture_window_s()))} с"
+
+    @Property(bool, notify=mediaWizardChanged)
+    def mediaWizardCapturedSpreadWarn(self):
+        """Цель функции в признаке неустоявшегося числа, затем разброс подсвечивается."""
+        spread = self._media_wizard_captured_spread
+        return spread is not None and int(spread) > self.MEDIA_WIZARD_STABLE_SPREAD
 
     @Property(str, notify=mediaWizardChanged)
     def mediaWizardAirText(self):
         """Цель функции в показе сохранённой точки в воздухе, затем она подтверждает первый шаг калибровки."""
-        return "-" if self._media_wizard_air is None else f"{int(self._media_wizard_air)} отсч."
+        return "-" if self._media_wizard_air is None else str(int(self._media_wizard_air))
 
     @Property(str, notify=mediaWizardChanged)
     def mediaWizardCalText(self):
         """Цель функции в показе сохранённой точки в жидкости, затем она подтверждает второй шаг калибровки."""
-        return "-" if self._media_wizard_cal is None else f"{int(self._media_wizard_cal)} отсч."
+        return "-" if self._media_wizard_cal is None else str(int(self._media_wizard_cal))
 
     @Property(str, notify=mediaWizardChanged)
     def mediaWizardSpanText(self):

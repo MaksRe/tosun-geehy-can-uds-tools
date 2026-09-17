@@ -234,9 +234,10 @@ class _WizardStub(AppControllerMediaWizardMixin):
         self._media_wizard_status = ""
         self._media_wizard_status_color = ""
         self._media_wizard_pending = None
-        self._media_wizard_samples = []
         self._media_wizard_live_raw = None
-        self._media_wizard_live_spread = None
+        self._media_wizard_recent = []
+        self._media_wizard_captured = None
+        self._media_wizard_captured_spread = None
         self._media_wizard_air = None
         self._media_wizard_cal = None
         self._media_wizard_enabled = None
