@@ -30,6 +30,7 @@ from .controller import (
     AppControllerLiveFreshnessMixin,
     AppControllerMarkMediaMixin,
     AppControllerMediaWizardMixin,
+    AppControllerNodeLiveMixin,
     AppControllerOptionsMixin,
     AppControllerProfileMixin,
     AppControllerPropertiesMixin,
@@ -49,6 +50,7 @@ class AppController(
     AppControllerMediaWizardMixin,
     AppControllerMarkMediaMixin,
     AppControllerLiveFreshnessMixin,
+    AppControllerNodeLiveMixin,
     AppControllerProfileMixin,
     AppControllerChamberMixin,
     AppControllerTrialMixin,
@@ -561,6 +563,8 @@ class AppController(
         self._init_mark_media_state()
         # Свежесть живых чисел: пришёл ли ответ и мерит ли контур.
         self._init_live_freshness_state()
+        # Текущие данные узла: опрос идёт, пока открыт их раздел.
+        self._init_node_live_state()
 
         # Окно температурного профиля держит таблицы и сумму внутри модуля.
         self._init_profile_state()

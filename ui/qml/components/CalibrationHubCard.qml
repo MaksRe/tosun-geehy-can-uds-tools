@@ -57,12 +57,17 @@ Card {
         }
 
         if (index === 1) {
+            var live = root.appController.nodeLive
+            return live.enabled ? "Уровень " + live.levelText : "Откройте, чтобы опросить узел"
+        }
+
+        if (index === 2) {
             if (root.appController.profileBusy)
                 return "Идёт обмен с прибором"
             return root.appController.profileDeviceStatusText
         }
 
-        if (index === 2) {
+        if (index === 3) {
             if (root.appController.chamberBusy)
                 return "Идёт замер точки"
             return "Снято точек: " + root.appController.chamberPointCount
@@ -198,6 +203,10 @@ Card {
                             "hint": "Отметки 0 % и 100 %, плоский конденсатор, подгонка нуля"
                         },
                         {
+                            "title": "Текущие данные узла",
+                            "hint": "Уровень, контуры, температуры, состояние прибора"
+                        },
+                        {
                             "title": "Температурный профиль",
                             "hint": "Таблицы из климатической камеры"
                         },
@@ -283,6 +292,18 @@ Card {
                 // Отметки бака и точки плоского конденсатора снимаются в одних положениях
                 // датчика, поэтому живут в одном разделе.
                 TankCalibrationCard {
+                    appController: root.appController
+                    cardColor: root.cardColor
+                    cardBorder: root.cardBorder
+                    textMain: root.textMain
+                    textSoft: root.textSoft
+                    inputBg: root.inputBg
+                    inputBorder: root.inputBorder
+                    inputFocus: root.inputFocus
+                }
+
+                // После калибровки сразу видно, какой уровень выдаёт прибор и что с ним происходит.
+                NodeLiveCard {
                     appController: root.appController
                     cardColor: root.cardColor
                     cardBorder: root.cardBorder

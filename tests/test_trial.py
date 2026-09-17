@@ -21,7 +21,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import chamber_fit
 import profile_model
-from ui.qml.controller import live_freshness_mixin as lf
 from ui.qml.controller.profile_mixin import AppControllerProfileMixin
 from ui.qml.controller.trial_mixin import TRIAL_EMULATION_OFF_VALUE, AppControllerTrialMixin
 from uds.data_identifiers import UdsData
@@ -72,7 +71,7 @@ class _FakeCan:
     is_trace = True
 
 
-class _TrialStub(AppControllerTrialMixin, lf.AppControllerLiveFreshnessMixin):
+class _TrialStub(AppControllerTrialMixin):
     """Носитель логики пробной калибровки без Qt и без шины.
 
     Запуск очереди подменён: вместо обмена с прибором очередь запоминается, а
@@ -123,25 +122,17 @@ class _TrialStub(AppControllerTrialMixin, lf.AppControllerLiveFreshnessMixin):
         self._trial_auto_backup_ok = False
         self._trial_auto_failed = False
 
-        self._trial_live = {key: None for key, _v, _s in self.TRIAL_LIVE_VARS}
-        self._trial_live_seen = {key: 0.0 for key, _v, _s in self.TRIAL_LIVE_VARS}
-        self._trial_live_enabled = True
-        self._trial_live_index = 0
-        self._trial_live_last_inject = 0.0
-        self._trial_live_last_poll = 0.0
-        self._trial_live_suspend_until = 0.0
-
-        # Учёт свежести без таймера Qt.
-        self._live_tracks = {"level": lf.LiveTrack(), "flatcap": lf.LiveTrack()}
-        self._live_age = {"main_ms": None, "media_ms": None, "received_s": None, "supported": None, "misses": 0}
-        self._live_age_counters = {"level": 0, "flatcap": 0, "trial": 0}
+        # Раздел текущих данных открыт: этап подмешивает отсчёты в свои замеры.
+        self._node_live_enabled = True
+        self._node_live_last_inject = 0.0
+        self._node_live_last_poll = 0.0
+        self._node_live_suspend_until = 0.0
 
         self._trial_gap_timer = _FakeTimer()
         self._trial_wait_timer = _FakeTimer()
         self._trial_timeout_timer = _FakeTimer()
         self._trial_poll_timer = _FakeTimer()
         self._trial_auto_timer = _FakeTimer()
-        self._trial_live_timer = _FakeTimer()
 
         self._calibration_active = True
         self._calibration_session_ready = True
@@ -1032,57 +1023,7 @@ def test_table_rows_mark_the_running_step():
     assert rows["level"]["current"] is False
 
 
-# ------------------------------------------------------------------ постоянные отсчёты
-
-def test_live_frame_updates_the_main_period():
-    stub = _TrialStub()
-    stub._handle_trial_live_frame(0x18DA2AF1, [0x05, 0x62, 0x00, 0x14, 0xD5, 0x12, 0x00, 0x00])
-    view = stub._trial_live_view()
-    assert view["mainRaw"] == "4821"
-    assert view["mainFresh"] is True
-
-
-def test_live_frame_decodes_signed_temperature_and_emulation():
-    stub = _TrialStub()
-    stub._handle_trial_live_frame(0x18DA2AF1, [0x05, 0x62, 0x00, 0x19, 0x70, 0xFE, 0x00, 0x00])
-    stub._handle_trial_live_frame(0x18DA2AF1, [0x05, 0x62, 0x00, 0x61, 0x52, 0x03, 0x00, 0x00])
-    view = stub._trial_live_view()
-    assert view["fuelTemp"] == "-40.0 °C"
-    assert view["emulationOn"] is True
-    assert "+85.0" in view["emulation"]
-
-
-def test_live_temperature_cards_say_where_the_value_comes_from():
-    """Температуры показываются отдельно, и видно, настоящий это датчик или эмуляция."""
-    stub = _TrialStub()
-    stub._handle_trial_live_frame(0x18DA2AF1, [0x05, 0x62, 0x00, 0x3B, 0xFA, 0x00, 0x00, 0x00])
-    view = stub._trial_live_view()
-    assert view["boardTemp"] == "+25.0 °C"
-    assert view["boardTempFresh"] is True
-    assert view["fuelTempFresh"] is False, "ответа о топливе не было"
-    assert view["tempSource"] == "эмуляция: нет данных"
-
-    off = int(TRIAL_EMULATION_OFF_VALUE) & 0xFFFF
-    stub._handle_trial_live_frame(0x18DA2AF1, [0x05, 0x62, 0x00, 0x61, off & 0xFF, off >> 8, 0x00, 0x00])
-    assert stub._trial_live_view()["tempSource"] == "с датчика"
-
-    stub._handle_trial_live_frame(0x18DA2AF1, [0x05, 0x62, 0x00, 0x61, 0x52, 0x03, 0x00, 0x00])
-    assert stub._trial_live_view()["tempSource"] == "задана эмуляцией"
-
-
-def test_live_frame_is_ignored_when_display_is_off():
-    stub = _TrialStub()
-    stub._trial_live_enabled = False
-    stub._handle_trial_live_frame(0x18DA2AF1, [0x05, 0x62, 0x00, 0x14, 0xD5, 0x12, 0x00, 0x00])
-    assert stub._trial_live["main_raw"] is None
-
-
-def test_old_live_data_is_marked_stale():
-    stub = _TrialStub()
-    stub._trial_live["main_raw"] = 4821
-    stub._trial_live_seen["main_raw"] = time.monotonic() - 10.0
-    assert stub._trial_live_view()["mainFresh"] is False
-
+# ------------------------------------------------------------------ отсчёты во время этапа
 
 def test_live_reads_are_injected_before_a_write():
     """Во время этапа отсчёты обновляются, но только на границе его замеров."""
@@ -1106,7 +1047,7 @@ def test_live_reads_never_split_a_series_of_reads():
 def test_live_reads_pause_while_the_device_restarts():
     stub = _TrialStub()
     stub._trial_busy = True
-    stub._trial_live_suspend_until = time.monotonic() + 5.0
+    stub._node_live_suspend_until = time.monotonic() + 5.0
     stub._trial_ops = [stub._op_write("w", UdsData.fuel_zero_trim_count, 0)]
     stub._trial_next_op()
     assert stub._trial_pending["key"] == "w"
@@ -1115,67 +1056,12 @@ def test_live_reads_pause_while_the_device_restarts():
 def test_step_waits_for_the_answer_to_a_fresh_poll():
     """Отказ старой прошивки на опрос отсчётов этап не должен принять за ответ на свой запрос."""
     stub = _TrialStub()
-    stub._trial_live_last_poll = time.monotonic()
+    stub._node_live_last_poll = time.monotonic()
     ops = [stub._op_read("status", UdsData.fuel_thermal_profile_status)]
     assert AppControllerTrialMixin._trial_start_ops(stub, ops, "_trial_link_done")
     assert stub._trial_gap_timer.started == 1
     assert stub._trial_pending is None
     assert stub._trial_read.sent == []
-
-
-def test_idle_poll_stays_off_the_bus_during_the_calibration_handshake():
-    stub = _TrialStub()
-    stub._calibration_session_ready = False
-    stub._on_trial_live_tick()
-    assert stub._trial_read.sent == []
-
-
-def test_idle_poll_waits_while_another_section_uses_the_bus():
-    stub = _TrialStub()
-    stub._profile_busy = True
-    stub._on_trial_live_tick()
-    assert stub._trial_read.sent == []
-
-    stub._profile_busy = False
-    stub._on_trial_live_tick()
-    assert len(stub._trial_read.sent) == 1
-
-
-def _tick_freely(stub, count):
-    """Опрос по такту без пауз между запросами: как если бы ответы приходили сразу."""
-    for _ in range(count):
-        stub._uds_background_tx_s = 0.0
-        stub._on_trial_live_tick()
-
-
-def test_idle_poll_asks_the_measurement_age_once_a_round():
-    """Сырой период застывает вместе с контуром, поэтому раз за круг спрашивается возраст измерения."""
-    stub = _TrialStub()
-    _tick_freely(stub, 14)
-    round_dids = [int(var.pid) for _key, var, _signed in stub.TRIAL_LIVE_VARS] + [int(UdsData.measurement_age.pid)]
-    assert stub._trial_read.sent == round_dids * 2
-
-
-def test_idle_poll_stops_asking_the_age_of_old_firmware():
-    stub = _TrialStub()
-    stub._live_age["supported"] = False
-    _tick_freely(stub, 14)
-    assert int(UdsData.measurement_age.pid) not in stub._trial_read.sent
-    assert len(stub._trial_read.sent) == 14
-
-
-def test_live_view_says_whether_the_circuit_measures():
-    stub = _TrialStub()
-    stub._handle_trial_live_frame(0x18DA2AF1, [0x05, 0x62, 0x00, 0x14, 0xD5, 0x12, 0x00, 0x00])
-    # Основной контур не мерит 10 с, контур вида топлива мерил 100 мс назад.
-    stub._handle_live_age_frame(0x18DA2AF1, [0x07, 0x62, 0x00, 0x64, 0x10, 0x27, 0x64, 0x00])
-    view = stub._trial_live_view()
-
-    assert view["mainFreshness"]["text"].startswith("ответ ")
-    assert view["mainFreshness"]["deviceText"] == "контур не мерит 10 с"
-    assert view["mainFreshness"]["deviceColor"] == lf.COLOR_BAD
-    assert view["mediaFreshness"]["text"] == "ответов ещё не было"
-    assert view["mediaFreshness"]["deviceText"] == "контур мерит"
 
 
 # ------------------------------------------------------------------ разбор ответов

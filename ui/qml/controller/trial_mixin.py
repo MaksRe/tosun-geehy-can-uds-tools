@@ -53,6 +53,7 @@ from uds.services.write_data_by_id import ServiceWriteDataById
 from .bus_guard import background_request_recent, note_background_request, uds_exchange_busy
 from .contract import AppControllerContract
 from .eeprom_commit_mixin import EEPROM_FLAG_SPI_ERROR, decode_eeprom_state, eeprom_boot_warning
+from .node_live_mixin import NODE_LIVE_INJECT_S, NODE_LIVE_INJECT_VARS
 
 # На шине «эмуляция выключена» передаётся как 0x8000, а читается как -32768.
 TRIAL_EMULATION_OFF_WIRE = 0x8000
@@ -116,19 +117,8 @@ class AppControllerTrialMixin(AppControllerContract):
     # Температуры проверки применения: все узлы и точки между ними.
     TRIAL_APPLY_TEMPS_X10 = (-400, -300, -200, 0, 125, 250, 375, 500, 700, 850)
 
-    # Постоянный показ отсчётов: что читается, как часто и когда данные считаются несвежими.
-    TRIAL_LIVE_VARS = (
-        ("main_raw", UdsData.curr_fuel_tank, False),
-        ("main_comp", UdsData.fuel_compensated_period, False),
-        ("media", UdsData.fuel_media_flatcap_raw, False),
-        ("fuel_t", UdsData.raw_temperature, True),
-        ("board_t", UdsData.raw_board_temperature, True),
-        ("emul", UdsData.temperature_emulation_x10, True),
-    )
-    TRIAL_LIVE_PERIOD_MS = 200
+    # Пауза перед этапом, если опрос текущих данных узла только что отправил запрос, мс.
     TRIAL_LIVE_GUARD_MS = 150
-    TRIAL_LIVE_STALE_S = 3.0
-    TRIAL_LIVE_INJECT_S = 1.0
     TRIAL_LOG_LIMIT = 600
 
     COLOR_IDLE = "#64748b"
@@ -236,14 +226,6 @@ class AppControllerTrialMixin(AppControllerContract):
         self._trial_auto_backup_ok = False
         self._trial_auto_failed = False
 
-        self._trial_live: dict = {key: None for key, _var, _signed in self.TRIAL_LIVE_VARS}
-        self._trial_live_seen: dict = {key: 0.0 for key, _var, _signed in self.TRIAL_LIVE_VARS}
-        self._trial_live_enabled = False
-        self._trial_live_index = 0
-        self._trial_live_last_inject = 0.0
-        self._trial_live_last_poll = 0.0
-        self._trial_live_suspend_until = 0.0
-
         self._trial_gap_timer = QTimer(self)
         self._trial_gap_timer.setSingleShot(True)
         self._trial_gap_timer.timeout.connect(self._trial_next_op)
@@ -263,11 +245,6 @@ class AppControllerTrialMixin(AppControllerContract):
         self._trial_auto_timer = QTimer(self)
         self._trial_auto_timer.setSingleShot(True)
         self._trial_auto_timer.timeout.connect(self._on_trial_auto_timer)
-
-        self._trial_live_timer = QTimer(self)
-        self._trial_live_timer.setInterval(self.TRIAL_LIVE_PERIOD_MS)
-        self._trial_live_timer.timeout.connect(self._on_trial_live_tick)
-        self._trial_live_timer.start()
 
     # ------------------------------------------------------------------ операции очереди
 
@@ -321,7 +298,7 @@ class AppControllerTrialMixin(AppControllerContract):
         self.trialChanged.emit()
         # Ответ на только что отправленный опрос отсчётов ещё в пути. Отказ старой
         # прошивки на него этап принял бы за ответ на свой запрос, поэтому пауза.
-        last_background = max(float(self._trial_live_last_poll), float(getattr(self, "_uds_background_tx_s", 0.0) or 0.0))
+        last_background = max(float(self._node_live_last_poll), float(getattr(self, "_uds_background_tx_s", 0.0) or 0.0))
         if time.monotonic() - last_background < self.TRIAL_LIVE_GUARD_MS / 1000.0:
             self._trial_gap_timer.start(self.TRIAL_LIVE_GUARD_MS)
         else:
@@ -335,15 +312,15 @@ class AppControllerTrialMixin(AppControllerContract):
         чтением подмешивать нельзя, иначе между сырым и итоговым периодом
         вклинится лишний запрос и сверка применения станет менее точной.
         """
-        if not self._trial_live_enabled or not self._trial_ops:
+        if not self._node_live_enabled or not self._trial_ops:
             return
         if self._trial_ops[0]["kind"] not in ("write", "wait"):
             return
         now = time.monotonic()
-        if now < self._trial_live_suspend_until or now - self._trial_live_last_inject < self.TRIAL_LIVE_INJECT_S:
+        if now < self._node_live_suspend_until or now - self._node_live_last_inject < NODE_LIVE_INJECT_S:
             return
-        self._trial_live_last_inject = now
-        reads = [self._op_read(f"_live_{key}", var, signed) for key, var, signed in self.TRIAL_LIVE_VARS[:3]]
+        self._node_live_last_inject = now
+        reads = [self._op_read(f"_live_{key}", var, signed) for key, var, signed in NODE_LIVE_INJECT_VARS]
         self._trial_ops[0:0] = reads
 
     def _trial_next_op(self):
@@ -385,7 +362,7 @@ class AppControllerTrialMixin(AppControllerContract):
             except Exception as error:
                 self._trial_results[op["key"]] = ("error", str(error))
             # Пока прибор перезапускается, отсчёты не опрашиваются: запросы ушли бы в пустоту.
-            self._trial_live_suspend_until = time.monotonic() + (self.TRIAL_RESET_WAIT_MS + 500) / 1000.0
+            self._node_live_suspend_until = time.monotonic() + (self.TRIAL_RESET_WAIT_MS + 500) / 1000.0
             self._trial_wait_timer.start(self.TRIAL_RESET_WAIT_MS)
             return
 
@@ -503,140 +480,6 @@ class AppControllerTrialMixin(AppControllerContract):
         limit = 1 << bits
         raw &= limit - 1
         return int(raw - limit if raw >= (limit >> 1) else raw)
-
-    # ------------------------------------------------------------------ постоянный показ отсчётов
-
-    def _handle_trial_live_frame(self, identifier: int, payload):
-        """Подхватывает отсчёты из любого ответа прибора, кто бы их ни запросил.
-
-        Отсчёты читают и этапы проверки, и прогон, и калибровка. Разбирая все
-        ответы, показ обновляется даже тогда, когда шина занята другим разделом.
-        """
-        if not self._trial_live_enabled:
-            return
-        if not isinstance(payload, (list, tuple)) or len(payload) < 5:
-            return
-        if not self._is_calibration_response_identifier(identifier):
-            return
-        if ((int(payload[0]) >> 4) & 0x0F) != 0x00:
-            return
-        length = int(payload[0]) & 0x0F
-        if length < 4 or length > (len(payload) - 1):
-            return
-        body = [int(value) & 0xFF for value in payload[1:1 + length]]
-        if body[0] != 0x62:
-            return
-
-        answered = {(body[1] << 8) | body[2], (body[2] << 8) | body[1]}
-        for key, var, signed in self.TRIAL_LIVE_VARS:
-            if (int(var.pid) & 0xFFFF) in answered:
-                self._trial_live[key] = self._trial_decode(body[3:], var, signed)
-                self._trial_live_seen[key] = time.monotonic()
-                # Те же отсчёты, что в разделах калибровки: свежесть у них общая.
-                if key == "main_raw":
-                    self._live_note_value("level", self._trial_live[key])
-                elif key == "media":
-                    self._live_note_value("flatcap", self._trial_live[key])
-                self.trialLiveChanged.emit()
-                return
-
-    def _on_trial_live_tick(self):
-        """Опрашивает отсчёты по кругу, пока шину не занимает никто другой."""
-        if not self._trial_live_enabled:
-            return
-        # Возраст данных меняется и без новых ответов, поэтому показ обновляется каждый такт.
-        self.trialLiveChanged.emit()
-
-        if not self._can.is_connect or not self._can.is_trace:
-            return
-        if uds_exchange_busy(self) or background_request_recent(self):
-            return
-        # Пока калибровка открывает сессию и доступ, лишние запросы на шину не нужны.
-        if bool(self._calibration_active) and not bool(self._calibration_session_ready):
-            return
-        if time.monotonic() < self._trial_live_suspend_until:
-            return
-
-        if self._live_age_due("trial"):
-            # Сырой период застывает вместе с контуром: раз за круг спрашиваем возраст измерения.
-            var = UdsData.measurement_age
-            self._live_age_note_request()
-        else:
-            _key, var, _signed = self.TRIAL_LIVE_VARS[self._trial_live_index]
-            self._trial_live_index = (self._trial_live_index + 1) % len(self.TRIAL_LIVE_VARS)
-        self._trial_live_last_poll = time.monotonic()
-        note_background_request(self)
-        try:
-            self._trial_read.read_data_by_identifier(self._build_calibration_tx_identifier(), var)
-        except Exception:
-            pass
-
-    def _trial_set_live_enabled(self, enabled: bool):
-        value = bool(enabled)
-        if value == self._trial_live_enabled:
-            return
-        self._trial_live_enabled = value
-        self.trialLiveChanged.emit()
-
-    def _trial_live_view(self) -> dict:
-        """Готовит отсчёты для показа: числа, свежесть и состояние эмуляции."""
-        now = time.monotonic()
-
-        def fresh(key):
-            return self._trial_live[key] is not None and (now - self._trial_live_seen[key]) <= self.TRIAL_LIVE_STALE_S
-
-        def number(key):
-            value = self._trial_live[key]
-            return "—" if value is None else str(int(value))
-
-        def temperature(key):
-            value = self._trial_live[key]
-            return "—" if value is None else f"{int(value) / 10:+.1f} °C"
-
-        emul = self._trial_live["emul"]
-        emulation_on = emul is not None and emul != TRIAL_EMULATION_OFF_VALUE
-        # Откуда взялись обе температуры: эмуляция действует на оба датчика сразу.
-        if emul is None:
-            emulation_text = "нет данных"
-            temp_source = "эмуляция: нет данных"
-        elif emulation_on:
-            emulation_text = f"включена, {int(emul) / 10:+.1f} °C"
-            temp_source = "задана эмуляцией"
-        else:
-            emulation_text = "выключена"
-            temp_source = "с датчика"
-
-        # Каждый отсчёт спрашивается раз за круг: шесть отсчётов и возраст измерения.
-        live_round_s = self.TRIAL_LIVE_PERIOD_MS * (len(self.TRIAL_LIVE_VARS) + 1) / 1000.0
-
-        seen = [self._trial_live_seen[key] for key in ("main_raw", "media") if self._trial_live[key] is not None]
-        if not self._trial_live_enabled:
-            age_text = "опрос выключен"
-        elif not seen:
-            age_text = "ждём первых ответов прибора"
-        else:
-            age = now - max(seen)
-            age_text = f"обновлено {age:.1f} с назад".replace(".", ",")
-
-        return {
-            "mainRaw": number("main_raw"),
-            "mainComp": number("main_comp"),
-            "media": number("media"),
-            "mainFresh": fresh("main_raw"),
-            "mediaFresh": fresh("media"),
-            "fuelTemp": temperature("fuel_t"),
-            "boardTemp": temperature("board_t"),
-            "emulation": emulation_text,
-            "emulationOn": emulation_on,
-            "fuelTempFresh": fresh("fuel_t"),
-            "boardTempFresh": fresh("board_t"),
-            "tempSource": temp_source,
-            "age": age_text,
-            "enabled": self._trial_live_enabled,
-            # Приходят ли ответы и мерит ли контур сам: застывшее число без этого не понять.
-            "mainFreshness": self._live_freshness_view("level", live_round_s),
-            "mediaFreshness": self._live_freshness_view("flatcap", live_round_s),
-        }
 
     # ------------------------------------------------------------------ разбор результатов
 
@@ -1941,7 +1784,7 @@ class AppControllerTrialMixin(AppControllerContract):
         program = self._trial_value(res, "boot")
         if program == 0:
             ctx["elapsed"] = now - ctx["started"]
-            self._trial_live_suspend_until = 0.0
+            self._node_live_suspend_until = 0.0
             self._trial_mark_running(
                 "persist",
                 f"Прибор вернулся в основную программу через {ctx['elapsed']:.1f} с. "
@@ -1959,13 +1802,13 @@ class AppControllerTrialMixin(AppControllerContract):
 
         if now < ctx["deadline"]:
             # Пока прибор перезапускается, отсчёты не опрашиваются: запросы только мешали бы.
-            self._trial_live_suspend_until = ctx["deadline"]
+            self._node_live_suspend_until = ctx["deadline"]
             self._trial_start_ops(
                 [self._op_wait(self.TRIAL_REBOOT_POLL_MS), self._op_read("boot", VAR_ACTIVE_PROGRAM)],
                 "_trial_persist_wait")
             return
 
-        self._trial_live_suspend_until = 0.0
+        self._node_live_suspend_until = 0.0
         self._invalidate_calibration_session_after_nrc(
             "Калибровка: прибор перезапущен пробной калибровкой. Для дальнейшей записи запустите калибровку заново.")
         timeout = f"{self.TRIAL_REBOOT_TIMEOUT_S:.0f}"

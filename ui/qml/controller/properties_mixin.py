@@ -69,7 +69,7 @@ class AppControllerPropertiesMixin(AppControllerContract):
     profileChanged = Signal()
     chamberChanged = Signal()
     trialChanged = Signal()
-    trialLiveChanged = Signal()
+    nodeLiveChanged = Signal()
     eepromCommitChanged = Signal()
     softwareVersionChanged = Signal()
 
@@ -904,10 +904,10 @@ class AppControllerPropertiesMixin(AppControllerContract):
         """Цель функции в короткой сводке, затем видно, сколько этапов пройдено."""
         return self._trial_summary()
 
-    @Property("QVariantMap", notify=trialLiveChanged)
-    def trialLive(self):
-        """Цель функции в постоянном показе отсчётов обоих контуров, затем видно, что прибор жив."""
-        return self._trial_live_view()
+    @Property("QVariantMap", notify=nodeLiveChanged)
+    def nodeLive(self):
+        """Цель функции в показе текущих данных узла, затем видно уровень и что происходит с прибором."""
+        return self._node_live_view()
 
     @Property("QVariantMap", notify=eepromCommitChanged)
     def eepromCommit(self):

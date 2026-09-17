@@ -118,7 +118,7 @@ class AppControllerContract:
     _chamber_timeout_timer: Any
     chamberChanged: Any
     trialChanged: Any
-    trialLiveChanged: Any
+    nodeLiveChanged: Any
     _trial_read: Any
     _trial_write: Any
     _trial_steps_state: Any
@@ -147,12 +147,21 @@ class AppControllerContract:
     _trial_auto_stop_requested: Any
     _trial_auto_backup_ok: Any
     _trial_auto_failed: Any
-    _trial_live: Any
-    _trial_live_seen: Any
-    _trial_live_enabled: Any
-    _trial_live_index: Any
-    _trial_live_last_inject: Any
-    _trial_live_last_poll: Any
+    _node_live_read: Any
+    _node_live: Any
+    _node_live_seen: Any
+    _node_live_asked: Any
+    _node_live_refusals: Any
+    _node_live_missing: Any
+    _node_live_pending_key: Any
+    _node_live_pending_s: Any
+    _node_live_j1939: Any
+    _node_live_j1939_seen: Any
+    _node_live_enabled: Any
+    _node_live_last_inject: Any
+    _node_live_last_poll: Any
+    _node_live_suspend_until: Any
+    _node_live_timer: Any
     _trial_dirty: Any
     _trial_expect_trusted: Any
     _profile_retries_used: Any
@@ -196,13 +205,11 @@ class AppControllerContract:
     _options_write_verify: Any
     _uds_background_tx_s: Any
     _chamber_attempt: Any
-    _trial_live_suspend_until: Any
     _trial_gap_timer: Any
     _trial_wait_timer: Any
     _trial_timeout_timer: Any
     _trial_poll_timer: Any
     _trial_auto_timer: Any
-    _trial_live_timer: Any
     _diagnostics_counter_delta: Any
     _diagnostics_counter_growing: Any
     _diagnostics_counter_prev: Any

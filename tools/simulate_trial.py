@@ -291,7 +291,8 @@ ctrl._calibration_session_ready = True
 ctrl._service_security_unlocked = True
 ctrl._service_access_target_sa = 0x6A
 ctrl._start_calibration_poll_timer()
-ctrl._trial_set_live_enabled(True)
+# Раздел текущих данных открыт: его опрос не должен мешать этапам проверки.
+ctrl._node_live_set_enabled(True)
 
 assert ctrl._trial_auto_start(), "автоматический прогон не запустился"
 started = time.monotonic()

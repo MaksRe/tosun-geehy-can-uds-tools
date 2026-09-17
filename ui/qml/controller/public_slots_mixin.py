@@ -3059,9 +3059,9 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._trial_auto_stop()
 
     @Slot(bool)
-    def setTrialLiveEnabled(self, enabled):
-        """Цель функции в включении постоянного опроса отсчётов, затем он идёт, пока раздел открыт."""
-        self._trial_set_live_enabled(bool(enabled))
+    def setNodeLiveEnabled(self, enabled):
+        """Цель функции в включении опроса текущих данных узла, затем он идёт, пока раздел открыт."""
+        self._node_live_set_enabled(bool(enabled))
 
     @Slot()
     def trialEmulationOff(self):

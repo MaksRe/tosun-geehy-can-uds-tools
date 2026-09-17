@@ -9,6 +9,7 @@ from .diagnostics_mixin import AppControllerDiagnosticsMixin
 from .live_freshness_mixin import AppControllerLiveFreshnessMixin
 from .mark_media_mixin import AppControllerMarkMediaMixin
 from .media_wizard_mixin import AppControllerMediaWizardMixin
+from .node_live_mixin import AppControllerNodeLiveMixin
 from .options_mixin import AppControllerOptionsMixin
 from .profile_mixin import AppControllerProfileMixin
 from .properties_mixin import AppControllerPropertiesMixin
@@ -28,6 +29,7 @@ __all__ = [
     "AppControllerLiveFreshnessMixin",
     "AppControllerMarkMediaMixin",
     "AppControllerMediaWizardMixin",
+    "AppControllerNodeLiveMixin",
     "AppControllerOptionsMixin",
     "AppControllerProfileMixin",
     "AppControllerPropertiesMixin",
