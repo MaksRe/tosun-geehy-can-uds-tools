@@ -504,6 +504,17 @@ Item {
                     }
                 }
 
+                // Итог записи вида топлива к последней отметке: нужен модели уровня по двум контурам.
+                Text {
+                    Layout.fillWidth: true
+                    visible: text !== ""
+                    text: root.appController ? root.appController.calibrationMarkMediaStatus : ""
+                    color: root.appController ? root.appController.calibrationMarkMediaStatusColor : root.textSoft
+                    font.pixelSize: 11
+                    font.family: "Bahnschrift"
+                    wrapMode: Text.WordWrap
+                }
+
                 RowLayout {
                     Layout.fillWidth: true
                     Layout.fillHeight: false

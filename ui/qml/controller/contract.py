@@ -174,6 +174,20 @@ class AppControllerContract:
     _eeprom_commit_probes: Any
     _eeprom_commit_boot_warned: Any
     _eeprom_commit_timer: Any
+    markMediaChanged: Any
+    _mark_media_read_service: Any
+    _mark_media_write_service: Any
+    _mark_media_intent: Any
+    _mark_media_active: Any
+    _mark_media_mark_did: Any
+    _mark_media_pending: Any
+    _mark_media_samples: Any
+    _mark_media_value: Any
+    _mark_media_air: Any
+    _mark_media_status: Any
+    _mark_media_status_color: Any
+    _mark_media_gap_timer: Any
+    _mark_media_timeout_timer: Any
     _options_write_verify: Any
     _uds_background_tx_s: Any
     _chamber_attempt: Any

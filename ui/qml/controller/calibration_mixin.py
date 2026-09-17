@@ -1143,6 +1143,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
                     expected_value = self._calibration_write_verify_pending.get(int(did))
                     did_label = self._calibration_did_label(did)
                     self._calibration_write_verify_pending.pop(int(did), None)
+                    self._mark_media_forget_intent(int(did))
                     if int(did) == int(UdsData.empty_fuel_tank.pid):
                         self._calibration_level0_written = False
                         self._calibration_verify0_ok = False
@@ -1495,11 +1496,15 @@ class AppControllerCalibrationMixin(AppControllerContract):
                         f"Калибровка: автопроверка DID 0x{did:04X} успешна (ожидалось {expected_value}, факт {value}).",
                         RowColor.green,
                     )
+                    if did in (int(UdsData.empty_fuel_tank.pid), int(UdsData.full_fuel_tank.pid)):
+                        # Отметка легла в прибор: к ней снимается вид топлива для модели по двум контурам.
+                        self._mark_media_on_mark_verified(did)
                 else:
                     if did == int(UdsData.empty_fuel_tank.pid):
                         self._calibration_verify0_ok = False
                     elif did == int(UdsData.full_fuel_tank.pid):
                         self._calibration_verify100_ok = False
+                    self._mark_media_forget_intent(did)
                     self._append_log(
                         f"Калибровка: автопроверка DID 0x{did:04X} НЕ пройдена (ожидалось {expected_value}, факт {value}).",
                         RowColor.red,
@@ -1610,6 +1615,8 @@ class AppControllerCalibrationMixin(AppControllerContract):
 
         did, value = self._calibration_restore_queue.pop(0)
         self._calibration_restore_current_did = int(did)
+        # Возврат копии пишет отметку не по месту: вид топлива к ней снимать нельзя.
+        self._mark_media_forget_intent(int(did))
         target_var = UdsData.get_var_by_pid(int(did))
         if target_var is None:
             self._calibration_restore_active = False

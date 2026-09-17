@@ -26,6 +26,7 @@ def uds_exchange_busy(ctrl, ignore: tuple[str, ...] = ()) -> str:
         ("chamber", bool(flag("_chamber_busy"))),
         ("trial", bool(flag("_trial_busy"))),
         ("media_wizard", bool(flag("_media_wizard_busy")) or flag("_media_wizard_pending", None) is not None),
+        ("mark_media", bool(flag("_mark_media_active"))),
         ("diagnostics", bool(flag("_diagnostics_running"))),
         ("calibration", bool(str(flag("_calibration_sequence_waiting_action", "") or ""))
          or bool(flag("_calibration_write_verify_pending", {}))

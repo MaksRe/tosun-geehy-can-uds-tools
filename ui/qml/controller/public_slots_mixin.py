@@ -1647,6 +1647,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             tx_identifier=self._build_calibration_tx_identifier(),
         ):
             self._calibration_write_verify_pending[int(UdsData.empty_fuel_tank.pid)] = int(value)
+            self._mark_media_note_intent(int(UdsData.empty_fuel_tank.pid), value)
             self._calibration_level0_written = True
             self._calibration_verify0_ok = False
             self.calibrationVerificationChanged.emit()
@@ -1673,6 +1674,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             tx_identifier=self._build_calibration_tx_identifier(),
         ):
             self._calibration_write_verify_pending[int(UdsData.full_fuel_tank.pid)] = int(value)
+            self._mark_media_note_intent(int(UdsData.full_fuel_tank.pid), value)
             self._calibration_level100_written = True
             self._calibration_verify100_ok = False
             self.calibrationVerificationChanged.emit()

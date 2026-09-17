@@ -27,6 +27,7 @@ from .controller import (
     AppControllerEepromCommitMixin,
     AppControllerCollectorMixin,
     AppControllerDiagnosticsMixin,
+    AppControllerMarkMediaMixin,
     AppControllerMediaWizardMixin,
     AppControllerOptionsMixin,
     AppControllerProfileMixin,
@@ -45,6 +46,7 @@ class AppController(
     AppControllerCollectorMixin,
     AppControllerDiagnosticsMixin,
     AppControllerMediaWizardMixin,
+    AppControllerMarkMediaMixin,
     AppControllerProfileMixin,
     AppControllerChamberMixin,
     AppControllerTrialMixin,
@@ -553,6 +555,8 @@ class AppController(
 
         # Мастер калибровки контура вида топлива тоже держит своё состояние внутри модуля.
         self._init_media_wizard_state()
+        # Вид топлива в момент отметок бака пишется цепочкой после сверки отметки.
+        self._init_mark_media_state()
 
         # Окно температурного профиля держит таблицы и сумму внутри модуля.
         self._init_profile_state()

@@ -64,6 +64,7 @@ class AppControllerPropertiesMixin(AppControllerContract):
     optionsBulkRowsChanged = Signal()
     diagnosticsChanged = Signal()
     mediaWizardChanged = Signal()
+    markMediaChanged = Signal()
     profileChanged = Signal()
     chamberChanged = Signal()
     trialChanged = Signal()
@@ -1033,6 +1034,16 @@ class AppControllerPropertiesMixin(AppControllerContract):
     def mediaWizardBusy(self):
         """Цель функции в признаке идущей операции мастера, затем она блокирует кнопки на время записи."""
         return bool(self._media_wizard_busy)
+
+    @Property(str, notify=markMediaChanged)
+    def calibrationMarkMediaStatus(self):
+        """Итог записи вида топлива к отметке бака: видно, готова ли отметка для модели по двум контурам."""
+        return str(self._mark_media_status)
+
+    @Property(str, notify=markMediaChanged)
+    def calibrationMarkMediaStatusColor(self):
+        """Цвет итога записи вида топлива к отметке."""
+        return str(self._mark_media_status_color)
 
     @Property(bool, notify=mediaWizardChanged)
     def mediaWizardWatching(self):
