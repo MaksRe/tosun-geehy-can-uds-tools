@@ -53,10 +53,22 @@ Rectangle {
     border.width: 1
     border.color: "#d6e2ef"
 
+    // Синяя полоса: отметка относится к основному контуру, как и его живая карточка.
+    Rectangle {
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.margins: 6
+        width: 4
+        radius: 2
+        color: "#0284c7"
+    }
+
     ColumnLayout {
         id: markLayout
         anchors.fill: parent
         anchors.margins: 8
+        anchors.leftMargin: 18
         spacing: 6
 
         RowLayout {

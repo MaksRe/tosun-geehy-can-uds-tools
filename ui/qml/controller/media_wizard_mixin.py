@@ -45,8 +45,11 @@ class AppControllerMediaWizardMixin(AppControllerContract):
     # поэтому разница в пару десятков отсчётов означает ошибку в снятии точки.
     MEDIA_WIZARD_MIN_SPAN = 200
 
-    # Период обновления живого показания, когда мастер просто наблюдает, мс.
+    # Период обновления живого показания, пока интервал опроса калибровки неизвестен, мс.
     MEDIA_WIZARD_WATCH_GAP_MS = 250
+
+    # Пауза перед первым запросом наблюдения: даёт ответить на первое чтение основного контура.
+    MEDIA_WIZARD_WATCH_START_MS = 150
 
     MEDIA_WIZARD_COLOR_OK = "#16a34a"
     MEDIA_WIZARD_COLOR_WARN = "#d97706"
@@ -152,7 +155,7 @@ class AppControllerMediaWizardMixin(AppControllerContract):
         # Операция кончилась любым исходом, но наблюдение оператор не выключал:
         # без этого отсчёты замирали навсегда, а кнопка выглядела включённой.
         if self._media_wizard_watching:
-            self._media_wizard_gap_timer.start(self.MEDIA_WIZARD_WATCH_GAP_MS)
+            self._media_wizard_gap_timer.start(self._media_wizard_watch_gap_ms())
 
     def _on_media_wizard_timeout(self):
         """Прибор не ответил вовремя."""
@@ -164,7 +167,7 @@ class AppControllerMediaWizardMixin(AppControllerContract):
 
         if action in ("watch", "age"):
             # Наблюдение не критично: пробуем ещё раз на следующем шаге.
-            self._media_wizard_gap_timer.start(self.MEDIA_WIZARD_WATCH_GAP_MS)
+            self._media_wizard_gap_timer.start(self._media_wizard_watch_gap_ms())
             return
 
         self._media_wizard_finish(
@@ -181,7 +184,7 @@ class AppControllerMediaWizardMixin(AppControllerContract):
         if self._media_wizard_watching:
             # Живое показание фоновое: оно уступает шину разделам, которые ведут обмен.
             if uds_exchange_busy(self, ignore=("media_wizard",)) or background_request_recent(self):
-                self._media_wizard_gap_timer.start(self.MEDIA_WIZARD_WATCH_GAP_MS)
+                self._media_wizard_gap_timer.start(self._media_wizard_watch_gap_ms())
                 return
             if self._live_age_due("flatcap"):
                 # Показание фильтрованное и при остановке контура застывает: изредка спрашиваем возраст измерения.
@@ -218,7 +221,7 @@ class AppControllerMediaWizardMixin(AppControllerContract):
             code = body[2] if len(body) > 2 else 0
             if action == "age":
                 # Старая прошивка не знает возраста измерения: наблюдение идёт дальше без него.
-                self._media_wizard_gap_timer.start(self.MEDIA_WIZARD_WATCH_GAP_MS)
+                self._media_wizard_gap_timer.start(self._media_wizard_watch_gap_ms())
                 return
             if action == "watch":
                 self._media_wizard_watching = False
@@ -268,14 +271,14 @@ class AppControllerMediaWizardMixin(AppControllerContract):
         """Обрабатывает прочитанное значение в зависимости от текущего шага."""
         if action == "age":
             # Сам возраст разобрал учёт свежести, здесь только продолжаем наблюдение.
-            self._media_wizard_gap_timer.start(self.MEDIA_WIZARD_WATCH_GAP_MS)
+            self._media_wizard_gap_timer.start(self._media_wizard_watch_gap_ms())
             return
 
         if action == "watch":
             self._live_note_value("flatcap", value)
             self._media_wizard_live_raw = int(value)
             self.mediaWizardChanged.emit()
-            self._media_wizard_gap_timer.start(self.MEDIA_WIZARD_WATCH_GAP_MS)
+            self._media_wizard_gap_timer.start(self._media_wizard_watch_gap_ms())
             return
 
         if action == "sample":
@@ -425,6 +428,11 @@ class AppControllerMediaWizardMixin(AppControllerContract):
 
     # ------------------------------------------------------------------ команды
 
+    def _media_wizard_watch_gap_ms(self) -> int:
+        """Шаг обновления плоского конденсатора: тот же интервал опроса, что у основного контура."""
+        interval = getattr(self, "_calibration_poll_interval_ms", None)
+        return int(interval) if interval else self.MEDIA_WIZARD_WATCH_GAP_MS
+
     def _media_wizard_start_watch(self):
         """Включает живое наблюдение за показанием плоского конденсатора."""
         if self._media_wizard_watching:
@@ -438,7 +446,9 @@ class AppControllerMediaWizardMixin(AppControllerContract):
         self._media_wizard_watching = True
         self.mediaWizardChanged.emit()
         if not self._media_wizard_busy:
-            self._media_wizard_request("watch", UdsData.fuel_media_flatcap_raw)
+            # Не сразу: наблюдение включается вместе с опросом основного контура, и
+            # два запроса подряд затёрли бы друг друга в одном канале ISO-TP.
+            self._media_wizard_gap_timer.start(self.MEDIA_WIZARD_WATCH_START_MS)
 
     def _media_wizard_stop_watch(self):
         """Выключает живое наблюдение."""

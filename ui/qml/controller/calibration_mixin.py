@@ -1592,10 +1592,14 @@ class AppControllerCalibrationMixin(AppControllerContract):
             self._calibration_poll_timer.setInterval(self._calibration_poll_interval_ms)
         if not self._calibration_poll_timer.isActive():
             self._calibration_poll_timer.start()
+        # Плоский конденсатор опрашивается вместе с основным контуром, отдельно включать его не нужно.
+        self._media_wizard_start_watch()
 
     def _stop_calibration_poll_timer(self):
         if self._calibration_poll_timer.isActive():
             self._calibration_poll_timer.stop()
+        if getattr(self, "_media_wizard_watching", False):
+            self._media_wizard_stop_watch()
 
     @staticmethod
     def _calibration_restore_order(empty_value: int, full_value: int, current_full) -> list[tuple[int, int]]:

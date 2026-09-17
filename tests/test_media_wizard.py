@@ -13,6 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from ui.qml.controller.calibration_mixin import AppControllerCalibrationMixin
 from ui.qml.controller.media_wizard_mixin import AppControllerMediaWizardMixin
 from uds.data_identifiers import UdsData
 
@@ -103,6 +104,65 @@ def test_live_readings_stay_stopped_when_the_operator_turned_them_off():
     stub._media_wizard_finish("Готово.", stub.MEDIA_WIZARD_COLOR_OK)
 
     assert stub._media_wizard_gap_timer.running is False
+
+
+class _FakeCan:
+    is_connect = True
+    is_trace = True
+
+
+class _PollTimer:
+    """Таймер опроса калибровки без Qt."""
+
+    def __init__(self):
+        self.active = False
+        self._interval = 0
+
+    def interval(self):
+        return self._interval
+
+    def setInterval(self, value):
+        self._interval = value
+
+    def isActive(self):
+        return self.active
+
+    def start(self):
+        self.active = True
+
+    def stop(self):
+        self.active = False
+
+
+class _CalibrationWatchStub(AppControllerCalibrationMixin, _WizardStub):
+    def __init__(self):
+        _WizardStub.__init__(self)
+        self._can = _FakeCan()
+        self._calibration_poll_timer = _PollTimer()
+        self._calibration_poll_interval_ms = 1000
+
+
+def test_flatcap_is_polled_together_with_the_main_circuit():
+    """Отдельной кнопки нет: опрос плоского конденсатора идёт, пока идёт опрос основного контура."""
+    stub = _CalibrationWatchStub()
+    stub._start_calibration_poll_timer()
+    assert stub._calibration_poll_timer.active and stub._media_wizard_watching
+    assert stub.requests == [], "первый запрос ждёт паузу, чтобы не столкнуться с чтением основного контура"
+    assert stub._media_wizard_gap_timer.interval == stub.MEDIA_WIZARD_WATCH_START_MS
+
+    stub._stop_calibration_poll_timer()
+    assert not stub._calibration_poll_timer.active
+    assert stub._media_wizard_watching is False
+    assert stub._media_wizard_gap_timer.running is False
+
+
+def test_flatcap_watch_uses_the_common_poll_interval():
+    stub = _CalibrationWatchStub()
+    stub._calibration_poll_interval_ms = 700
+    stub._media_wizard_watching = True
+    stub._media_wizard_busy = True
+    stub._media_wizard_finish("Готово.", stub.MEDIA_WIZARD_COLOR_OK)
+    assert stub._media_wizard_gap_timer.interval == 700
 
 
 def test_resumed_watch_asks_the_device_again():

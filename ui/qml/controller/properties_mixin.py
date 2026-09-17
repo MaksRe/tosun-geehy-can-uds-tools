@@ -1054,7 +1054,7 @@ class AppControllerPropertiesMixin(AppControllerContract):
     @Property("QVariantMap", notify=liveFreshnessChanged)
     def mediaWizardLiveFreshness(self):
         """Свежесть живого показания плоского конденсатора и работа контура вида топлива."""
-        return self._live_freshness_view("flatcap", float(self.MEDIA_WIZARD_WATCH_GAP_MS) / 1000.0)
+        return self._live_freshness_view("flatcap", float(self._media_wizard_watch_gap_ms()) / 1000.0)
 
     @Property(bool, notify=mediaWizardChanged)
     def mediaWizardWatching(self):

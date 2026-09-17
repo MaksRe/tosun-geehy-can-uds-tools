@@ -1805,7 +1805,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot(str)
     def setCalibrationPollingIntervalMs(self, interval_value):
-        """Цель функции в настройке частоты опроса, затем она применяет новый интервал таймера калибровки."""
+        """Цель функции в настройке частоты опроса, затем новый интервал действует на оба контура: основной и плоский конденсатор."""
         raw_text = str(interval_value).strip()
         try:
             parsed = int(raw_text, 10)
@@ -1823,7 +1823,8 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._calibration_poll_interval_ms = bounded
         self._calibration_poll_timer.setInterval(self._calibration_poll_interval_ms)
         self.calibrationPollingIntervalChanged.emit()
-        self._append_log(f"Калибровка: интервал опроса {bounded} мс.", RowColor.blue)
+        # Плоский конденсатор берёт шаг из этого же интервала при следующем обновлении.
+        self._append_log(f"Калибровка: интервал опроса основного контура и плоского конденсатора {bounded} мс.", RowColor.blue)
 
     @Slot(str)
     def setSourceAddressText(self, text):
@@ -3150,16 +3151,6 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
     def setProfileCell(self, row, column, text):
         """Цель функции в правке одного значения таблицы, затем она пересчитывает контрольную сумму."""
         self._profile_set_cell(int(row), int(column), str(text))
-
-    @Slot()
-    def startMediaWizardWatch(self):
-        """Цель функции в показе живого измерения контура вида топлива, затем она запускает частый опрос DID 0x0036."""
-        self._media_wizard_start_watch()
-
-    @Slot()
-    def stopMediaWizardWatch(self):
-        """Цель функции в остановке живого измерения, затем она прекращает опрос при закрытии окна мастера."""
-        self._media_wizard_stop_watch()
 
     @Slot()
     def captureMediaWizardAir(self):

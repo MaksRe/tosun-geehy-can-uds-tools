@@ -37,7 +37,8 @@ Item {
 
     readonly property bool writeAllowed: root.appController ? root.appController.mediaWizardWriteAllowed : false
     readonly property bool mediaBusy: root.appController ? root.appController.mediaWizardBusy : false
-    readonly property bool watching: root.appController ? root.appController.mediaWizardWatching : false
+    // Оба контура опрашиваются, пока запущена калибровка.
+    readonly property bool calibrationActive: root.appController ? root.appController.calibrationActive : false
     // Два столбца, пока хватает ширины; на узком окне шаги идут друг под другом.
     readonly property bool wide: contentColumn.width >= 820
 
@@ -60,28 +61,94 @@ Item {
             width: contentScroll.availableWidth
             spacing: 10
 
-            // --- Заголовок ---
-            ColumnLayout {
+            // --- Заголовок и интервал опроса ---
+            RowLayout {
                 Layout.fillWidth: true
-                spacing: 2
+                spacing: 10
 
-                Text {
+                ColumnLayout {
                     Layout.fillWidth: true
-                    text: "Уровень и вид топлива"
-                    color: root.textMain
-                    font.pixelSize: 19
-                    font.bold: true
-                    font.family: "Bahnschrift"
-                    elide: Text.ElideRight
+                    spacing: 2
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: "Уровень и вид топлива"
+                        color: root.textMain
+                        font.pixelSize: 19
+                        font.bold: true
+                        font.family: "Bahnschrift"
+                        elide: Text.ElideRight
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: "Сверху вниз: датчик сухой, датчик в топливе, затем поправка по виду топлива"
+                        color: root.textSoft
+                        font.pixelSize: 12
+                        font.family: "Bahnschrift"
+                        elide: Text.ElideRight
+                    }
                 }
 
-                Text {
-                    Layout.fillWidth: true
-                    text: "Сверху вниз: датчик сухой, датчик в топливе, затем поправка по виду топлива"
-                    color: root.textSoft
-                    font.pixelSize: 12
-                    font.family: "Bahnschrift"
-                    elide: Text.ElideRight
+                // Интервал опроса общий для обоих контуров, поэтому стоит над их карточками.
+                Rectangle {
+                    Layout.preferredHeight: pollLayout.implicitHeight + 12
+                    Layout.preferredWidth: pollLayout.implicitWidth + 20
+                    radius: 10
+                    color: "#f8fbff"
+                    border.width: 1
+                    border.color: "#d6e2ef"
+
+                    RowLayout {
+                        id: pollLayout
+                        anchors.centerIn: parent
+                        spacing: 8
+
+                        ColumnLayout {
+                            spacing: 0
+
+                            Text {
+                                text: "Опрос показаний, мс"
+                                color: root.textMain
+                                font.pixelSize: 12
+                                font.bold: true
+                                font.family: "Bahnschrift"
+                            }
+
+                            Text {
+                                text: "основной контур и плоский конденсатор"
+                                color: root.textSoft
+                                font.pixelSize: 10
+                                font.family: "Bahnschrift"
+                            }
+                        }
+
+                        FancyTextField {
+                            id: pollIntervalField
+                            Layout.preferredWidth: 76
+                            Layout.preferredHeight: 32
+                            text: root.appController ? String(root.appController.calibrationPollingIntervalMs) : "1000"
+                            placeholderText: "мс"
+                            textColor: root.textMain
+                            bgColor: root.inputBg
+                            borderColor: root.inputBorder
+                            focusBorderColor: root.inputFocus
+                            validator: IntValidator { bottom: 100; top: 10000 }
+                            onAccepted: if (root.appController) root.appController.setCalibrationPollingIntervalMs(text)
+                        }
+
+                        FancyButton {
+                            Layout.preferredWidth: 56
+                            Layout.preferredHeight: 32
+                            text: "OK"
+                            tone: "#0284c7"
+                            toneHover: "#0369a1"
+                            tonePressed: "#075985"
+                            toolTipText: "Применить интервал к опросу основного контура и плоского конденсатора"
+                            enabled: root.appController !== null
+                            onClicked: if (root.appController) root.appController.setCalibrationPollingIntervalMs(pollIntervalField.text)
+                        }
+                    }
                 }
             }
 
@@ -166,9 +233,17 @@ Item {
                             info: root.appController ? root.appController.calibrationLiveFreshness : ({})
                         }
 
+                        Text {
+                            visible: !root.calibrationActive
+                            text: "Показания обновляются после «Начать калибровку»"
+                            color: "#b45309"
+                            font.pixelSize: 11
+                            font.family: "Bahnschrift"
+                        }
+
                         Item { Layout.fillHeight: true }
 
-                        // Сверка записанной отметки и частота опроса периода.
+                        // Сверка записанной отметки.
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 6
@@ -203,50 +278,19 @@ Item {
                                 elide: Text.ElideRight
                             }
 
-                            Text {
-                                text: "Опрос, мс"
-                                color: root.textSoft
-                                font.pixelSize: 11
-                                font.family: "Bahnschrift"
-                            }
-
-                            FancyTextField {
-                                id: pollIntervalField
-                                Layout.preferredWidth: 70
-                                Layout.preferredHeight: 30
-                                text: root.appController ? String(root.appController.calibrationPollingIntervalMs) : "1000"
-                                placeholderText: "Опрос"
-                                textColor: root.textMain
-                                bgColor: root.inputBg
-                                borderColor: root.inputBorder
-                                focusBorderColor: root.inputFocus
-                                validator: IntValidator { bottom: 100; top: 10000 }
-                                onAccepted: if (root.appController) root.appController.setCalibrationPollingIntervalMs(text)
-                            }
-
-                            FancyButton {
-                                Layout.preferredWidth: 50
-                                Layout.preferredHeight: 30
-                                text: "OK"
-                                tone: "#0284c7"
-                                toneHover: "#0369a1"
-                                tonePressed: "#075985"
-                                enabled: root.appController !== null
-                                onClicked: if (root.appController) root.appController.setCalibrationPollingIntervalMs(pollIntervalField.text)
-                            }
                         }
                     }
                 }
 
-                // Контур вида топлива
+                // Контур вида топлива: бирюзовый, как полосы блоков точек плоского конденсатора ниже.
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     Layout.preferredHeight: mediaLiveLayout.implicitHeight + 20
                     radius: 12
-                    color: "#f2f7ff"
+                    color: "#effaf7"
                     border.width: 1
-                    border.color: "#c6dcf5"
+                    border.color: "#a7ddd2"
 
                     ColumnLayout {
                         id: mediaLiveLayout
@@ -285,30 +329,20 @@ Item {
                             }
 
                             Item { Layout.fillWidth: true }
-
-                            FancyButton {
-                                Layout.preferredWidth: 180
-                                Layout.preferredHeight: 34
-                                text: root.watching ? "Остановить обновление" : "Обновлять показание"
-                                tone: root.watching ? "#ef4444" : "#0284c7"
-                                toneHover: root.watching ? "#dc2626" : "#0369a1"
-                                tonePressed: root.watching ? "#b91c1c" : "#075985"
-                                enabled: root.appController !== null
-                                onClicked: {
-                                    if (!root.appController)
-                                        return
-                                    if (root.watching)
-                                        root.appController.stopMediaWizardWatch()
-                                    else
-                                        root.appController.startMediaWizardWatch()
-                                }
-                            }
                         }
 
                         // Застывшее число неотличимо от зависшего контура без этой строки.
                         LiveFreshnessLine {
                             Layout.fillWidth: true
                             info: root.appController ? root.appController.mediaWizardLiveFreshness : ({})
+                        }
+
+                        Text {
+                            visible: !root.calibrationActive
+                            text: "Показания обновляются после «Начать калибровку»"
+                            color: "#b45309"
+                            font.pixelSize: 11
+                            font.family: "Bahnschrift"
                         }
 
                         Item { Layout.fillHeight: true }
@@ -368,7 +402,7 @@ Item {
                         LevelMarkBlock {
                             id: mark0
                             appController: root.appController
-                            title: "Отметка 0 %"
+                            title: "Основной контур: отметка 0 %"
                             writtenStage: 2
                             savedText: root.appController ? root.appController.calibrationLevel0Text : "-"
                             textMain: root.textMain
@@ -390,43 +424,59 @@ Item {
                             border.width: 1
                             border.color: "#d6e2ef"
 
-                            RowLayout {
+                            // Бирюзовая полоса: блок относится к плоскому конденсатору, как и его живая карточка.
+                            Rectangle {
+                                anchors.left: parent.left
+                                anchors.top: parent.top
+                                anchors.bottom: parent.bottom
+                                anchors.margins: 6
+                                width: 4
+                                radius: 2
+                                color: "#0f766e"
+                            }
+
+                            // Название отдельной строкой: рядом с длинной кнопкой оно не помещалось.
+                            ColumnLayout {
                                 id: airLayout
                                 anchors.fill: parent
                                 anchors.margins: 8
+                                anchors.leftMargin: 18
                                 spacing: 6
 
-                                ColumnLayout {
+                                Text {
                                     Layout.fillWidth: true
-                                    spacing: 0
+                                    text: "Плоский конденсатор: точка «воздух»"
+                                    color: root.textMain
+                                    font.pixelSize: 14
+                                    font.bold: true
+                                    font.family: "Bahnschrift"
+                                    elide: Text.ElideRight
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
 
                                     Text {
-                                        text: "Точка «воздух»"
-                                        color: root.textMain
-                                        font.pixelSize: 14
-                                        font.bold: true
-                                        font.family: "Bahnschrift"
-                                    }
-
-                                    Text {
-                                        text: "В приборе: " + (root.appController ? root.appController.mediaWizardAirText : "-")
+                                        Layout.fillWidth: true
+                                        text: "Контур вида топлива, в приборе: " + (root.appController ? root.appController.mediaWizardAirText : "-")
                                         color: root.textSoft
                                         font.pixelSize: 11
                                         font.family: "Bahnschrift"
+                                        elide: Text.ElideRight
                                     }
-                                }
 
-                                Item { Layout.fillWidth: true }
-
-                                FancyButton {
-                                    Layout.preferredWidth: 190
-                                    Layout.preferredHeight: 34
-                                    text: "Снять точку в воздухе"
-                                    tone: "#16a34a"
-                                    toneHover: "#15803d"
-                                    tonePressed: "#166534"
-                                    enabled: root.appController !== null && root.writeAllowed && !root.mediaBusy
-                                    onClicked: if (root.appController) root.appController.captureMediaWizardAir()
+                                    FancyButton {
+                                        Layout.preferredWidth: 260
+                                        Layout.preferredHeight: 34
+                                        text: "Снять точку плоского конденсатора"
+                                        toolTipText: "Серия показаний плоского конденсатора на сухом датчике, запись в точку «воздух»"
+                                        tone: "#16a34a"
+                                        toneHover: "#15803d"
+                                        tonePressed: "#166534"
+                                        enabled: root.appController !== null && root.writeAllowed && !root.mediaBusy
+                                        onClicked: if (root.appController) root.appController.captureMediaWizardAir()
+                                    }
                                 }
                             }
                         }
@@ -471,7 +521,7 @@ Item {
                         LevelMarkBlock {
                             id: mark100
                             appController: root.appController
-                            title: "Отметка 100 %"
+                            title: "Основной контур: отметка 100 %"
                             writtenStage: 3
                             savedText: root.appController ? root.appController.calibrationLevel100Text : "-"
                             textMain: root.textMain
@@ -493,43 +543,59 @@ Item {
                             border.width: 1
                             border.color: "#d6e2ef"
 
-                            RowLayout {
+                            // Бирюзовая полоса: блок относится к плоскому конденсатору, как и его живая карточка.
+                            Rectangle {
+                                anchors.left: parent.left
+                                anchors.top: parent.top
+                                anchors.bottom: parent.bottom
+                                anchors.margins: 6
+                                width: 4
+                                radius: 2
+                                color: "#0f766e"
+                            }
+
+                            // Название отдельной строкой: рядом с длинной кнопкой оно не помещалось.
+                            ColumnLayout {
                                 id: liquidLayout
                                 anchors.fill: parent
                                 anchors.margins: 8
+                                anchors.leftMargin: 18
                                 spacing: 6
 
-                                ColumnLayout {
+                                Text {
                                     Layout.fillWidth: true
-                                    spacing: 0
+                                    text: "Плоский конденсатор: точка «топливо»"
+                                    color: root.textMain
+                                    font.pixelSize: 14
+                                    font.bold: true
+                                    font.family: "Bahnschrift"
+                                    elide: Text.ElideRight
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
 
                                     Text {
-                                        text: "Точка «топливо»"
-                                        color: root.textMain
-                                        font.pixelSize: 14
-                                        font.bold: true
-                                        font.family: "Bahnschrift"
-                                    }
-
-                                    Text {
-                                        text: "В приборе: " + (root.appController ? root.appController.mediaWizardCalText : "-")
+                                        Layout.fillWidth: true
+                                        text: "Контур вида топлива, в приборе: " + (root.appController ? root.appController.mediaWizardCalText : "-")
                                         color: root.textSoft
                                         font.pixelSize: 11
                                         font.family: "Bahnschrift"
+                                        elide: Text.ElideRight
                                     }
-                                }
 
-                                Item { Layout.fillWidth: true }
-
-                                FancyButton {
-                                    Layout.preferredWidth: 190
-                                    Layout.preferredHeight: 34
-                                    text: "Снять точку в топливе"
-                                    tone: "#16a34a"
-                                    toneHover: "#15803d"
-                                    tonePressed: "#166534"
-                                    enabled: root.appController !== null && root.writeAllowed && !root.mediaBusy
-                                    onClicked: if (root.appController) root.appController.captureMediaWizardLiquid()
+                                    FancyButton {
+                                        Layout.preferredWidth: 260
+                                        Layout.preferredHeight: 34
+                                        text: "Снять точку плоского конденсатора"
+                                        toolTipText: "Серия показаний плоского конденсатора в топливе, запись в точку «топливо»"
+                                        tone: "#16a34a"
+                                        toneHover: "#15803d"
+                                        tonePressed: "#166534"
+                                        enabled: root.appController !== null && root.writeAllowed && !root.mediaBusy
+                                        onClicked: if (root.appController) root.appController.captureMediaWizardLiquid()
+                                    }
                                 }
                             }
                         }
