@@ -12,7 +12,7 @@
   прошивке он растёт раз в 100 мс и обнуляется только обработанной серией,
   поэтому не застывает вместе с контуром. Опрос спрашивает его вместо очередного
   чтения числа: раздел калибровки каждый четвёртый раз, живое показание вида
-  топлива каждый восьмой.
+  топлива каждый восьмой, панель отсчётов пробной калибровки раз за круг.
 - Прошивка без 0x0064 его не отдаёт. После трёх запросов без ответа программа
   перестаёт спрашивать и пишет, что прибор этого не сообщает.
 """
@@ -117,14 +117,15 @@ def device_view(age_ms, received_s, supported, now: float) -> tuple[str, str]:
 
 class AppControllerLiveFreshnessMixin(AppControllerContract):
     # Каждый который запрос опроса заменяется запросом возраста измерений.
-    LIVE_AGE_EVERY = {"level": 4, "flatcap": 8}
+    # В пробной калибровке каждый седьмой: после круга из шести отсчётов.
+    LIVE_AGE_EVERY = {"level": 4, "flatcap": 8, "trial": 7}
     LIVE_FRESHNESS_TICK_MS = 500
 
     def _init_live_freshness_state(self):
         """Готовит учёт свежести. Вызывается один раз при создании контроллера."""
         self._live_tracks = {"level": LiveTrack(), "flatcap": LiveTrack()}
         self._live_age = {"main_ms": None, "media_ms": None, "received_s": None, "supported": None, "misses": 0}
-        self._live_age_counters = {"level": 0, "flatcap": 0}
+        self._live_age_counters = {"level": 0, "flatcap": 0, "trial": 0}
 
         # Возраст ответа растёт и без новых данных, поэтому окна перечитывают его по таймеру.
         self._live_freshness_timer = QTimer(self)

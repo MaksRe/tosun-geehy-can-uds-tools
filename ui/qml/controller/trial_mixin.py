@@ -532,6 +532,11 @@ class AppControllerTrialMixin(AppControllerContract):
             if (int(var.pid) & 0xFFFF) in answered:
                 self._trial_live[key] = self._trial_decode(body[3:], var, signed)
                 self._trial_live_seen[key] = time.monotonic()
+                # Те же отсчёты, что в разделах калибровки: свежесть у них общая.
+                if key == "main_raw":
+                    self._live_note_value("level", self._trial_live[key])
+                elif key == "media":
+                    self._live_note_value("flatcap", self._trial_live[key])
                 self.trialLiveChanged.emit()
                 return
 
@@ -552,8 +557,13 @@ class AppControllerTrialMixin(AppControllerContract):
         if time.monotonic() < self._trial_live_suspend_until:
             return
 
-        _key, var, _signed = self.TRIAL_LIVE_VARS[self._trial_live_index]
-        self._trial_live_index = (self._trial_live_index + 1) % len(self.TRIAL_LIVE_VARS)
+        if self._live_age_due("trial"):
+            # Сырой период застывает вместе с контуром: раз за круг спрашиваем возраст измерения.
+            var = UdsData.measurement_age
+            self._live_age_note_request()
+        else:
+            _key, var, _signed = self.TRIAL_LIVE_VARS[self._trial_live_index]
+            self._trial_live_index = (self._trial_live_index + 1) % len(self.TRIAL_LIVE_VARS)
         self._trial_live_last_poll = time.monotonic()
         note_background_request(self)
         try:
@@ -592,6 +602,9 @@ class AppControllerTrialMixin(AppControllerContract):
         else:
             emulation_text = "выключена"
 
+        # Каждый отсчёт спрашивается раз за круг: шесть отсчётов и возраст измерения.
+        live_round_s = self.TRIAL_LIVE_PERIOD_MS * (len(self.TRIAL_LIVE_VARS) + 1) / 1000.0
+
         seen = [self._trial_live_seen[key] for key in ("main_raw", "media") if self._trial_live[key] is not None]
         if not self._trial_live_enabled:
             age_text = "опрос выключен"
@@ -613,6 +626,9 @@ class AppControllerTrialMixin(AppControllerContract):
             "emulationOn": emulation_on,
             "age": age_text,
             "enabled": self._trial_live_enabled,
+            # Приходят ли ответы и мерит ли контур сам: застывшее число без этого не понять.
+            "mainFreshness": self._live_freshness_view("level", live_round_s),
+            "mediaFreshness": self._live_freshness_view("flatcap", live_round_s),
         }
 
     # ------------------------------------------------------------------ разбор результатов

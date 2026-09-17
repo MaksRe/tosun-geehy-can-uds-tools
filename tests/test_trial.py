@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import chamber_fit
 import profile_model
+from ui.qml.controller import live_freshness_mixin as lf
 from ui.qml.controller.profile_mixin import AppControllerProfileMixin
 from ui.qml.controller.trial_mixin import TRIAL_EMULATION_OFF_VALUE, AppControllerTrialMixin
 from uds.data_identifiers import UdsData
@@ -71,7 +72,7 @@ class _FakeCan:
     is_trace = True
 
 
-class _TrialStub(AppControllerTrialMixin):
+class _TrialStub(AppControllerTrialMixin, lf.AppControllerLiveFreshnessMixin):
     """Носитель логики пробной калибровки без Qt и без шины.
 
     Запуск очереди подменён: вместо обмена с прибором очередь запоминается, а
@@ -129,6 +130,11 @@ class _TrialStub(AppControllerTrialMixin):
         self._trial_live_last_inject = 0.0
         self._trial_live_last_poll = 0.0
         self._trial_live_suspend_until = 0.0
+
+        # Учёт свежести без таймера Qt.
+        self._live_tracks = {"level": lf.LiveTrack(), "flatcap": lf.LiveTrack()}
+        self._live_age = {"main_ms": None, "media_ms": None, "received_s": None, "supported": None, "misses": 0}
+        self._live_age_counters = {"level": 0, "flatcap": 0, "trial": 0}
 
         self._trial_gap_timer = _FakeTimer()
         self._trial_wait_timer = _FakeTimer()
@@ -1115,6 +1121,43 @@ def test_idle_poll_waits_while_another_section_uses_the_bus():
     stub._profile_busy = False
     stub._on_trial_live_tick()
     assert len(stub._trial_read.sent) == 1
+
+
+def _tick_freely(stub, count):
+    """Опрос по такту без пауз между запросами: как если бы ответы приходили сразу."""
+    for _ in range(count):
+        stub._uds_background_tx_s = 0.0
+        stub._on_trial_live_tick()
+
+
+def test_idle_poll_asks_the_measurement_age_once_a_round():
+    """Сырой период застывает вместе с контуром, поэтому раз за круг спрашивается возраст измерения."""
+    stub = _TrialStub()
+    _tick_freely(stub, 14)
+    round_dids = [int(var.pid) for _key, var, _signed in stub.TRIAL_LIVE_VARS] + [int(UdsData.measurement_age.pid)]
+    assert stub._trial_read.sent == round_dids * 2
+
+
+def test_idle_poll_stops_asking_the_age_of_old_firmware():
+    stub = _TrialStub()
+    stub._live_age["supported"] = False
+    _tick_freely(stub, 14)
+    assert int(UdsData.measurement_age.pid) not in stub._trial_read.sent
+    assert len(stub._trial_read.sent) == 14
+
+
+def test_live_view_says_whether_the_circuit_measures():
+    stub = _TrialStub()
+    stub._handle_trial_live_frame(0x18DA2AF1, [0x05, 0x62, 0x00, 0x14, 0xD5, 0x12, 0x00, 0x00])
+    # Основной контур не мерит 10 с, контур вида топлива мерил 100 мс назад.
+    stub._handle_live_age_frame(0x18DA2AF1, [0x07, 0x62, 0x00, 0x64, 0x10, 0x27, 0x64, 0x00])
+    view = stub._trial_live_view()
+
+    assert view["mainFreshness"]["text"].startswith("ответ ")
+    assert view["mainFreshness"]["deviceText"] == "контур не мерит 10 с"
+    assert view["mainFreshness"]["deviceColor"] == lf.COLOR_BAD
+    assert view["mediaFreshness"]["text"] == "ответов ещё не было"
+    assert view["mediaFreshness"]["deviceText"] == "контур мерит"
 
 
 # ------------------------------------------------------------------ разбор ответов

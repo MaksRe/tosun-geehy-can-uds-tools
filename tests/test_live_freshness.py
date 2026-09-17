@@ -96,7 +96,7 @@ class _FreshStub(lf.AppControllerLiveFreshnessMixin):
         self.liveFreshnessChanged = _Signal()
         self._live_tracks = {"level": lf.LiveTrack(), "flatcap": lf.LiveTrack()}
         self._live_age = {"main_ms": None, "media_ms": None, "received_s": None, "supported": None, "misses": 0}
-        self._live_age_counters = {"level": 0, "flatcap": 0}
+        self._live_age_counters = {"level": 0, "flatcap": 0, "trial": 0}
 
     def _is_calibration_response_identifier(self, identifier):
         return identifier == RX_ID

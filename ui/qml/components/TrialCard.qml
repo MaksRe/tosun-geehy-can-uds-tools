@@ -133,7 +133,7 @@ Card {
         // --- Текущие отсчёты ---
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 86
+            Layout.preferredHeight: 118
             radius: 12
             color: "#f2f7ff"
             border.width: 1
@@ -181,6 +181,14 @@ Card {
                             font.pixelSize: 11
                             font.family: "Bahnschrift"
                         }
+
+                        // Приходят ли ответы и мерит ли основной контур сам.
+                        LiveFreshnessLine {
+                            Layout.fillWidth: true
+                            Layout.topMargin: 3
+                            stacked: true
+                            info: root.live.mainFreshness || ({})
+                        }
                     }
                 }
 
@@ -220,6 +228,14 @@ Card {
                             color: root.textSoft
                             font.pixelSize: 11
                             font.family: "Bahnschrift"
+                        }
+
+                        // Приходят ли ответы и мерит ли контур вида топлива сам.
+                        LiveFreshnessLine {
+                            Layout.fillWidth: true
+                            Layout.topMargin: 3
+                            stacked: true
+                            info: root.live.mediaFreshness || ({})
                         }
                     }
                 }
