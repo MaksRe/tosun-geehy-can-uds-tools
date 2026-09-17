@@ -1052,6 +1052,24 @@ def test_live_frame_decodes_signed_temperature_and_emulation():
     assert "+85.0" in view["emulation"]
 
 
+def test_live_temperature_cards_say_where_the_value_comes_from():
+    """Температуры показываются отдельно, и видно, настоящий это датчик или эмуляция."""
+    stub = _TrialStub()
+    stub._handle_trial_live_frame(0x18DA2AF1, [0x05, 0x62, 0x00, 0x3B, 0xFA, 0x00, 0x00, 0x00])
+    view = stub._trial_live_view()
+    assert view["boardTemp"] == "+25.0 °C"
+    assert view["boardTempFresh"] is True
+    assert view["fuelTempFresh"] is False, "ответа о топливе не было"
+    assert view["tempSource"] == "эмуляция: нет данных"
+
+    off = int(TRIAL_EMULATION_OFF_VALUE) & 0xFFFF
+    stub._handle_trial_live_frame(0x18DA2AF1, [0x05, 0x62, 0x00, 0x61, off & 0xFF, off >> 8, 0x00, 0x00])
+    assert stub._trial_live_view()["tempSource"] == "с датчика"
+
+    stub._handle_trial_live_frame(0x18DA2AF1, [0x05, 0x62, 0x00, 0x61, 0x52, 0x03, 0x00, 0x00])
+    assert stub._trial_live_view()["tempSource"] == "задана эмуляцией"
+
+
 def test_live_frame_is_ignored_when_display_is_off():
     stub = _TrialStub()
     stub._trial_live_enabled = False

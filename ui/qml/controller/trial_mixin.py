@@ -595,12 +595,16 @@ class AppControllerTrialMixin(AppControllerContract):
 
         emul = self._trial_live["emul"]
         emulation_on = emul is not None and emul != TRIAL_EMULATION_OFF_VALUE
+        # Откуда взялись обе температуры: эмуляция действует на оба датчика сразу.
         if emul is None:
             emulation_text = "нет данных"
+            temp_source = "эмуляция: нет данных"
         elif emulation_on:
             emulation_text = f"включена, {int(emul) / 10:+.1f} °C"
+            temp_source = "задана эмуляцией"
         else:
             emulation_text = "выключена"
+            temp_source = "с датчика"
 
         # Каждый отсчёт спрашивается раз за круг: шесть отсчётов и возраст измерения.
         live_round_s = self.TRIAL_LIVE_PERIOD_MS * (len(self.TRIAL_LIVE_VARS) + 1) / 1000.0
@@ -624,6 +628,9 @@ class AppControllerTrialMixin(AppControllerContract):
             "boardTemp": temperature("board_t"),
             "emulation": emulation_text,
             "emulationOn": emulation_on,
+            "fuelTempFresh": fresh("fuel_t"),
+            "boardTempFresh": fresh("board_t"),
+            "tempSource": temp_source,
             "age": age_text,
             "enabled": self._trial_live_enabled,
             # Приходят ли ответы и мерит ли контур сам: застывшее число без этого не понять.

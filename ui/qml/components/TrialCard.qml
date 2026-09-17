@@ -145,7 +145,9 @@ Card {
                 spacing: 12
 
                 Rectangle {
+                    Layout.fillWidth: true
                     Layout.preferredWidth: 250
+                    Layout.minimumWidth: 170
                     Layout.fillHeight: true
                     radius: 10
                     color: "#ffffff"
@@ -193,7 +195,9 @@ Card {
                 }
 
                 Rectangle {
+                    Layout.fillWidth: true
                     Layout.preferredWidth: 250
+                    Layout.minimumWidth: 170
                     Layout.fillHeight: true
                     radius: 10
                     color: "#ffffff"
@@ -240,36 +244,105 @@ Card {
                     }
                 }
 
-                ColumnLayout {
+                // Температуры отдельными карточками. Эмуляция действует на оба датчика,
+                // поэтому при ней обе карточки подсвечиваются и подписаны.
+                Rectangle {
                     Layout.fillWidth: true
-                    spacing: 3
+                    Layout.preferredWidth: 180
+                    Layout.minimumWidth: 130
+                    Layout.fillHeight: true
+                    radius: 10
+                    color: "#ffffff"
+                    border.width: 1
+                    border.color: root.live.emulationOn ? "#f5c98b" : "#d6e2ef"
 
-                    Text {
-                        Layout.fillWidth: true
-                        text: "Температура топлива " + (root.live.fuelTemp || "—") + ", платы " + (root.live.boardTemp || "—")
-                        color: root.textMain
-                        font.pixelSize: 12
-                        font.family: "Bahnschrift"
-                        elide: Text.ElideRight
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 10
+                        anchors.rightMargin: 10
+                        anchors.topMargin: 6
+                        anchors.bottomMargin: 4
+                        // Отступы подобраны так, чтобы число стояло на одной линии с числами отсчётов.
+                        spacing: 5
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: "Температура топлива"
+                            color: root.textSoft
+                            font.pixelSize: 11
+                            font.family: "Bahnschrift"
+                            elide: Text.ElideRight
+                        }
+
+                        Text {
+                            text: root.live.fuelTemp || "—"
+                            color: root.live.fuelTempFresh ? root.textMain : "#94a3b8"
+                            font.pixelSize: 24
+                            font.bold: true
+                            font.family: "Bahnschrift"
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: root.live.tempSource || ""
+                            color: root.live.emulationOn ? "#b45309" : root.textSoft
+                            font.pixelSize: 11
+                            font.bold: root.live.emulationOn === true
+                            font.family: "Bahnschrift"
+                            elide: Text.ElideRight
+                        }
+
+                        Item { Layout.fillHeight: true }
                     }
+                }
 
-                    Text {
-                        Layout.fillWidth: true
-                        text: "Эмуляция температуры: " + (root.live.emulation || "нет данных")
-                        color: root.live.emulationOn ? "#b45309" : root.textMain
-                        font.pixelSize: 12
-                        font.bold: root.live.emulationOn === true
-                        font.family: "Bahnschrift"
-                        elide: Text.ElideRight
-                    }
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredWidth: 180
+                    Layout.minimumWidth: 130
+                    Layout.fillHeight: true
+                    radius: 10
+                    color: "#ffffff"
+                    border.width: 1
+                    border.color: root.live.emulationOn ? "#f5c98b" : "#d6e2ef"
 
-                    Text {
-                        Layout.fillWidth: true
-                        text: root.live.age || ""
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                        elide: Text.ElideRight
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 10
+                        anchors.rightMargin: 10
+                        anchors.topMargin: 6
+                        anchors.bottomMargin: 4
+                        // Отступы подобраны так, чтобы число стояло на одной линии с числами отсчётов.
+                        spacing: 5
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: "Температура платы"
+                            color: root.textSoft
+                            font.pixelSize: 11
+                            font.family: "Bahnschrift"
+                            elide: Text.ElideRight
+                        }
+
+                        Text {
+                            text: root.live.boardTemp || "—"
+                            color: root.live.boardTempFresh ? root.textMain : "#94a3b8"
+                            font.pixelSize: 24
+                            font.bold: true
+                            font.family: "Bahnschrift"
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: root.live.tempSource || ""
+                            color: root.live.emulationOn ? "#b45309" : root.textSoft
+                            font.pixelSize: 11
+                            font.bold: root.live.emulationOn === true
+                            font.family: "Bahnschrift"
+                            elide: Text.ElideRight
+                        }
+
+                        Item { Layout.fillHeight: true }
                     }
                 }
 
