@@ -330,6 +330,7 @@ class AppControllerContract:
     _calibration_wizard_stage: Any
     _calibration_write_service: Any
     _calibration_write_verify_pending: Any
+    _calibration_write_verify_sent_s: Any
     _can: Any
     _can_filter_option_limits: Any
     _can_filter_option_seen: Any

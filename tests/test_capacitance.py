@@ -21,6 +21,7 @@ from ui.qml.capacitance import (
     COUNTS_PER_PF,
     counts_to_pf,
     difference_text,
+    parasitic_from_points,
     pf_to_counts,
     swing_percent,
     window_stats,
@@ -53,6 +54,10 @@ class _CapStub(AppControllerCapacitanceMixin):
         self._media_wizard_captured_spread = None
         self._media_wizard_air = None
         self._media_wizard_cal = None
+        self._calibration_level_0 = 0
+        self._calibration_level_0_known = False
+        self._calibration_level_100 = 0
+        self._calibration_level_100_known = False
 
     def _calibration_log_event(self, text):
         self.events.append(text)
@@ -138,6 +143,74 @@ def test_wildly_floating_circuit_is_marked():
     stub._media_wizard_recent = _window(now, [3600, 3700, 3620, 3680])
     view = stub._capacitance_view()["media"]
     assert view["warn"] is True
+
+
+# ------------------------------------------------------------------ постоянная часть
+
+def test_parasitic_splits_the_measured_capacitance_by_two_points():
+    """Постоянная часть одна и та же в воздухе и в топливе, поэтому двух точек хватает."""
+    split = parasitic_from_points(air_counts=6000, fuel_counts=13000, fuel_eps=2.35)
+
+    # Чувствительность: сколько отсчётов даёт единица проницаемости.
+    assert round(split["sensitivity_counts"], 1) == round(7000 / (2.35 - 1.0005), 1)
+    # Постоянная часть: то, что осталось бы при нулевой проницаемости.
+    assert round(split["parasitic_counts"], 1) == round(6000 - split["sensitivity_counts"] * 1.0005, 1)
+    assert split["parasitic_pf"] > 0.0
+
+
+def test_points_that_cannot_be_split_are_refused():
+    assert parasitic_from_points(None, 13000, 2.35) is None
+    assert parasitic_from_points(6000, None, 2.35) is None
+    # В топливе ёмкость обязана быть выше, чем в воздухе.
+    assert parasitic_from_points(13000, 6000, 2.35) is None
+    # Проницаемость топлива не может быть меньше воздуха.
+    assert parasitic_from_points(6000, 13000, 1.0) is None
+
+
+def test_circuit_explains_where_the_constant_part_comes_from():
+    stub = _CapStub()
+    stub._calibration_level_0 = 6000
+    stub._calibration_level_0_known = True
+    stub._calibration_level_100 = 13000
+    stub._calibration_level_100_known = True
+
+    view = stub._capacitance_view()["main"]
+    assert "отсч." in view["parasiticText"] and "пФ" in view["parasiticText"]
+    assert "отметкам 0 % и 100 %" in view["sourceText"]
+    assert "2,35" in view["sourceText"]
+    assert "на единицу проницаемости" in view["sensitivityText"]
+
+
+def test_constant_part_below_the_reference_capacitor_is_called_out():
+    """Меньше образцового конденсатора постоянная часть быть не может: номиналы не те."""
+    stub = _CapStub()
+    stub._media_wizard_air = 2380
+    stub._media_wizard_cal = 3640
+
+    view = stub._capacitance_view()["media"]
+    assert "другие номиналы" in view["strayText"]
+    assert "пикофарадам нет" in view["strayText"]
+
+
+def test_missing_points_say_what_to_do():
+    stub = _CapStub()
+    view = stub._capacitance_view()["media"]
+    assert view["parasiticText"] == "—"
+    assert "точкам «воздух» и «топливо»" in view["sourceText"]
+
+
+def test_fuel_permittivity_is_checked_before_it_is_taken():
+    stub = _CapStub()
+    stub._capacitance_set_fuel_eps("2,1")
+    assert stub._capacitance_fuel_eps == 2.1
+
+    stub._capacitance_set_fuel_eps("ой")
+    assert stub._capacitance_fuel_eps == 2.1
+    assert "не число" in stub._capacitance_status
+
+    stub._capacitance_set_fuel_eps("0,5")
+    assert stub._capacitance_fuel_eps == 2.1
+    assert "вне разумного" in stub._capacitance_status
 
 
 # ------------------------------------------------------------------ тестовая точка

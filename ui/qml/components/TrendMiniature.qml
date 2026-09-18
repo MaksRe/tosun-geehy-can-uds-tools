@@ -61,4 +61,15 @@ ColumnLayout {
         font.family: "Bahnschrift"
         elide: Text.ElideRight
     }
+
+    // Дельта говорит о размахе качки, среднее - о рабочей точке.
+    Text {
+        Layout.fillWidth: true
+        visible: root.trend.hasData === true
+        text: "Δ " + (root.trend.deltaText || "—") + " · среднее " + (root.trend.meanText || "—")
+        color: root.textSoft
+        font.pixelSize: 10
+        font.family: "Bahnschrift"
+        elide: Text.ElideRight
+    }
 }

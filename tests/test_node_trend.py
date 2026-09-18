@@ -57,6 +57,29 @@ def test_history_keeps_what_came_and_remembers_the_extremes():
     assert card["maxShort"] == "12500 отсч."
 
 
+def test_delta_and_mean_describe_the_spread_and_the_working_point():
+    stub = _TrendStub()
+    _fill(stub, "main_raw", [12100, 12500, 11900, 12300])
+
+    card = stub._node_trend_view()["main_raw"]
+    # Дельта - расстояние между крайними значениями.
+    assert card["deltaText"] == "600 отсч."
+    assert card["meanText"] == "12200 отсч."
+    assert card["meanCountText"] == "по 4 показаниям"
+
+
+def test_mean_counts_every_reading_even_after_points_are_pushed_out():
+    """Среднее считается по всем пришедшим данным, как и экстремумы."""
+    stub = _TrendStub()
+    stub.NODE_TREND_MAX_POINTS = 2
+    _fill(stub, "media", [3000, 4000, 5000])
+
+    card = stub._node_trend_view()["media"]
+    assert card["countText"] == "точек 2"
+    assert card["meanText"] == "4000 отсч.", "вытесненная точка из среднего не исчезает"
+    assert card["meanCountText"] == "по 3 показаниям"
+
+
 def test_level_is_shown_in_percent():
     """Уровень приходит в промилле: на графике он обязан быть процентами."""
     stub = _TrendStub()
@@ -108,6 +131,9 @@ def test_clearing_extremes_keeps_the_graph():
     # Рекорды начинаются с последней точки, а не с пустоты.
     assert card["minShort"] == "3700 отсч."
     assert card["maxShort"] == "3700 отсч."
+    # Среднее считается заново вместе с ними: они об одном промежутке.
+    assert card["meanText"] == "3700 отсч."
+    assert card["deltaText"] == "0 отсч."
 
 
 def test_empty_key_touches_every_graph():

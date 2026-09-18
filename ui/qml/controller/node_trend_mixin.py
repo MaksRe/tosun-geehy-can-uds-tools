@@ -82,10 +82,21 @@ class AppControllerNodeTrendMixin(AppControllerContract):
     NODE_TREND_MAX_POINTS = NODE_TREND_MAX_POINTS
     NODE_TREND_SPARK_POINTS = NODE_TREND_SPARK_POINTS
 
+    @staticmethod
+    def _node_trend_empty_track() -> dict:
+        """Пустая история одного числа.
+
+        Сумма и счётчик считаются по всем пришедшим данным, а не по оставшимся
+        точкам: тогда среднее говорит о том же промежутке, что и экстремумы, и
+        не прыгает при вытеснении старых точек.
+        """
+        return {"points": [], "min": None, "max": None, "min_at": None, "max_at": None,
+                "started": None, "sum": 0.0, "count": 0}
+
     def _init_node_trend_state(self):
         """Готовит историю живых чисел. Вызывается один раз при создании контроллера."""
         self._node_trend = {
-            key: {"points": [], "min": None, "max": None, "min_at": None, "max_at": None, "started": None}
+            key: self._node_trend_empty_track()
             for key, _title, _unit, _scale, _digits, _color in NODE_TREND_SERIES
         }
 
@@ -114,23 +125,25 @@ class AppControllerNodeTrendMixin(AppControllerContract):
             track["max"] = number
             track["max_at"] = moment
 
+        track["sum"] += number
+        track["count"] += 1
+
         self.nodeTrendChanged.emit()
 
     def _node_trend_clear(self, key: str = ""):
-        """Сбрасывает график: историю и экстремумы. Пустой ключ - все графики."""
-        for track_key, track in self._node_trend.items():
+        """Сбрасывает график: историю, экстремумы и среднее. Пустой ключ - все графики."""
+        for track_key in list(self._node_trend.keys()):
             if key and track_key != str(key):
                 continue
-            track["points"] = []
-            track["min"] = None
-            track["max"] = None
-            track["min_at"] = None
-            track["max_at"] = None
-            track["started"] = None
+            self._node_trend[track_key] = self._node_trend_empty_track()
         self.nodeTrendChanged.emit()
 
     def _node_trend_clear_extremes(self, key: str = ""):
-        """Сбрасывает только экстремумы, график остаётся. Пустой ключ - все графики."""
+        """Сбрасывает экстремумы и среднее, график остаётся. Пустой ключ - все графики.
+
+        Среднее считается заново вместе с экстремумами: они говорят об одном и том
+        же промежутке, и разводить их начала значило бы сравнивать разное.
+        """
         for track_key, track in self._node_trend.items():
             if key and track_key != str(key):
                 continue
@@ -143,11 +156,15 @@ class AppControllerNodeTrendMixin(AppControllerContract):
                 track["max"] = last_value
                 track["min_at"] = last_at
                 track["max_at"] = last_at
+                track["sum"] = float(last_value)
+                track["count"] = 1
             else:
                 track["min"] = None
                 track["max"] = None
                 track["min_at"] = None
                 track["max_at"] = None
+                track["sum"] = 0.0
+                track["count"] = 0
         self.nodeTrendChanged.emit()
 
     # ------------------------------------------------------------------ показ
@@ -196,6 +213,13 @@ class AppControllerNodeTrendMixin(AppControllerContract):
                 return text
             return text + f", {_decimal(now - float(moment), 0)} с назад"
 
+        # Дельта - на сколько число уходило от края до края за это время, среднее -
+        # вокруг чего оно держится. По ним видно и размах качки, и рабочую точку.
+        delta = None
+        if track["min"] is not None and track["max"] is not None:
+            delta = float(track["max"]) - float(track["min"])
+        mean = (track["sum"] / float(track["count"])) if track["count"] else None
+
         return {
             "key": key,
             "title": title,
@@ -208,9 +232,13 @@ class AppControllerNodeTrendMixin(AppControllerContract):
             "lastText": self._node_trend_value_text(points[-1][1] if points else None, scale, digits, unit),
             "minText": extreme_text(track["min"], track["min_at"]),
             "maxText": extreme_text(track["max"], track["max_at"]),
+            "deltaText": self._node_trend_value_text(delta, scale, digits, unit),
+            "meanText": self._node_trend_value_text(mean, scale, digits, unit),
+            "meanCountText": f"по {int(track['count'])} показаниям" if track["count"] else "",
             # Короткие подписи для миниатюры: в одну строку карточки длинные не влезают.
             "minShort": self._node_trend_value_text(track["min"], scale, digits, unit),
             "maxShort": self._node_trend_value_text(track["max"], scale, digits, unit),
+            "meanValue": None if mean is None else float(mean) * float(scale),
             "minValue": None if track["min"] is None else float(track["min"]) * float(scale),
             "maxValue": None if track["max"] is None else float(track["max"]) * float(scale),
         }

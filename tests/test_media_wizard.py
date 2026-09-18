@@ -223,11 +223,13 @@ class _FakeCan:
 
 
 class _PollTimer:
-    """Таймер опроса калибровки без Qt."""
+    """Таймер опроса калибровки без Qt: помнит задержку следующей попытки."""
 
     def __init__(self):
         self.active = False
         self._interval = 0
+        self.single_shot = False
+        self.last_delay = None
 
     def interval(self):
         return self._interval
@@ -235,11 +237,16 @@ class _PollTimer:
     def setInterval(self, value):
         self._interval = value
 
+    def setSingleShot(self, value):
+        self.single_shot = bool(value)
+
     def isActive(self):
         return self.active
 
-    def start(self):
+    def start(self, delay=None):
         self.active = True
+        if delay is not None:
+            self.last_delay = int(delay)
 
     def stop(self):
         self.active = False

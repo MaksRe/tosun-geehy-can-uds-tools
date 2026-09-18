@@ -200,6 +200,8 @@ class AppController(
         self._calibration_level_0_known = False
         self._calibration_level_100_known = False
         self._calibration_write_verify_pending: dict[int, int] = {}
+        # Когда ушла запись: по этому времени ожидание подтверждения истекает.
+        self._calibration_write_verify_sent_s: dict[int, float] = {}
         # Прибор хранит отметки и подгонку нуля ровно так, как их записали: допуска при сверке нет.
         self._calibration_verify_tolerance = 0
         self._calibration_wizard_stage = 0

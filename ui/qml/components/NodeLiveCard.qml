@@ -692,23 +692,42 @@ Card {
 
             RowLayout {
                 Layout.fillWidth: true
-                spacing: 16
+                spacing: 10
 
-                Text {
-                    text: "минимум: " + (trendPopup.trend.minText || "—")
-                    color: "#2563eb"
-                    font.pixelSize: 13
-                    font.family: "Bahnschrift"
+                // Показатели переносятся по ширине: на узком окне они иначе
+                // выталкивают кнопки за край.
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: 16
+
+                    Text {
+                        text: "минимум: " + (trendPopup.trend.minText || "—")
+                        color: "#2563eb"
+                        font.pixelSize: 13
+                        font.family: "Bahnschrift"
+                    }
+
+                    Text {
+                        text: "максимум: " + (trendPopup.trend.maxText || "—")
+                        color: "#b45309"
+                        font.pixelSize: 13
+                        font.family: "Bahnschrift"
+                    }
+
+                    Text {
+                        text: "дельта: " + (trendPopup.trend.deltaText || "—")
+                        color: root.textMain
+                        font.pixelSize: 13
+                        font.family: "Bahnschrift"
+                    }
+
+                    Text {
+                        text: "среднее: " + (trendPopup.trend.meanText || "—")
+                        color: "#0f766e"
+                        font.pixelSize: 13
+                        font.family: "Bahnschrift"
+                    }
                 }
-
-                Text {
-                    text: "максимум: " + (trendPopup.trend.maxText || "—")
-                    color: "#b45309"
-                    font.pixelSize: 13
-                    font.family: "Bahnschrift"
-                }
-
-                Item { Layout.fillWidth: true }
 
                 FancyButton {
                     Layout.preferredWidth: 180
@@ -752,12 +771,15 @@ Card {
                           ? NaN : trendPopup.trend.minValue
                 maxValue: trendPopup.trend.maxValue === undefined || trendPopup.trend.maxValue === null
                           ? NaN : trendPopup.trend.maxValue
+                meanValue: trendPopup.trend.meanValue === undefined || trendPopup.trend.meanValue === null
+                           ? NaN : trendPopup.trend.meanValue
                 emptyText: "Данных ещё нет: опрос идёт, пока раздел открыт"
             }
 
             Text {
                 Layout.fillWidth: true
-                text: "По горизонтали секунды с начала записи графика. Пунктиром показаны минимум и максимум."
+                text: "По горизонтали секунды с начала записи графика. Пунктиром показаны минимум, максимум "
+                    + "и среднее. Дельта - разница между минимумом и максимумом."
                 color: root.textSoft
                 font.pixelSize: 11
                 font.family: "Bahnschrift"

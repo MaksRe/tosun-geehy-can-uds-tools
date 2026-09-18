@@ -22,6 +22,23 @@ class AppControllerCalibrationMixin(AppControllerContract):
     _INT16_MIN = -32768
     _INT16_MAX = 32767
 
+    # Через сколько повторить попытку опроса, если шину занимает другой раздел, мс.
+    #
+    # Ждать целый период опроса нельзя. Опрос идёт по таймеру, и другие разделы
+    # опрашивают прибор своими таймерами. Два строго периодических опроса легко
+    # совпадают по фазе: чужой запрос каждый раз уходит за мгновение до нашего, и
+    # тогда очередь до основного контура не доходит вообще - показания замирают
+    # на десятки секунд, хотя прибор жив и отвечает другим разделам.
+    CALIBRATION_POLL_RETRY_MS = 120
+
+    # Сколько ждать подтверждения записи чтением, с.
+    # Пока программа ждёт, шина считается занятой калибровкой, поэтому ожидание
+    # обязано кончаться: потерянный ответ не должен останавливать все опросы.
+    CALIBRATION_VERIFY_WAIT_S = 6.0
+
+    # Через сколько после записи спросить записанное обратно, мс.
+    CALIBRATION_VERIFY_READ_DELAY_MS = 250
+
     # Подгонка нуля читается и пишется по одному номеру параметра, поэтому
     # таблица полей для неё не нужна: обращение идёт напрямую к UdsData.
 
@@ -259,6 +276,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
         self._set_calibration_session_ready(False)
         self._stop_calibration_poll_timer()
         self._calibration_write_verify_pending = {}
+        self._calibration_write_verify_sent_s = {}
         self.calibrationVerificationChanged.emit()
         if self._calibration_active:
             self._calibration_active = False
@@ -276,6 +294,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
         self._set_calibration_session_ready(False)
         self._stop_calibration_poll_timer()
         self._calibration_write_verify_pending = {}
+        self._calibration_write_verify_sent_s = {}
         self.calibrationVerificationChanged.emit()
         self._set_calibration_service_access_state(
             busy=False,
@@ -303,6 +322,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
         self._calibration_waiting_session = False
         self._set_calibration_session_ready(False)
         self._calibration_write_verify_pending = {}
+        self._calibration_write_verify_sent_s = {}
         self._calibration_restore_active = False
         self._calibration_restore_current_did = None
         self.calibrationVerificationChanged.emit()
@@ -1150,7 +1170,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 if did is not None:
                     expected_value = self._calibration_write_verify_pending.get(int(did))
                     did_label = self._calibration_did_label(did)
-                    self._calibration_write_verify_pending.pop(int(did), None)
+                    self._forget_calibration_write_verify(int(did))
                     self._mark_media_forget_intent(int(did))
                     if int(did) == int(UdsData.empty_fuel_tank.pid):
                         self._calibration_level0_written = False
@@ -1306,6 +1326,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
                 self._stop_calibration_poll_timer()
                 self._set_calibration_session_ready(False)
                 self._calibration_write_verify_pending = {}
+                self._calibration_write_verify_sent_s = {}
                 self.calibrationVerificationChanged.emit()
                 if self._calibration_active:
                     self._calibration_active = False
@@ -1518,7 +1539,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
                         f"Калибровка: автопроверка DID 0x{did:04X} НЕ пройдена (ожидалось {expected_value}, факт {value}).",
                         RowColor.red,
                     )
-                self._calibration_write_verify_pending.pop(did, None)
+                self._forget_calibration_write_verify(int(did))
                 self.calibrationVerificationChanged.emit()
                 self._recompute_calibration_wizard_state()
 
@@ -1576,24 +1597,128 @@ class AppControllerCalibrationMixin(AppControllerContract):
         if not self._calibration_active:
             self._stop_calibration_poll_timer()
             return
+        # Ожидание подтверждения записи занимает шину для всех разделов, поэтому
+        # просроченное ожидание снимается раньше всех остальных проверок.
+        self._expire_calibration_write_verify()
+
         if not self._can.is_connect or not self._can.is_trace:
+            self._schedule_calibration_poll(self._calibration_poll_interval_ms)
             return
-        if self._source_address_busy:
+        if self._source_address_busy or self._programming_active:
+            self._schedule_calibration_poll(self._calibration_poll_interval_ms)
             return
-        if self._programming_active:
+
+        # Записанное значение сверяется раньше очередного показания: пока оно не
+        # сверено, шина занята и опрос всё равно не пойдёт. Занятость калибровкой
+        # здесь и есть само это ожидание, поэтому она в расчёт не берётся.
+        verify_did = self._calibration_verify_due_did()
+        if verify_did is not None:
+            if uds_exchange_busy(self, ignore=("calibration",)) or background_request_recent(self):
+                self._schedule_calibration_poll(self.CALIBRATION_POLL_RETRY_MS)
+                return
+            self._request_calibration_write_verify_read(int(verify_did))
+            note_background_request(self)
+            # Ответ приходит за десятки миллисекунд. Пауза до следующей попытки
+            # заодно задаёт, как часто повторять запрос, если ответа не будет.
+            self._schedule_calibration_poll(self.CALIBRATION_VERIFY_READ_DELAY_MS)
             return
+
         # Прибор держит один канал ISO-TP: запрос, пришедший раньше ответа на чужой,
-        # затирает его. Поэтому опрос молчит, пока другой раздел обменивается с прибором.
+        # затирает его. Поэтому опрос молчит, пока другой раздел обменивается с прибором,
+        # но возвращается скоро, а не через целый период: иначе очередь до него не дойдёт.
         if uds_exchange_busy(self) or background_request_recent(self):
+            self._schedule_calibration_poll(self.CALIBRATION_POLL_RETRY_MS)
             return
         self._request_calibration_runtime_snapshot()
         note_background_request(self)
+        self._schedule_calibration_poll(self._calibration_poll_interval_ms)
+
+    def _schedule_calibration_poll(self, delay_ms):
+        """Назначает следующую попытку опроса через заданное время."""
+        self._calibration_poll_timer.setSingleShot(True)
+        self._calibration_poll_timer.start(max(20, int(delay_ms)))
+
+    # ------------------------------------------------------------------ подтверждение записи
+
+    def _note_calibration_write_verify(self, did: int, value: int):
+        """Запоминает, что записанное значение ждёт подтверждения чтением.
+
+        Подтверждение спрашивает сам опрос, и первый раз - вскоре после записи.
+        Раньше его не спрашивал никто: значение сверялось, только если оператор
+        сам нажимал «Прочитать», а до тех пор ожидание держало шину занятой.
+        """
+        self._calibration_write_verify_pending[int(did)] = int(value)
+        self._calibration_write_verify_sent_s[int(did)] = time.monotonic()
+        if self._calibration_poll_timer.isActive():
+            self._schedule_calibration_poll(self.CALIBRATION_VERIFY_READ_DELAY_MS)
+
+    def _forget_calibration_write_verify(self, did: int):
+        """Снимает ожидание подтверждения по одному параметру."""
+        self._calibration_write_verify_pending.pop(int(did), None)
+        self._calibration_write_verify_sent_s.pop(int(did), None)
+
+    def _calibration_verify_due_did(self):
+        """Параметр, записанное значение которого пора прочитать обратно, или None.
+
+        Во время возврата копии, снятия дампа и подъёма сессии эти разделы ведут
+        обмен сами, и вмешиваться в него нельзя.
+        """
+        if not self._calibration_write_verify_pending:
+            return None
+        if bool(self._calibration_restore_active) or bool(self._calibration_dump_capture_active):
+            return None
+        if str(self._calibration_sequence_waiting_action or ""):
+            return None
+        return min(
+            (int(did) for did in self._calibration_write_verify_pending.keys()),
+            key=lambda did: float(self._calibration_write_verify_sent_s.get(int(did), 0.0)),
+        )
+
+    def _request_calibration_write_verify_read(self, did: int):
+        """Читает записанный параметр обратно: ответ сверит обработчик чтения."""
+        target_var = UdsData.get_var_by_pid(int(did))
+        if target_var is None:
+            self._forget_calibration_write_verify(int(did))
+            return
+        self._configure_calibration_uds_services()
+        try:
+            self._calibration_read_service.read_data_by_identifier(
+                self._build_calibration_tx_identifier(), target_var)
+        except Exception:
+            pass
+
+    def _expire_calibration_write_verify(self):
+        """Снимает ожидание подтверждения, если ответ так и не пришёл.
+
+        Пока ожидание висит, шина считается занятой калибровкой, и молчат все
+        фоновые опросы: и основной контур, и плоский конденсатор. Поэтому
+        ожидание обязано кончаться, даже когда ответ потерялся.
+        """
+        if not self._calibration_write_verify_pending:
+            self._calibration_write_verify_sent_s = {}
+            return
+        now = time.monotonic()
+        for did in list(self._calibration_write_verify_pending.keys()):
+            sent = self._calibration_write_verify_sent_s.get(int(did))
+            if sent is None:
+                self._calibration_write_verify_sent_s[int(did)] = now
+                continue
+            if now - float(sent) <= self.CALIBRATION_VERIFY_WAIT_S:
+                continue
+            self._forget_calibration_write_verify(int(did))
+            self._mark_media_forget_intent(int(did))
+            self._append_log(
+                f"Калибровка: подтверждение записи {self._calibration_did_label(did)} не получено за "
+                f"{int(self.CALIBRATION_VERIFY_WAIT_S)} с. Значение записано, но не сверено: "
+                "прочитайте его кнопкой «Прочитать».",
+                RowColor.yellow,
+            )
+            self.calibrationVerificationChanged.emit()
+            self._recompute_calibration_wizard_state()
 
     def _start_calibration_poll_timer(self):
-        if self._calibration_poll_timer.interval() != self._calibration_poll_interval_ms:
-            self._calibration_poll_timer.setInterval(self._calibration_poll_interval_ms)
         if not self._calibration_poll_timer.isActive():
-            self._calibration_poll_timer.start()
+            self._schedule_calibration_poll(self._calibration_poll_interval_ms)
         # Плоский конденсатор опрашивается вместе с основным контуром, отдельно включать его не нужно.
         self._media_wizard_start_watch()
 
@@ -1642,7 +1767,7 @@ class AppControllerCalibrationMixin(AppControllerContract):
             int(value),
             tx_identifier=self._build_calibration_tx_identifier(),
         ):
-            self._calibration_write_verify_pending[int(did)] = int(value)
+            self._note_calibration_write_verify(int(did), int(value))
             if int(did) == int(UdsData.empty_fuel_tank.pid):
                 self._calibration_level0_written = True
                 self._calibration_verify0_ok = False

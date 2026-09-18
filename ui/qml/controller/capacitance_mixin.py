@@ -27,11 +27,13 @@ from __future__ import annotations
 import time
 
 from ..capacitance import (
+    DEFAULT_FUEL_EPS,
     REFERENCE_CAP_PF,
     counts_text,
     counts_to_pf,
     decimal_text,
     difference_text,
+    parasitic_from_points,
     pf_text,
     swing_percent,
     window_stats,
@@ -60,6 +62,31 @@ class AppControllerCapacitanceMixin(AppControllerContract):
         self._capacitance_test_point = None
         self._capacitance_status = ""
         self._capacitance_status_color = "#64748b"
+        # Проницаемость топлива, на котором калибруют: нужна, чтобы отделить
+        # постоянную часть ёмкости от самого датчика. В прибор не пишется.
+        self._capacitance_fuel_eps = DEFAULT_FUEL_EPS
+
+    def _capacitance_set_fuel_eps(self, text: str):
+        """Задаёт проницаемость топлива, по которой делится ёмкость контура."""
+        try:
+            value = float(str(text).replace(",", ".").strip())
+        except ValueError:
+            self._capacitance_set_status(
+                "Проницаемость топлива: в поле не число. Для дизельного топлива это около 2,35.",
+                self.CAPACITANCE_COLOR_WARN,
+            )
+            return
+        if not (1.05 <= value <= 10.0):
+            self._capacitance_set_status(
+                f"Проницаемость топлива {decimal_text(value, 2)} вне разумного: ждём от 1,05 до 10.",
+                self.CAPACITANCE_COLOR_WARN,
+            )
+            return
+        self._capacitance_fuel_eps = value
+        self._capacitance_set_status(
+            f"Проницаемость топлива принята равной {decimal_text(value, 2)}.",
+            self.CAPACITANCE_COLOR_IDLE,
+        )
 
     # ------------------------------------------------------------------ окна показаний
 
@@ -68,8 +95,63 @@ class AppControllerCapacitanceMixin(AppControllerContract):
         window = getattr(self, "_calibration_recent_window_sec", None)
         return float(window) if window else 4.0
 
+    def _capacitance_reference_points(self, key: str) -> tuple:
+        """Две опорные точки контура: в воздухе и в топливе, в отсчётах."""
+        if key == "main":
+            # Отметки бака сняты в тех же двух положениях: 0 % это сухой датчик.
+            air = self._calibration_level_0 if self._calibration_level_0_known else None
+            fuel = self._calibration_level_100 if self._calibration_level_100_known else None
+            return air, fuel, "отметкам 0 % и 100 %"
+        return self._media_wizard_air, self._media_wizard_cal, "точкам «воздух» и «топливо»"
+
+    def _capacitance_split(self, key: str) -> dict:
+        """Постоянная часть ёмкости контура и чувствительность самого датчика."""
+        air, fuel, source = self._capacitance_reference_points(key)
+        split = parasitic_from_points(air, fuel, self._capacitance_fuel_eps)
+
+        view = {
+            "parasiticText": "—",
+            "strayText": "",
+            "sensitivityText": "",
+            "sourceText": "",
+        }
+        if split is None:
+            view["sourceText"] = (
+                f"Постоянная часть считается по {source}. "
+                "Прочитайте их из прибора, и в топливе ёмкость должна быть выше, чем в воздухе."
+            )
+            return view
+
+        stray = float(split["stray_pf"])
+        view["parasiticText"] = (
+            f"{int(round(float(split['parasitic_counts'])))} отсч. "
+            f"· {decimal_text(float(split['parasitic_pf']), 1)} пФ"
+        )
+        if stray > 0.0:
+            view["strayText"] = (
+                f"это образцовый конденсатор {int(REFERENCE_CAP_PF)} пФ и ещё "
+                f"{decimal_text(stray, 1)} пФ на кабель, разъём, плату и вход"
+            )
+        else:
+            # Постоянная часть ниже одного образцового конденсатора физически
+            # невозможна, если номиналы контура те же, что в расчёте. Значит,
+            # у этого контура другой заряжающий резистор или другой образцовый
+            # конденсатор, и пикофарады по нему считать нельзя.
+            view["strayText"] = (
+                f"это меньше образцового конденсатора {int(REFERENCE_CAP_PF)} пФ, значит у контура "
+                "другие номиналы, чем в расчёте: отсчётам верьте, пикофарадам нет"
+            )
+        view["sensitivityText"] = (
+            f"датчик даёт {decimal_text(float(split['sensitivity_pf']), 1)} пФ на единицу проницаемости"
+        )
+        view["sourceText"] = (
+            f"Посчитано по {source} при проницаемости топлива "
+            f"{decimal_text(float(self._capacitance_fuel_eps), 2)}."
+        )
+        return view
+
     def _capacitance_circuit(self, key: str, now: float) -> dict:
-        """Ёмкость одного контура: эффективное значение, текущее и плавание."""
+        """Ёмкость одного контура: эффективное значение, текущее, плавание и состав."""
         window = self._capacitance_window_s()
         if key == "main":
             samples = getattr(self, "_calibration_recent_samples", None) or []
@@ -86,11 +168,13 @@ class AppControllerCapacitanceMixin(AppControllerContract):
             "currentPf": pf_text(current),
             "effectiveCounts": "—",
             "effectivePf": "—",
+            "effectiveNote": "",
             "swingText": "нет данных",
             "spreadText": "",
             "offsetText": "",
             "warn": False,
         }
+        view.update(self._capacitance_split(key))
 
         if stats is None:
             view["swingText"] = "показаний ещё нет: опрос идёт после «Начать калибровку»"
@@ -99,6 +183,9 @@ class AppControllerCapacitanceMixin(AppControllerContract):
         effective = float(stats["effective"])
         view["effectiveCounts"] = counts_text(effective)
         view["effectivePf"] = pf_text(effective)
+        view["effectiveNote"] = (
+            f"среднее за {decimal_text(window, 0)} с, то же число, что в «Захват, среднее»"
+        )
 
         swing = float(stats["swing"])
         percent = swing_percent(stats)
@@ -214,8 +301,11 @@ class AppControllerCapacitanceMixin(AppControllerContract):
             "main": self._capacitance_circuit("main", now),
             "media": self._capacitance_circuit("media", now),
             "testPoint": self._capacitance_test_point_view(),
+            "fuelEpsText": decimal_text(float(self._capacitance_fuel_eps), 2),
             "note": (
-                "В пикофарадах показана вся ёмкость контура: датчик, образцовый конденсатор "
-                f"{int(REFERENCE_CAP_PF)} пФ, кабель и плата. Сравнивать имеет смысл разности."
+                "Отсчёт контура - это время между порогами компараторов, оно прямо пропорционально "
+                f"ёмкости: {decimal_text(1.0 / counts_to_pf(1.0), 1)} отсчёта на пикофараду при заряде "
+                "через 270 кОм и отношении порогов 8,2. В пикофарадах показана вся ёмкость контура: "
+                f"датчик, образцовый конденсатор {int(REFERENCE_CAP_PF)} пФ, кабель и плата."
             ),
         }

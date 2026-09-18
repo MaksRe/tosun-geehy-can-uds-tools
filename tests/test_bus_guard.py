@@ -59,6 +59,27 @@ def test_background_requests_keep_a_gap():
     assert not background_request_recent(ctrl)
 
 
+class _FakeTimer:
+    """Таймер опроса без Qt: помнит, на сколько назначена следующая попытка."""
+
+    def __init__(self):
+        self.active = False
+        self.delay = None
+
+    def setSingleShot(self, value):
+        pass
+
+    def isActive(self):
+        return self.active
+
+    def start(self, delay=None):
+        self.active = True
+        self.delay = None if delay is None else int(delay)
+
+    def stop(self):
+        self.active = False
+
+
 class _PollStub(AppControllerCalibrationMixin):
     def __init__(self):
         self._calibration_active = True
@@ -66,13 +87,39 @@ class _PollStub(AppControllerCalibrationMixin):
         self._source_address_busy = False
         self._programming_active = False
         self._chamber_busy = False
+        self._calibration_poll_interval_ms = 1000
+        self._calibration_poll_timer = _FakeTimer()
+        self._calibration_write_verify_pending = {}
+        self._calibration_write_verify_sent_s = {}
+        self._calibration_restore_active = False
+        self._calibration_dump_capture_active = False
+        self._calibration_sequence_waiting_action = ""
         self.polls = 0
+        self.verify_reads = []
+        self.logs = []
 
     def _request_calibration_runtime_snapshot(self):
         self.polls += 1
 
+    def _request_calibration_write_verify_read(self, did):
+        self.verify_reads.append(int(did))
+
     def _stop_calibration_poll_timer(self):
         pass
+
+    def _append_log(self, text, color):
+        self.logs.append(text)
+
+    def _mark_media_forget_intent(self, did):
+        pass
+
+    def _recompute_calibration_wizard_state(self):
+        pass
+
+    def _calibration_did_label(self, did):
+        return f"DID 0x{int(did):04X}"
+
+    calibrationVerificationChanged = type("_Sig", (), {"emit": lambda self: None})()
 
 
 def test_calibration_poll_yields_to_a_point_capture():
@@ -89,3 +136,47 @@ def test_calibration_poll_yields_to_a_point_capture():
     # Сразу следующий фоновый запрос не уходит: ответ на прежний ещё в пути.
     stub._on_calibration_poll_tick()
     assert stub.polls == 1
+
+
+def test_busy_bus_costs_a_short_pause_and_not_a_whole_period():
+    """Из-за потери целого периода опрос основного контура замирал на десятки секунд.
+
+    Два строго периодических опроса совпадают по фазе, чужой запрос каждый раз
+    уходит за мгновение до нашего, и очередь до основного контура не доходит.
+    Поэтому занятая шина стоит короткой паузы, а не всего периода.
+    """
+    stub = _PollStub()
+    stub._chamber_busy = True
+    stub._on_calibration_poll_tick()
+    assert stub._calibration_poll_timer.delay == stub.CALIBRATION_POLL_RETRY_MS
+    assert stub._calibration_poll_timer.delay < stub._calibration_poll_interval_ms
+
+    stub._chamber_busy = False
+    stub._on_calibration_poll_tick()
+    assert stub.polls == 1
+    assert stub._calibration_poll_timer.delay == stub._calibration_poll_interval_ms
+
+
+def test_written_value_is_read_back_by_the_poll_itself():
+    """Раньше записанное значение никто не перечитывал, и ожидание держало шину."""
+    stub = _PollStub()
+    stub._note_calibration_write_verify(0x0013, 12130)
+    stub._on_calibration_poll_tick()
+
+    assert stub.verify_reads == [0x0013]
+    assert stub.polls == 0, "пока значение не сверено, обычный опрос ждёт"
+
+
+def test_lost_confirmation_does_not_block_the_bus_forever():
+    """Потерянный ответ не должен останавливать опрос всех разделов насовсем."""
+    stub = _PollStub()
+    stub._note_calibration_write_verify(0x0013, 12130)
+    assert uds_exchange_busy(stub) == "calibration"
+
+    # Ответ так и не пришёл: ожидание старше своего срока.
+    stub._calibration_write_verify_sent_s[0x0013] = time.monotonic() - stub.CALIBRATION_VERIFY_WAIT_S - 1.0
+    stub._on_calibration_poll_tick()
+
+    assert stub._calibration_write_verify_pending == {}
+    assert uds_exchange_busy(stub) == ""
+    assert any("не получено" in text for text in stub.logs)

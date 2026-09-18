@@ -1615,7 +1615,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             write_payload,
             tx_identifier=self._build_calibration_tx_identifier(),
         ):
-            self._calibration_write_verify_pending[int(UdsData.fuel_zero_trim_count.pid)] = int(value)
+            self._note_calibration_write_verify(int(UdsData.fuel_zero_trim_count.pid), int(value))
             self.calibrationVerificationChanged.emit()
             self._append_log(f"Калибровка: запись коррекции zero trim = {int(value)}.", RowColor.blue)
             return
@@ -1646,7 +1646,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             value,
             tx_identifier=self._build_calibration_tx_identifier(),
         ):
-            self._calibration_write_verify_pending[int(UdsData.empty_fuel_tank.pid)] = int(value)
+            self._note_calibration_write_verify(int(UdsData.empty_fuel_tank.pid), int(value))
             self._mark_media_note_intent(int(UdsData.empty_fuel_tank.pid), value)
             self._calibration_level0_written = True
             self._calibration_verify0_ok = False
@@ -1673,7 +1673,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             value,
             tx_identifier=self._build_calibration_tx_identifier(),
         ):
-            self._calibration_write_verify_pending[int(UdsData.full_fuel_tank.pid)] = int(value)
+            self._note_calibration_write_verify(int(UdsData.full_fuel_tank.pid), int(value))
             self._mark_media_note_intent(int(UdsData.full_fuel_tank.pid), value)
             self._calibration_level100_written = True
             self._calibration_verify100_ok = False
@@ -2371,6 +2371,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             self._stop_calibration_poll_timer()
             self._calibration_waiting_session = False
             self._calibration_write_verify_pending = {}
+            self._calibration_write_verify_sent_s = {}
             self._calibration_recent_samples = []
             self._calibration_captured_level = 0
             self._calibration_captured_available = False
@@ -3091,6 +3092,11 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
     def saveCapacitanceTestPoint(self, value_text):
         """Цель функции в снятии точки «полное погружение», затем она живёт только в программе, для отладки."""
         self._capacitance_save_test_point(str(value_text))
+
+    @Slot(str)
+    def setCapacitanceFuelPermittivity(self, text):
+        """Цель функции в задании проницаемости топлива, затем по ней делится ёмкость контура на части."""
+        self._capacitance_set_fuel_eps(str(text))
 
     @Slot()
     def clearCapacitanceTestPoint(self):

@@ -56,6 +56,9 @@ class AppControllerMediaWizardMixin(AppControllerContract):
     # Пауза перед первым запросом наблюдения: даёт ответить на первое чтение основного контура.
     MEDIA_WIZARD_WATCH_START_MS = 150
 
+    # Через сколько повторить попытку, если в это мгновение шину занял другой раздел, мс.
+    MEDIA_WIZARD_WATCH_RETRY_MS = 120
+
     MEDIA_WIZARD_COLOR_OK = "#16a34a"
     MEDIA_WIZARD_COLOR_WARN = "#d97706"
     MEDIA_WIZARD_COLOR_BAD = "#dc2626"
@@ -186,8 +189,10 @@ class AppControllerMediaWizardMixin(AppControllerContract):
         if self._media_wizard_busy or not self._media_wizard_watching:
             return
         # Живое показание фоновое: оно уступает шину разделам, которые ведут обмен.
+        # Ждать потом целый период нельзя: чужой опрос идёт по своему таймеру и может
+        # каждый раз попадать в то же мгновение, и тогда очередь сюда не дойдёт вовсе.
         if uds_exchange_busy(self, ignore=("media_wizard",)) or background_request_recent(self):
-            self._media_wizard_gap_timer.start(self._media_wizard_watch_gap_ms())
+            self._media_wizard_gap_timer.start(self.MEDIA_WIZARD_WATCH_RETRY_MS)
             return
         if self._live_age_due("flatcap"):
             # Показание фильтрованное и при остановке контура застывает: изредка спрашиваем возраст измерения.

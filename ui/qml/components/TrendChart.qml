@@ -30,6 +30,7 @@ Rectangle {
     property bool compact: false
     property real minValue: NaN
     property real maxValue: NaN
+    property real meanValue: NaN
     property string unit: ""
     property string emptyText: "нет данных"
 
@@ -42,6 +43,7 @@ Rectangle {
     onPointsChanged: canvas.requestPaint()
     onMinValueChanged: canvas.requestPaint()
     onMaxValueChanged: canvas.requestPaint()
+    onMeanValueChanged: canvas.requestPaint()
     onWidthChanged: canvas.requestPaint()
     onHeightChanged: canvas.requestPaint()
 
@@ -146,6 +148,7 @@ Rectangle {
             }
             dashedLine(root.maxValue, "#f0a35e")
             dashedLine(root.minValue, "#7dbfe8")
+            dashedLine(root.meanValue, "#8fbfb4")
 
             ctx.strokeStyle = root.lineColor
             ctx.lineWidth = root.compact ? 1.5 : 2

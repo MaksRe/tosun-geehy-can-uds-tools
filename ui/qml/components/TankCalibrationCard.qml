@@ -396,6 +396,9 @@ Item {
                 appController: root.appController
                 textMain: root.textMain
                 textSoft: root.textSoft
+                inputBg: root.inputBg
+                inputBorder: root.inputBorder
+                inputFocus: root.inputFocus
                 wide: root.wide
             }
 
