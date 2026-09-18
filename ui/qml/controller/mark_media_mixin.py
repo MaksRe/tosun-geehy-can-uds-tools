@@ -10,9 +10,13 @@
 ЧТО ДЕЛАЕТ МОДУЛЬ
 Когда отметка записана и сверена, модуль сразу снимает короткую серию показаний
 плоского конденсатора (0x0036), проверяет, что они устоялись, читает точку
-«воздух» (0x002F), пишет среднее в 0x0054 или 0x0055 и читает обратно. Датчик в
-эту секунду стоит там же, где снималась отметка, поэтому пара «отметка и вид
-топлива» относится к одному состоянию.
+«воздух» (0x002F) и включённую модель уровня (0x0053), пишет среднее в 0x0054
+или 0x0055 и читает обратно. Датчик в эту секунду стоит там же, где снималась
+отметка, поэтому пара «отметка и вид топлива» относится к одному состоянию.
+
+Замечания к записанному числу зависят от модели уровня в приборе. Пока работает
+прежняя модель, эти числа ни на что не влияют, и итог пишется обычной строкой.
+Предупреждение появляется, только когда включена модель по двум контурам.
 
 Серия снимается, только если записанная отметка совпадает с тем, что прибор
 показывает сейчас. Значение, введённое вручную не по месту, к текущему показанию
@@ -73,6 +77,8 @@ class AppControllerMarkMediaMixin(AppControllerContract):
         self._mark_media_samples = []
         self._mark_media_value = None
         self._mark_media_air = None
+        # Какая модель уровня включена в приборе: от неё зависит, важна ли отметка без топлива.
+        self._mark_media_model = None
         self._mark_media_status = ""
         self._mark_media_status_color = self.MARK_MEDIA_COLOR_IDLE
 
@@ -117,6 +123,8 @@ class AppControllerMarkMediaMixin(AppControllerContract):
 
         live = reference is not None and abs(int(value) - reference) <= self.MARK_MEDIA_LIVE_TOLERANCE
         self._mark_media_intent[int(mark_did)] = {"live": live, "value": int(value), "reference": reference}
+        # Итог прошлой записи относился к прошлой отметке: пусть не висит рядом с новой.
+        self._mark_media_set_status("", self.MARK_MEDIA_COLOR_IDLE)
 
     def _mark_media_forget_intent(self, mark_did: int):
         """Отметка не прошла сверку: вид топлива к ней не пишется."""
@@ -156,6 +164,7 @@ class AppControllerMarkMediaMixin(AppControllerContract):
         self._mark_media_samples = []
         self._mark_media_value = None
         self._mark_media_air = None
+        self._mark_media_model = None
         self._mark_media_set_status(
             f"снимаю вид топлива для отметки {label}...", self.MARK_MEDIA_COLOR_IDLE)
         self._mark_media_request("sample", UdsData.fuel_media_flatcap_raw)
@@ -230,6 +239,14 @@ class AppControllerMarkMediaMixin(AppControllerContract):
                 return
             if len(body) > 2 and body[2] == 0x78:
                 return
+            if action == "model":
+                # Прошивка без параметра модели: считаем модель прежней и пишем дальше.
+                self._mark_media_timeout_timer.stop()
+                self._mark_media_pending = None
+                self._mark_media_model = None
+                media_var, _label = self._mark_media_target(self._mark_media_mark_did)
+                self._mark_media_request("write", media_var, self._mark_media_value)
+                return
             self._mark_media_finish(
                 f"вид топлива к отметке не записан: прибор отказал на DID 0x{int(var.pid) & 0xFFFF:04X}, "
                 f"код 0x{body[2]:02X}.",
@@ -288,6 +305,11 @@ class AppControllerMarkMediaMixin(AppControllerContract):
 
         if action == "air":
             self._mark_media_air = int(value)
+            self._mark_media_request("model", UdsData.fuel_tank_model)
+            return
+
+        if action == "model":
+            self._mark_media_model = int(value)
             self._mark_media_request("write", media_var, self._mark_media_value)
             return
 
@@ -302,22 +324,38 @@ class AppControllerMarkMediaMixin(AppControllerContract):
                 return
 
             text = f"вид топлива для отметки {label} записан в {did_text}: {written} отсч."
+            # Эти числа нужны только модели по двум контурам. Пока в приборе прежняя
+            # модель, замечания к ним ничего не меняют, поэтому идут обычной строкой.
+            two_circuit = self._mark_media_model == 1
             air = self._mark_media_air
             if air is None or air <= 0:
-                self._mark_media_finish(
-                    text + " Точка «воздух» (0x002F) в приборе не записана: без неё модель по двум "
-                    "контурам уровень не посчитает. Снимите её в разделе «Уровень и вид топлива».",
-                    self.MARK_MEDIA_COLOR_WARN, RowColor.yellow,
-                )
+                if two_circuit:
+                    self._mark_media_finish(
+                        text + " Точка «воздух» (0x002F) в приборе не записана: без неё модель по двум "
+                        "контурам уровень не посчитает. Снимите её в разделе «Уровень и вид топлива».",
+                        self.MARK_MEDIA_COLOR_WARN, RowColor.yellow,
+                    )
+                else:
+                    self._mark_media_finish(
+                        text + " Точка «воздух» в приборе не записана, но включена прежняя модель уровня: "
+                        "ей это число не нужно.",
+                        self.MARK_MEDIA_COLOR_IDLE, RowColor.blue,
+                    )
                 return
             delta = int(written) - int(air)
             if delta < self.MARK_MEDIA_MIN_DELTA:
-                self._mark_media_finish(
-                    text + f" Это почти показание на воздухе ({air}): плоский конденсатор в момент отметки "
-                    "сухой. Прежней модели это не мешает, а модель по двум контурам в текущей прошивке "
-                    "такую отметку не примет.",
-                    self.MARK_MEDIA_COLOR_WARN, RowColor.yellow,
-                )
+                if two_circuit:
+                    self._mark_media_finish(
+                        text + f" Это почти показание на воздухе ({air}): плоский конденсатор в момент "
+                        "отметки сухой, и модель по двум контурам такую отметку не примет.",
+                        self.MARK_MEDIA_COLOR_WARN, RowColor.yellow,
+                    )
+                else:
+                    self._mark_media_finish(
+                        text + f" Плоский конденсатор в момент отметки был сухой (на воздухе {air}). "
+                        "Включена прежняя модель уровня, ей это не мешает.",
+                        self.MARK_MEDIA_COLOR_IDLE, RowColor.blue,
+                    )
                 return
             self._mark_media_finish(text + f" Выше воздуха на {delta} отсч.",
                                     self.MARK_MEDIA_COLOR_OK, RowColor.green)

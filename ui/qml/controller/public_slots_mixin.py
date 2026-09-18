@@ -3168,6 +3168,11 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._media_wizard_set_enabled(bool(enabled))
 
     @Slot()
+    def clearCalibrationMarkMediaStatus(self):
+        """Цель функции в скрытии итога записи вида топлива к отметке, затем строка не висит после работы."""
+        self._mark_media_set_status("", self.MARK_MEDIA_COLOR_IDLE)
+
+    @Slot()
     def refreshMediaWizardSaved(self):
         """Цель функции в чтении уже сохранённых опорных точек, затем она показывает текущее состояние прибора."""
         self._media_wizard_refresh_saved()

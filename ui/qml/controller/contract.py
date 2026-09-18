@@ -194,6 +194,7 @@ class AppControllerContract:
     _mark_media_samples: Any
     _mark_media_value: Any
     _mark_media_air: Any
+    _mark_media_model: Any
     _mark_media_status: Any
     _mark_media_status_color: Any
     _mark_media_gap_timer: Any

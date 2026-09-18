@@ -679,15 +679,33 @@ Item {
                     }
 
                     // Итог записи вида топлива к последней отметке: нужен модели уровня по двум контурам.
-                    Text {
+                    RowLayout {
                         Layout.fillWidth: true
                         Layout.leftMargin: 22
-                        visible: text !== ""
-                        text: root.appController ? root.appController.calibrationMarkMediaStatus : ""
-                        color: root.appController ? root.appController.calibrationMarkMediaStatusColor : root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                        wrapMode: Text.WordWrap
+                        visible: markMediaText.text !== ""
+                        spacing: 8
+
+                        Text {
+                            id: markMediaText
+                            Layout.fillWidth: true
+                            text: root.appController ? root.appController.calibrationMarkMediaStatus : ""
+                            color: root.appController ? root.appController.calibrationMarkMediaStatusColor : root.textSoft
+                            font.pixelSize: 11
+                            font.family: "Bahnschrift"
+                            wrapMode: Text.WordWrap
+                        }
+
+                        FancyButton {
+                            Layout.alignment: Qt.AlignTop
+                            Layout.preferredWidth: 78
+                            Layout.preferredHeight: 24
+                            text: "Скрыть"
+                            tone: "#94a3b8"
+                            toneHover: "#64748b"
+                            tonePressed: "#475569"
+                            enabled: root.appController !== null
+                            onClicked: if (root.appController) root.appController.clearCalibrationMarkMediaStatus()
+                        }
                     }
                 }
             }

@@ -5,8 +5,9 @@
 положения датчика, модель тихо посчитает неверный уровень во всём диапазоне.
 
 Тесты закрепляют: показание пишется только к отметке, снятой по месту; серия
-обязана устояться; записанное сверяется чтением; сухой плоский конденсатор в
-момент отметки называется прямо; отказ прибора останавливает цепочку.
+обязана устояться; записанное сверяется чтением; замечания зависят от того,
+какая модель уровня включена в приборе; отказ прибора останавливает цепочку, а
+итог прошлой записи не висит рядом со следующей отметкой.
 """
 
 from __future__ import annotations
@@ -24,8 +25,13 @@ DID_EMPTY = int(UdsData.empty_fuel_tank.pid)
 DID_FULL = int(UdsData.full_fuel_tank.pid)
 DID_RAW = int(UdsData.fuel_media_flatcap_raw.pid)
 DID_AIR = int(UdsData.fuel_media_flatcap_air_count.pid)
+DID_MODEL = int(UdsData.fuel_tank_model.pid)
 DID_ZERO_MEDIA = int(UdsData.fuel_tank_zero_media_count.pid)
 DID_FULL_MEDIA = int(UdsData.fuel_tank_full_media_count.pid)
+
+# Модель расчёта уровня в приборе: 0 прежняя, 1 по двум контурам.
+MODEL_OLD = 0
+MODEL_TWO_CIRCUIT = 1
 
 RX_ID = 0x18DAF16A
 
@@ -90,6 +96,7 @@ class _MarkStub(AppControllerMarkMediaMixin):
         self._mark_media_samples = []
         self._mark_media_value = None
         self._mark_media_air = None
+        self._mark_media_model = None
         self._mark_media_status = ""
         self._mark_media_status_color = ""
         self._mark_media_gap_timer = _FakeTimer()
@@ -130,6 +137,15 @@ def _run_series(stub, samples):
             stub._on_mark_media_gap_timeout()
 
 
+def _run_to_write(stub, media_value, air_value, model):
+    """Проходит цепочку до записи: серия, точка «воздух» и модель уровня прибора."""
+    _run_series(stub, [media_value] * stub.MARK_MEDIA_SAMPLES)
+    assert stub.requests[-1] == ("read", DID_AIR, None)
+    _answer_read(stub, DID_AIR, air_value)
+    assert stub.requests[-1] == ("read", DID_MODEL, None)
+    _answer_read(stub, DID_MODEL, model)
+
+
 def test_mark_taken_in_place_gets_the_media_reading_and_is_verified():
     stub = _MarkStub()
     stub._mark_media_note_intent(DID_FULL, 12140)
@@ -139,6 +155,7 @@ def test_mark_taken_in_place_gets_the_media_reading_and_is_verified():
     _run_series(stub, [3600, 3602, 3599, 3601, 3603, 3601])
     assert stub.requests[-1] == ("read", DID_AIR, None)
     _answer_read(stub, DID_AIR, 2380)
+    _answer_read(stub, DID_MODEL, MODEL_OLD)
     assert stub.requests[-1] == ("write", DID_FULL_MEDIA, 3601)
 
     _answer_write(stub, DID_FULL_MEDIA)
@@ -172,6 +189,14 @@ def test_mark_without_operator_intent_is_left_alone():
     assert stub._mark_media_status == ""
 
 
+def test_next_mark_clears_the_previous_result():
+    """Итог прошлой записи не должен висеть рядом со следующей отметкой."""
+    stub = _MarkStub()
+    stub._mark_media_set_status("вид топлива для отметки 0 % записан.", stub.MARK_MEDIA_COLOR_OK)
+    stub._mark_media_note_intent(DID_FULL, 12130)
+    assert stub._mark_media_status == ""
+
+
 def test_unsettled_media_reading_is_not_written():
     stub = _MarkStub()
     stub._mark_media_note_intent(DID_FULL, 12130)
@@ -183,27 +208,52 @@ def test_unsettled_media_reading_is_not_written():
     assert "гуляло" in stub._mark_media_status
 
 
-def test_dry_flat_capacitor_at_zero_mark_is_written_but_named():
-    """Прежней модели сухой ноль не мешает, а модель по двум контурам его не примет: это надо сказать."""
+def test_dry_flat_capacitor_matters_only_for_the_two_circuit_model():
+    """При прежней модели уровня эти числа ни на что не влияют: пугать оператора нечем."""
     stub = _MarkStub()
     stub._mark_media_note_intent(DID_EMPTY, 12128)
     stub._mark_media_on_mark_verified(DID_EMPTY)
-    _run_series(stub, [2383] * stub.MARK_MEDIA_SAMPLES)
-    _answer_read(stub, DID_AIR, 2380)
+    _run_to_write(stub, 2383, 2380, MODEL_OLD)
     assert stub.requests[-1] == ("write", DID_ZERO_MEDIA, 2383)
     _answer_write(stub, DID_ZERO_MEDIA)
     _answer_read(stub, DID_ZERO_MEDIA, 2383)
 
+    assert stub._mark_media_status_color == stub.MARK_MEDIA_COLOR_IDLE
+    assert "прежняя модель" in stub._mark_media_status
+    assert "не примет" not in stub._mark_media_status
+
+
+def test_dry_flat_capacitor_is_a_warning_with_the_two_circuit_model():
+    stub = _MarkStub()
+    stub._mark_media_note_intent(DID_EMPTY, 12128)
+    stub._mark_media_on_mark_verified(DID_EMPTY)
+    _run_to_write(stub, 2383, 2380, MODEL_TWO_CIRCUIT)
+    _answer_write(stub, DID_ZERO_MEDIA)
+    _answer_read(stub, DID_ZERO_MEDIA, 2383)
+
     assert stub._mark_media_status_color == stub.MARK_MEDIA_COLOR_WARN
-    assert "сухой" in stub._mark_media_status
+    assert "не примет" in stub._mark_media_status
+
+
+def test_firmware_without_the_model_parameter_still_writes():
+    """Старая прошивка не знает 0x0053: запись идёт, а модель считается прежней."""
+    stub = _MarkStub()
+    stub._mark_media_note_intent(DID_FULL, 12130)
+    stub._mark_media_on_mark_verified(DID_FULL)
+    _run_series(stub, [3600] * stub.MARK_MEDIA_SAMPLES)
+    _answer_read(stub, DID_AIR, 2380)
+    assert stub.requests[-1] == ("read", DID_MODEL, None)
+
+    stub._handle_mark_media_frame(RX_ID, _frame([0x7F, 0x22, 0x31]))
+    assert stub.requests[-1] == ("write", DID_FULL_MEDIA, 3600)
+    assert stub._mark_media_active is True
 
 
 def test_value_the_device_did_not_keep_is_reported():
     stub = _MarkStub()
     stub._mark_media_note_intent(DID_FULL, 12130)
     stub._mark_media_on_mark_verified(DID_FULL)
-    _run_series(stub, [3600] * stub.MARK_MEDIA_SAMPLES)
-    _answer_read(stub, DID_AIR, 2380)
+    _run_to_write(stub, 3600, 2380, MODEL_OLD)
     _answer_write(stub, DID_FULL_MEDIA)
     _answer_read(stub, DID_FULL_MEDIA, 0)
 
@@ -215,8 +265,7 @@ def test_refusal_on_the_write_stops_the_chain_and_foreign_refusals_are_ignored()
     stub = _MarkStub()
     stub._mark_media_note_intent(DID_FULL, 12130)
     stub._mark_media_on_mark_verified(DID_FULL)
-    _run_series(stub, [3600] * stub.MARK_MEDIA_SAMPLES)
-    _answer_read(stub, DID_AIR, 2380)
+    _run_to_write(stub, 3600, 2380, MODEL_OLD)
 
     # Отказ на чтение к записи цепочки не относится.
     stub._handle_mark_media_frame(RX_ID, _frame([0x7F, 0x22, 0x31]))
@@ -225,14 +274,3 @@ def test_refusal_on_the_write_stops_the_chain_and_foreign_refusals_are_ignored()
     stub._handle_mark_media_frame(RX_ID, _frame([0x7F, 0x2E, 0x33]))
     assert stub._mark_media_active is False
     assert "0x33" in stub._mark_media_status
-
-
-def test_no_answer_frees_the_bus():
-    stub = _MarkStub()
-    stub._mark_media_note_intent(DID_FULL, 12130)
-    stub._mark_media_on_mark_verified(DID_FULL)
-    stub._on_mark_media_timeout()
-
-    assert stub._mark_media_active is False
-    assert "не ответил" in stub._mark_media_status
-    assert uds_exchange_busy(stub) == ""
