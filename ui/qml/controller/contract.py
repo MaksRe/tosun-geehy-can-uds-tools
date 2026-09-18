@@ -148,6 +148,19 @@ class AppControllerContract:
     _trial_auto_stop_requested: Any
     _trial_auto_backup_ok: Any
     _trial_auto_failed: Any
+    nodeTrendChanged: Any
+    capacitanceChanged: Any
+    calibrationLogChanged: Any
+    _node_trend: Any
+    _capacitance_test_point: Any
+    _capacitance_status: Any
+    _capacitance_status_color: Any
+    _calibration_log: Any
+    _calibration_log_started: Any
+    _calibration_log_last: Any
+    _calibration_log_status: Any
+    _calibration_log_status_color: Any
+    _node_live_wanted: Any
     _node_live_read: Any
     _node_live: Any
     _node_live_seen: Any

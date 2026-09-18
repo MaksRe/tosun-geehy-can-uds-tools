@@ -3064,6 +3064,39 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         """Цель функции в включении опроса текущих данных узла, затем он идёт, пока раздел открыт."""
         self._node_live_set_enabled(bool(enabled))
 
+    @Slot(str, result="QVariantList")
+    def nodeTrendSeries(self, key):
+        """Цель функции в отдаче всей истории одного графика, затем развёрнутое окно рисует её целиком."""
+        return self._node_trend_series_points(str(key))
+
+    @Slot(str)
+    def clearNodeTrend(self, key):
+        """Цель функции в очистке графика вместе с экстремумами, затем заполнение начинается заново."""
+        self._node_trend_clear(str(key))
+
+    @Slot(str)
+    def clearNodeTrendExtremes(self, key):
+        """Цель функции в сбросе только экстремумов, затем график остаётся, а рекорды считаются заново."""
+        self._node_trend_clear_extremes(str(key))
+
+    @Slot(bool)
+    def setCalibrationLogRecording(self, enabled):
+        """Цель функции в управлении журналом калибровки, затем он пишет в CSV всё, что менялось."""
+        if bool(enabled):
+            self._calibration_log_start()
+        else:
+            self._calibration_log_stop()
+
+    @Slot(str)
+    def saveCapacitanceTestPoint(self, value_text):
+        """Цель функции в снятии точки «полное погружение», затем она живёт только в программе, для отладки."""
+        self._capacitance_save_test_point(str(value_text))
+
+    @Slot()
+    def clearCapacitanceTestPoint(self):
+        """Цель функции в забывании тестовой точки, затем раздел показывает только опорные точки прибора."""
+        self._capacitance_clear_test_point()
+
     @Slot()
     def trialEmulationOff(self):
         """Цель функции в выключении эмуляции, затем прибор возвращается к настоящим датчикам."""

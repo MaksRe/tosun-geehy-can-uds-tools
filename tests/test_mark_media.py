@@ -112,6 +112,9 @@ class _MarkStub(AppControllerMarkMediaMixin):
         self._calibration_captured_level = 12130
         self._calibration_current_level = 12128
 
+    def _calibration_log_event(self, text):
+        """Журнала калибровки в заглушке нет: событие никуда не пишется."""
+
     def _append_log(self, text, color):
         self.logs.append(text)
 

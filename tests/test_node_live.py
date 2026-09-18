@@ -76,6 +76,12 @@ class _NodeStub(nl.AppControllerNodeLiveMixin, lf.AppControllerLiveFreshnessMixi
         self._calibration_active = True
         self._calibration_session_ready = True
 
+    def _node_trend_note(self, key, value, now=None):
+        """Истории графиков в заглушке нет: показание никуда не кладётся."""
+
+    def _calibration_log_note(self, key):
+        """Журнала калибровки в заглушке нет: строка не пишется."""
+
     def _is_calibration_response_identifier(self, identifier):
         return identifier == RX_ID
 

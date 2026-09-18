@@ -58,7 +58,9 @@ Card {
 
         if (index === 1) {
             var live = root.appController.nodeLive
-            return live.enabled ? "Уровень " + live.levelText : "Откройте, чтобы опросить узел"
+            // Журнал виден из любого раздела: иначе легко забыть, что запись идёт.
+            var logSuffix = root.appController.calibrationLog.recording ? " · журнал пишется" : ""
+            return (live.enabled ? "Уровень " + live.levelText : "Откройте, чтобы опросить узел") + logSuffix
         }
 
         if (index === 2) {

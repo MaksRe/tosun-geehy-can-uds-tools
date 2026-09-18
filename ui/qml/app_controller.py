@@ -20,8 +20,10 @@ from ui.qml.collector_csv_manager import CollectorCombinedCsvManager, CollectorC
 from ui.qml.collector_sftp_uploader import CollectorSftpConfig, CollectorSftpUploader
 
 from .controller import (
+    AppControllerCalibrationLogMixin,
     AppControllerCalibrationMixin,
     AppControllerCanMixin,
+    AppControllerCapacitanceMixin,
     AppControllerChamberMixin,
     AppControllerTrialMixin,
     AppControllerEepromCommitMixin,
@@ -31,6 +33,7 @@ from .controller import (
     AppControllerMarkMediaMixin,
     AppControllerMediaWizardMixin,
     AppControllerNodeLiveMixin,
+    AppControllerNodeTrendMixin,
     AppControllerOptionsMixin,
     AppControllerProfileMixin,
     AppControllerPropertiesMixin,
@@ -51,6 +54,9 @@ class AppController(
     AppControllerMarkMediaMixin,
     AppControllerLiveFreshnessMixin,
     AppControllerNodeLiveMixin,
+    AppControllerNodeTrendMixin,
+    AppControllerCapacitanceMixin,
+    AppControllerCalibrationLogMixin,
     AppControllerProfileMixin,
     AppControllerChamberMixin,
     AppControllerTrialMixin,
@@ -563,6 +569,12 @@ class AppController(
         self._init_mark_media_state()
         # Свежесть живых чисел: пришёл ли ответ и мерит ли контур.
         self._init_live_freshness_state()
+        # Журнал калибровки готовится раньше опроса: опрос спрашивает, пишется ли он.
+        self._init_calibration_log_state()
+        # История живых чисел для графиков и экстремумов.
+        self._init_node_trend_state()
+        # Ёмкость контуров в пикофарадах и тестовая точка полного погружения.
+        self._init_capacitance_state()
         # Текущие данные узла: опрос идёт, пока открыт их раздел.
         self._init_node_live_state()
 

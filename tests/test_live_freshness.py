@@ -184,9 +184,13 @@ def test_level_poll_asks_the_age_every_fourth_time():
 
 
 class _WatchStub(AppControllerMediaWizardMixin, _FreshStub):
+    def _calibration_log_event(self, text):
+        """Журнала калибровки в заглушке нет: событие никуда не пишется."""
+
     def __init__(self):
         _FreshStub.__init__(self)
         self.mediaWizardChanged = _Signal()
+        self.capacitanceChanged = _Signal()
         self._media_wizard_watching = True
         self._media_wizard_busy = False
         self._media_wizard_action = ""

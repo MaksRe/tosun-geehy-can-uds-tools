@@ -192,6 +192,8 @@ class AppControllerNodeLiveMixin(AppControllerContract):
         self._node_live_j1939_seen = 0.0
 
         self._node_live_enabled = False
+        # Чего просит раздел: сам опрос может идти и без него, ради журнала калибровки.
+        self._node_live_wanted = False
         self._node_live_last_inject = 0.0
         self._node_live_last_poll = 0.0
         self._node_live_suspend_until = 0.0
@@ -266,6 +268,9 @@ class AppControllerNodeLiveMixin(AppControllerContract):
                 self._live_note_value("level", value)
             elif key == "media":
                 self._live_note_value("flatcap", value)
+            # История для графиков и строка журнала, если он пишется.
+            self._node_trend_note(key, value, now)
+            self._calibration_log_note(key)
             self.nodeLiveChanged.emit()
             return
 
@@ -283,6 +288,7 @@ class AppControllerNodeLiveMixin(AppControllerContract):
         raw = int(payload[1]) & 0xFF
         self._node_live_j1939 = None if raw >= J1939_NOT_AVAILABLE else raw * J1939_FUEL_LEVEL_STEP
         self._node_live_j1939_seen = time.monotonic()
+        self._calibration_log_note("j1939")
 
     # ------------------------------------------------------------------ опрос
 
@@ -336,7 +342,17 @@ class AppControllerNodeLiveMixin(AppControllerContract):
             pass
 
     def _node_live_set_enabled(self, enabled: bool):
-        value = bool(enabled)
+        """Просьба раздела: опрашивать узел, пока раздел открыт."""
+        self._node_live_wanted = bool(enabled)
+        self._node_live_apply_enabled()
+
+    def _node_live_apply_enabled(self):
+        """Включает опрос, если его просит раздел или пишется журнал калибровки.
+
+        Журнал важнее видимости раздела: оператор уходит к отметкам, а журнал
+        обязан писать дальше, иначе в файле окажется дыра ровно на время работы.
+        """
+        value = bool(self._node_live_wanted) or self._calibration_log is not None
         if value == self._node_live_enabled:
             return
         self._node_live_enabled = value

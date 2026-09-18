@@ -227,8 +227,12 @@ def test_changing_the_device_forgets_the_state():
 # ------------------------------------------------------------------ мастер вида топлива
 
 class _WizardStub(AppControllerMediaWizardMixin):
+    def _calibration_log_event(self, text):
+        """Журнала калибровки в заглушке нет: событие никуда не пишется."""
+
     def __init__(self):
         self.mediaWizardChanged = _Signal()
+        self.capacitanceChanged = _Signal()
         self._media_wizard_busy = True
         self._media_wizard_action = "air"
         self._media_wizard_status = ""

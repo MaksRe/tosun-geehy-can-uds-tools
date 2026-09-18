@@ -58,6 +58,7 @@ class _WizardStub(AppControllerMediaWizardMixin):
 
     def __init__(self):
         self.mediaWizardChanged = _Signal()
+        self.capacitanceChanged = _Signal()
         self._media_wizard_watching = False
         self._media_wizard_busy = False
         self._media_wizard_action = ""
@@ -83,6 +84,9 @@ class _WizardStub(AppControllerMediaWizardMixin):
         self.requests.append((action, int(var.pid) & 0xFFFF, value))
         self._media_wizard_pending = (action, var, value)
         return True
+
+    def _calibration_log_event(self, text):
+        """Журнала калибровки в заглушке нет: событие никуда не пишется."""
 
     def _is_calibration_response_identifier(self, identifier):
         return identifier == RX_ID

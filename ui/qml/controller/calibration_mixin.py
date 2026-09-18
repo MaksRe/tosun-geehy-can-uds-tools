@@ -405,6 +405,8 @@ class AppControllerCalibrationMixin(AppControllerContract):
             self._calibration_recent_samples = self._calibration_recent_samples[-100:]
         # Автообновление стабильного значения на каждом новом семпле.
         self._recompute_calibration_stable_capture()
+        # Ёмкость и её плавание считаются по этому же окну.
+        self.capacitanceChanged.emit()
 
     def _recompute_calibration_stable_capture(self) -> tuple[int | None, int]:
         now_monotonic = time.monotonic()

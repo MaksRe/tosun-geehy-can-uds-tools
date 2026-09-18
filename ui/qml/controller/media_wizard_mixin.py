@@ -284,6 +284,8 @@ class AppControllerMediaWizardMixin(AppControllerContract):
             (stamp, sample) for stamp, sample in self._media_wizard_recent[-100:] if now - stamp <= window
         ]
         samples = [sample for _stamp, sample in self._media_wizard_recent]
+        # Ёмкость плоского конденсатора и её плавание считаются по этому же окну.
+        self.capacitanceChanged.emit()
         # Как у основного контура: по одному показанию среднего ещё нет.
         if len(samples) < 2:
             self._media_wizard_captured = None
@@ -361,6 +363,7 @@ class AppControllerMediaWizardMixin(AppControllerContract):
 
         if action == "verify_air":
             self._media_wizard_air = int(value)
+            self._calibration_log_event(f"записана точка «воздух»: {int(value)} отсч.")
             self._media_wizard_finish(
                 f"Точка «воздух» плоского конденсатора сохранена: {int(value)} отсч. "
                 "Теперь погрузите датчик в топливо.",
@@ -370,6 +373,7 @@ class AppControllerMediaWizardMixin(AppControllerContract):
 
         if action == "verify_cal":
             self._media_wizard_cal = int(value)
+            self._calibration_log_event(f"записана точка «топливо»: {int(value)} отсч.")
             span = None if self._media_wizard_air is None else int(value) - int(self._media_wizard_air)
             if span is not None and span < self.MEDIA_WIZARD_MIN_SPAN:
                 self._media_wizard_finish(

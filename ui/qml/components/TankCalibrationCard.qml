@@ -391,6 +391,14 @@ Item {
                 }
             }
 
+            // --- Ёмкость контуров ---
+            CapacitanceCard {
+                appController: root.appController
+                textMain: root.textMain
+                textSoft: root.textSoft
+                wide: root.wide
+            }
+
             // --- Два положения датчика ---
             GridLayout {
                 Layout.fillWidth: true
@@ -552,6 +560,22 @@ Item {
                             onSaveRequested: function(valueText) {
                                 if (root.appController) root.appController.saveMediaWizardLiquid(valueText)
                             }
+                        }
+
+                        // Отладочная точка: в прибор не пишется, нужна для оценки вклада кабеля.
+                        ImmersionTestBlock {
+                            point: root.appController ? root.appController.capacitance.testPoint : ({})
+                            capturedText: root.appController ? root.appController.mediaWizardCapturedText : "-"
+                            enabledActions: root.appController !== null
+                            textMain: root.textMain
+                            textSoft: root.textSoft
+                            inputBg: root.inputBg
+                            inputBorder: root.inputBorder
+                            inputFocus: root.inputFocus
+                            onSaveRequested: function(valueText) {
+                                if (root.appController) root.appController.saveCapacitanceTestPoint(valueText)
+                            }
+                            onClearRequested: if (root.appController) root.appController.clearCapacitanceTestPoint()
                         }
 
                         Item { Layout.fillHeight: true }

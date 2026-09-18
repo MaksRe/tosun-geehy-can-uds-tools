@@ -143,6 +143,7 @@ class AppControllerMarkMediaMixin(AppControllerContract):
             return
 
         _media_var, label = self._mark_media_target(mark_did)
+        self._calibration_log_event(f"записана отметка {label}: {int(intent['value'])} отсч.")
 
         if self._mark_media_active:
             self._mark_media_set_status(

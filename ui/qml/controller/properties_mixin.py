@@ -70,6 +70,9 @@ class AppControllerPropertiesMixin(AppControllerContract):
     chamberChanged = Signal()
     trialChanged = Signal()
     nodeLiveChanged = Signal()
+    nodeTrendChanged = Signal()
+    capacitanceChanged = Signal()
+    calibrationLogChanged = Signal()
     eepromCommitChanged = Signal()
     softwareVersionChanged = Signal()
 
@@ -908,6 +911,21 @@ class AppControllerPropertiesMixin(AppControllerContract):
     def nodeLive(self):
         """Цель функции в показе текущих данных узла, затем видно уровень и что происходит с прибором."""
         return self._node_live_view()
+
+    @Property("QVariantMap", notify=nodeTrendChanged)
+    def nodeTrends(self):
+        """Цель функции в показе графиков живых чисел, затем видно динамику и экстремумы каждого."""
+        return self._node_trend_view()
+
+    @Property("QVariantMap", notify=capacitanceChanged)
+    def capacitance(self):
+        """Цель функции в показе ёмкости контуров, затем видно её значение в пикофарадах и плавание."""
+        return self._capacitance_view()
+
+    @Property("QVariantMap", notify=calibrationLogChanged)
+    def calibrationLog(self):
+        """Цель функции в показе журнала калибровки, затем видно, пишется ли он и куда."""
+        return self._calibration_log_view()
 
     @Property("QVariantMap", notify=eepromCommitChanged)
     def eepromCommit(self):
