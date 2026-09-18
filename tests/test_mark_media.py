@@ -4,10 +4,14 @@
 вида топлива при отметках 0 % и 100 %. Если туда попадёт показание из другого
 положения датчика, модель тихо посчитает неверный уровень во всём диапазоне.
 
-Тесты закрепляют: показание пишется только к отметке, снятой по месту; серия
-обязана устояться; записанное сверяется чтением; замечания зависят от того,
-какая модель уровня включена в приборе; отказ прибора останавливает цепочку, а
-итог прошлой записи не висит рядом со следующей отметкой.
+Прежней модели уровня эти числа не нужны вовсе, и замечания к ним только пугали
+бы оператора. Поэтому программа сначала спрашивает прибор, какая модель включена.
+
+Тесты закрепляют: при прежней модели ничего не пишется и подтверждается только
+сама отметка; при модели по двум контурам показание снимается по месту,
+сверяется чтением, а введённое вручную не пишется с объяснением; прошивка без
+параметра модели работает как с прежней; итог прошлой записи не висит рядом со
+следующей отметкой.
 """
 
 from __future__ import annotations
@@ -97,6 +101,9 @@ class _MarkStub(AppControllerMarkMediaMixin):
         self._mark_media_value = None
         self._mark_media_air = None
         self._mark_media_model = None
+        self._mark_media_mark_value = None
+        self._mark_media_intent_live = False
+        self._mark_media_reference = None
         self._mark_media_status = ""
         self._mark_media_status_color = ""
         self._mark_media_gap_timer = _FakeTimer()
@@ -127,6 +134,14 @@ def _answer_write(stub, did):
     stub._handle_mark_media_frame(RX_ID, _frame([0x6E, did >> 8, did & 0xFF]))
 
 
+def _save_mark(stub, mark_did, value, model):
+    """Отметка записана и сверена, прибор отвечает, какая модель уровня у него включена."""
+    stub._mark_media_note_intent(mark_did, value)
+    stub._mark_media_on_mark_verified(mark_did)
+    assert stub.requests[-1] == ("read", DID_MODEL, None), "сначала спрашивается модель уровня"
+    _answer_read(stub, DID_MODEL, model)
+
+
 def _run_series(stub, samples):
     """Отвечает на серию чтений плоского конденсатора так, как это делает прибор."""
     for index, value in enumerate(samples):
@@ -137,25 +152,51 @@ def _run_series(stub, samples):
             stub._on_mark_media_gap_timeout()
 
 
-def _run_to_write(stub, media_value, air_value, model):
-    """Проходит цепочку до записи: серия, точка «воздух» и модель уровня прибора."""
-    _run_series(stub, [media_value] * stub.MARK_MEDIA_SAMPLES)
-    assert stub.requests[-1] == ("read", DID_AIR, None)
-    _answer_read(stub, DID_AIR, air_value)
-    assert stub.requests[-1] == ("read", DID_MODEL, None)
-    _answer_read(stub, DID_MODEL, model)
+# ------------------------------------------------------------------ прежняя модель уровня
 
+def test_old_model_only_confirms_the_mark():
+    """Прежней модели вид топлива при отметке не нужен: писать нечего и предупреждать не о чем."""
+    stub = _MarkStub()
+    _save_mark(stub, DID_FULL, 12140, MODEL_OLD)
+
+    assert stub.requests == [("read", DID_MODEL, None)], "ничего, кроме вопроса о модели"
+    assert stub._mark_media_active is False
+    assert stub._mark_media_status_color == stub.MARK_MEDIA_COLOR_OK
+    assert stub._mark_media_status == "отметка 100 % сохранена и сверена: 12140."
+    assert uds_exchange_busy(stub) == ""
+
+
+def test_old_model_does_not_complain_about_a_manual_value():
+    """Оператор вписал произвольное число: при прежней модели это его право и не повод для предупреждения."""
+    stub = _MarkStub()
+    stub._calibration_captured_level = 16100
+    _save_mark(stub, DID_FULL, 25000, MODEL_OLD)
+
+    assert stub._mark_media_status_color == stub.MARK_MEDIA_COLOR_OK
+    assert "сохранена и сверена: 25000" in stub._mark_media_status
+
+
+def test_firmware_without_the_model_parameter_works_like_the_old_model():
+    stub = _MarkStub()
+    stub._mark_media_note_intent(DID_EMPTY, 12128)
+    stub._mark_media_on_mark_verified(DID_EMPTY)
+    stub._handle_mark_media_frame(RX_ID, _frame([0x7F, 0x22, 0x31]))
+
+    assert stub._mark_media_active is False
+    assert stub._mark_media_status_color == stub.MARK_MEDIA_COLOR_OK
+    assert "сохранена и сверена" in stub._mark_media_status
+
+
+# ------------------------------------------------------------------ модель по двум контурам
 
 def test_mark_taken_in_place_gets_the_media_reading_and_is_verified():
     stub = _MarkStub()
-    stub._mark_media_note_intent(DID_FULL, 12140)
-    stub._mark_media_on_mark_verified(DID_FULL)
+    _save_mark(stub, DID_FULL, 12140, MODEL_TWO_CIRCUIT)
     assert uds_exchange_busy(stub) == "mark_media", "пока идёт цепочка, фоновые опросы молчат"
 
     _run_series(stub, [3600, 3602, 3599, 3601, 3603, 3601])
     assert stub.requests[-1] == ("read", DID_AIR, None)
     _answer_read(stub, DID_AIR, 2380)
-    _answer_read(stub, DID_MODEL, MODEL_OLD)
     assert stub.requests[-1] == ("write", DID_FULL_MEDIA, 3601)
 
     _answer_write(stub, DID_FULL_MEDIA)
@@ -172,35 +213,18 @@ def test_manual_mark_far_from_the_device_reading_writes_nothing():
     """Отметка, вписанная вручную не по месту, к текущему виду топлива отношения не имеет."""
     stub = _MarkStub()
     stub._calibration_captured_level = 16100
-    stub._mark_media_note_intent(DID_EMPTY, 12128)
-    stub._mark_media_on_mark_verified(DID_EMPTY)
+    _save_mark(stub, DID_EMPTY, 12128, MODEL_TWO_CIRCUIT)
 
-    assert stub.requests == []
+    assert all(kind != "write" for kind, _did, _value in stub.requests)
     assert stub._mark_media_active is False
+    assert "сохранена и сверена: 12128" in stub._mark_media_status
     assert "не по месту" in stub._mark_media_status
     assert stub._mark_media_status_color == stub.MARK_MEDIA_COLOR_WARN
 
 
-def test_mark_without_operator_intent_is_left_alone():
-    """Возврат копии пишет отметку сам: вид топлива к ней не снимается."""
-    stub = _MarkStub()
-    stub._mark_media_on_mark_verified(DID_EMPTY)
-    assert stub.requests == []
-    assert stub._mark_media_status == ""
-
-
-def test_next_mark_clears_the_previous_result():
-    """Итог прошлой записи не должен висеть рядом со следующей отметкой."""
-    stub = _MarkStub()
-    stub._mark_media_set_status("вид топлива для отметки 0 % записан.", stub.MARK_MEDIA_COLOR_OK)
-    stub._mark_media_note_intent(DID_FULL, 12130)
-    assert stub._mark_media_status == ""
-
-
 def test_unsettled_media_reading_is_not_written():
     stub = _MarkStub()
-    stub._mark_media_note_intent(DID_FULL, 12130)
-    stub._mark_media_on_mark_verified(DID_FULL)
+    _save_mark(stub, DID_FULL, 12130, MODEL_TWO_CIRCUIT)
     _run_series(stub, [3500, 3600, 3550, 3580, 3520, 3590])
 
     assert all(kind != "write" for kind, _did, _value in stub.requests)
@@ -208,26 +232,12 @@ def test_unsettled_media_reading_is_not_written():
     assert "гуляло" in stub._mark_media_status
 
 
-def test_dry_flat_capacitor_matters_only_for_the_two_circuit_model():
-    """При прежней модели уровня эти числа ни на что не влияют: пугать оператора нечем."""
+def test_dry_flat_capacitor_is_named_for_the_two_circuit_model():
     stub = _MarkStub()
-    stub._mark_media_note_intent(DID_EMPTY, 12128)
-    stub._mark_media_on_mark_verified(DID_EMPTY)
-    _run_to_write(stub, 2383, 2380, MODEL_OLD)
+    _save_mark(stub, DID_EMPTY, 12128, MODEL_TWO_CIRCUIT)
+    _run_series(stub, [2383] * stub.MARK_MEDIA_SAMPLES)
+    _answer_read(stub, DID_AIR, 2380)
     assert stub.requests[-1] == ("write", DID_ZERO_MEDIA, 2383)
-    _answer_write(stub, DID_ZERO_MEDIA)
-    _answer_read(stub, DID_ZERO_MEDIA, 2383)
-
-    assert stub._mark_media_status_color == stub.MARK_MEDIA_COLOR_IDLE
-    assert "прежняя модель" in stub._mark_media_status
-    assert "не примет" not in stub._mark_media_status
-
-
-def test_dry_flat_capacitor_is_a_warning_with_the_two_circuit_model():
-    stub = _MarkStub()
-    stub._mark_media_note_intent(DID_EMPTY, 12128)
-    stub._mark_media_on_mark_verified(DID_EMPTY)
-    _run_to_write(stub, 2383, 2380, MODEL_TWO_CIRCUIT)
     _answer_write(stub, DID_ZERO_MEDIA)
     _answer_read(stub, DID_ZERO_MEDIA, 2383)
 
@@ -235,25 +245,11 @@ def test_dry_flat_capacitor_is_a_warning_with_the_two_circuit_model():
     assert "не примет" in stub._mark_media_status
 
 
-def test_firmware_without_the_model_parameter_still_writes():
-    """Старая прошивка не знает 0x0053: запись идёт, а модель считается прежней."""
-    stub = _MarkStub()
-    stub._mark_media_note_intent(DID_FULL, 12130)
-    stub._mark_media_on_mark_verified(DID_FULL)
-    _run_series(stub, [3600] * stub.MARK_MEDIA_SAMPLES)
-    _answer_read(stub, DID_AIR, 2380)
-    assert stub.requests[-1] == ("read", DID_MODEL, None)
-
-    stub._handle_mark_media_frame(RX_ID, _frame([0x7F, 0x22, 0x31]))
-    assert stub.requests[-1] == ("write", DID_FULL_MEDIA, 3600)
-    assert stub._mark_media_active is True
-
-
 def test_value_the_device_did_not_keep_is_reported():
     stub = _MarkStub()
-    stub._mark_media_note_intent(DID_FULL, 12130)
-    stub._mark_media_on_mark_verified(DID_FULL)
-    _run_to_write(stub, 3600, 2380, MODEL_OLD)
+    _save_mark(stub, DID_FULL, 12130, MODEL_TWO_CIRCUIT)
+    _run_series(stub, [3600] * stub.MARK_MEDIA_SAMPLES)
+    _answer_read(stub, DID_AIR, 2380)
     _answer_write(stub, DID_FULL_MEDIA)
     _answer_read(stub, DID_FULL_MEDIA, 0)
 
@@ -263,9 +259,9 @@ def test_value_the_device_did_not_keep_is_reported():
 
 def test_refusal_on_the_write_stops_the_chain_and_foreign_refusals_are_ignored():
     stub = _MarkStub()
-    stub._mark_media_note_intent(DID_FULL, 12130)
-    stub._mark_media_on_mark_verified(DID_FULL)
-    _run_to_write(stub, 3600, 2380, MODEL_OLD)
+    _save_mark(stub, DID_FULL, 12130, MODEL_TWO_CIRCUIT)
+    _run_series(stub, [3600] * stub.MARK_MEDIA_SAMPLES)
+    _answer_read(stub, DID_AIR, 2380)
 
     # Отказ на чтение к записи цепочки не относится.
     stub._handle_mark_media_frame(RX_ID, _frame([0x7F, 0x22, 0x31]))
@@ -274,3 +270,21 @@ def test_refusal_on_the_write_stops_the_chain_and_foreign_refusals_are_ignored()
     stub._handle_mark_media_frame(RX_ID, _frame([0x7F, 0x2E, 0x33]))
     assert stub._mark_media_active is False
     assert "0x33" in stub._mark_media_status
+
+
+# ------------------------------------------------------------------ общее
+
+def test_mark_without_operator_intent_is_left_alone():
+    """Возврат копии пишет отметку сам: ни вопросов прибору, ни сообщений."""
+    stub = _MarkStub()
+    stub._mark_media_on_mark_verified(DID_EMPTY)
+    assert stub.requests == []
+    assert stub._mark_media_status == ""
+
+
+def test_next_mark_clears_the_previous_result():
+    """Итог прошлой записи не должен висеть рядом со следующей отметкой."""
+    stub = _MarkStub()
+    stub._mark_media_set_status("отметка 0 % сохранена и сверена: 12128.", stub.MARK_MEDIA_COLOR_OK)
+    stub._mark_media_note_intent(DID_FULL, 12130)
+    assert stub._mark_media_status == ""

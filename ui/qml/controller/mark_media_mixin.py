@@ -8,19 +8,20 @@
 том же состоянии датчика, что и сама отметка.
 
 ЧТО ДЕЛАЕТ МОДУЛЬ
-Когда отметка записана и сверена, модуль сразу снимает короткую серию показаний
-плоского конденсатора (0x0036), проверяет, что они устоялись, читает точку
-«воздух» (0x002F) и включённую модель уровня (0x0053), пишет среднее в 0x0054
-или 0x0055 и читает обратно. Датчик в эту секунду стоит там же, где снималась
-отметка, поэтому пара «отметка и вид топлива» относится к одному состоянию.
+Когда отметка записана и сверена, модуль спрашивает прибор, какая модель уровня
+у него включена (0x0053). При прежней модели эти числа ей не нужны, поэтому
+модуль ничего не пишет и только подтверждает, что отметка сохранена и сверена.
 
-Замечания к записанному числу зависят от модели уровня в приборе. Пока работает
-прежняя модель, эти числа ни на что не влияют, и итог пишется обычной строкой.
-Предупреждение появляется, только когда включена модель по двум контурам.
+При модели по двум контурам модуль снимает короткую серию показаний плоского
+конденсатора (0x0036), проверяет, что они устоялись, читает точку «воздух»
+(0x002F), пишет среднее в 0x0054 или 0x0055 и читает обратно. Датчик в эту
+секунду стоит там же, где снималась отметка, поэтому пара «отметка и вид
+топлива» относится к одному состоянию.
 
 Серия снимается, только если записанная отметка совпадает с тем, что прибор
 показывает сейчас. Значение, введённое вручную не по месту, к текущему показанию
 вида топлива отношения не имеет: тогда модуль ничего не пишет и объясняет почему.
+При прежней модели уровня такое значение никаких замечаний не вызывает.
 
 Обмен идёт цепочкой: следующий запрос уходит только после ответа на прежний.
 Прибор держит один канал ISO-TP и затёр бы запрос, пришедший раньше ответа.
@@ -77,8 +78,12 @@ class AppControllerMarkMediaMixin(AppControllerContract):
         self._mark_media_samples = []
         self._mark_media_value = None
         self._mark_media_air = None
-        # Какая модель уровня включена в приборе: от неё зависит, важна ли отметка без топлива.
+        # Какая модель уровня включена в приборе: от неё зависит, нужен ли вид топлива при отметке.
         self._mark_media_model = None
+        # Про записанную отметку: её значение, снята ли она по месту и что показывал прибор.
+        self._mark_media_mark_value = None
+        self._mark_media_intent_live = False
+        self._mark_media_reference = None
         self._mark_media_status = ""
         self._mark_media_status_color = self.MARK_MEDIA_COLOR_IDLE
 
@@ -131,40 +136,55 @@ class AppControllerMarkMediaMixin(AppControllerContract):
         self._mark_media_intent.pop(int(mark_did), None)
 
     def _mark_media_on_mark_verified(self, mark_did: int):
-        """Отметка записана и сверена: снимаем к ней показание вида топлива."""
+        """Отметка записана и сверена: узнаём модель уровня и решаем, нужен ли к ней вид топлива."""
         intent = self._mark_media_intent.pop(int(mark_did), None)
         if intent is None:
             # Отметку записал не оператор кнопкой (например, возврат копии): вид топлива не трогаем.
             return
 
-        media_var, label = self._mark_media_target(mark_did)
-        did_text = f"0x{int(media_var.pid) & 0xFFFF:04X}"
-
-        if not intent["live"]:
-            reference = intent["reference"]
-            now_text = "прибор ещё не прислал показание" if reference is None else f"прибор показывает {reference}"
-            self._mark_media_set_status(
-                f"вид топлива для отметки {label} не записан в {did_text}: отметка {intent['value']} "
-                f"введена не по месту, а {now_text}. Для модели по двум контурам снимайте отметку "
-                "кнопкой захвата в том положении датчика, где она должна быть.",
-                self.MARK_MEDIA_COLOR_WARN, RowColor.yellow,
-            )
-            return
+        _media_var, label = self._mark_media_target(mark_did)
 
         if self._mark_media_active:
             self._mark_media_set_status(
-                f"вид топлива для отметки {label} не записан: ещё идёт запись к предыдущей отметке. "
-                "Запишите отметку ещё раз через пару секунд.",
+                f"отметка {label} сохранена. Вид топлива к ней не снят: ещё идёт запись к предыдущей отметке.",
                 self.MARK_MEDIA_COLOR_WARN, RowColor.yellow,
             )
             return
 
         self._mark_media_active = True
         self._mark_media_mark_did = int(mark_did)
+        self._mark_media_mark_value = int(intent["value"])
+        self._mark_media_intent_live = bool(intent["live"])
+        self._mark_media_reference = intent["reference"]
         self._mark_media_samples = []
         self._mark_media_value = None
         self._mark_media_air = None
         self._mark_media_model = None
+        # Вид топлива при отметке нужен только модели по двум контурам, поэтому
+        # сначала спрашиваем прибор, какая модель у него включена.
+        self._mark_media_request("model", UdsData.fuel_tank_model)
+
+    def _mark_media_after_model(self):
+        """Решает по модели уровня, снимать ли вид топлива к записанной отметке."""
+        _media_var, label = self._mark_media_target(self._mark_media_mark_did)
+        saved_text = f"отметка {label} сохранена и сверена: {self._mark_media_mark_value}."
+
+        if self._mark_media_model != 1:
+            # Прежняя модель уровня: числа вида топлива при отметках ей не нужны.
+            self._mark_media_finish(saved_text, self.MARK_MEDIA_COLOR_OK, None)
+            return
+
+        if not self._mark_media_intent_live:
+            reference = self._mark_media_reference
+            now_text = "прибор ещё не прислал показание" if reference is None else f"прибор показывает {reference}"
+            self._mark_media_finish(
+                saved_text + " Вид топлива к ней не записан: отметка введена не по месту, а "
+                f"{now_text}. Модель по двум контурам берёт вид топлива в момент отметки, поэтому "
+                "снимайте отметку кнопкой захвата в нужном положении датчика.",
+                self.MARK_MEDIA_COLOR_WARN, RowColor.yellow,
+            )
+            return
+
         self._mark_media_set_status(
             f"снимаю вид топлива для отметки {label}...", self.MARK_MEDIA_COLOR_IDLE)
         self._mark_media_request("sample", UdsData.fuel_media_flatcap_raw)
@@ -240,12 +260,11 @@ class AppControllerMarkMediaMixin(AppControllerContract):
             if len(body) > 2 and body[2] == 0x78:
                 return
             if action == "model":
-                # Прошивка без параметра модели: считаем модель прежней и пишем дальше.
+                # Прошивка без параметра модели: считаем, что работает прежняя.
                 self._mark_media_timeout_timer.stop()
                 self._mark_media_pending = None
                 self._mark_media_model = None
-                media_var, _label = self._mark_media_target(self._mark_media_mark_did)
-                self._mark_media_request("write", media_var, self._mark_media_value)
+                self._mark_media_after_model()
                 return
             self._mark_media_finish(
                 f"вид топлива к отметке не записан: прибор отказал на DID 0x{int(var.pid) & 0xFFFF:04X}, "
@@ -303,13 +322,13 @@ class AppControllerMarkMediaMixin(AppControllerContract):
             self._mark_media_request("air", UdsData.fuel_media_flatcap_air_count)
             return
 
-        if action == "air":
-            self._mark_media_air = int(value)
-            self._mark_media_request("model", UdsData.fuel_tank_model)
-            return
-
         if action == "model":
             self._mark_media_model = int(value)
+            self._mark_media_after_model()
+            return
+
+        if action == "air":
+            self._mark_media_air = int(value)
             self._mark_media_request("write", media_var, self._mark_media_value)
             return
 
@@ -323,39 +342,23 @@ class AppControllerMarkMediaMixin(AppControllerContract):
                 )
                 return
 
-            text = f"вид топлива для отметки {label} записан в {did_text}: {written} отсч."
-            # Эти числа нужны только модели по двум контурам. Пока в приборе прежняя
-            # модель, замечания к ним ничего не меняют, поэтому идут обычной строкой.
-            two_circuit = self._mark_media_model == 1
+            # Сюда цепочка доходит только при модели по двум контурам: ей эти числа и нужны.
+            text = f"отметка {label} сохранена, вид топлива к ней записан в {did_text}: {written} отсч."
             air = self._mark_media_air
             if air is None or air <= 0:
-                if two_circuit:
-                    self._mark_media_finish(
-                        text + " Точка «воздух» (0x002F) в приборе не записана: без неё модель по двум "
-                        "контурам уровень не посчитает. Снимите её в разделе «Уровень и вид топлива».",
-                        self.MARK_MEDIA_COLOR_WARN, RowColor.yellow,
-                    )
-                else:
-                    self._mark_media_finish(
-                        text + " Точка «воздух» в приборе не записана, но включена прежняя модель уровня: "
-                        "ей это число не нужно.",
-                        self.MARK_MEDIA_COLOR_IDLE, RowColor.blue,
-                    )
+                self._mark_media_finish(
+                    text + " Точка «воздух» (0x002F) в приборе не записана: без неё модель по двум "
+                    "контурам уровень не посчитает. Снимите её в разделе «Уровень и вид топлива».",
+                    self.MARK_MEDIA_COLOR_WARN, RowColor.yellow,
+                )
                 return
             delta = int(written) - int(air)
             if delta < self.MARK_MEDIA_MIN_DELTA:
-                if two_circuit:
-                    self._mark_media_finish(
-                        text + f" Это почти показание на воздухе ({air}): плоский конденсатор в момент "
-                        "отметки сухой, и модель по двум контурам такую отметку не примет.",
-                        self.MARK_MEDIA_COLOR_WARN, RowColor.yellow,
-                    )
-                else:
-                    self._mark_media_finish(
-                        text + f" Плоский конденсатор в момент отметки был сухой (на воздухе {air}). "
-                        "Включена прежняя модель уровня, ей это не мешает.",
-                        self.MARK_MEDIA_COLOR_IDLE, RowColor.blue,
-                    )
+                self._mark_media_finish(
+                    text + f" Это почти показание на воздухе ({air}): плоский конденсатор в момент "
+                    "отметки сухой, и модель по двум контурам такую отметку не примет.",
+                    self.MARK_MEDIA_COLOR_WARN, RowColor.yellow,
+                )
                 return
             self._mark_media_finish(text + f" Выше воздуха на {delta} отсч.",
                                     self.MARK_MEDIA_COLOR_OK, RowColor.green)
