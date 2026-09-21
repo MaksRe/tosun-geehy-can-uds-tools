@@ -19,7 +19,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ui.qml.controller.profile_mixin import PROFILE_POINTS, AppControllerProfileMixin
+from ui.qml.controller.profile_mixin import PROFILE_ALGORITHM_ID, PROFILE_POINTS, AppControllerProfileMixin
 
 
 class _Signal:
@@ -298,7 +298,7 @@ def _device_answer(stub) -> dict:
     """Собирает то, что вернул бы прибор при точной записи профиля."""
     answer = {name: list(stub._profile_values[name])
               for name, _did, _title, _width in stub.PROFILE_TABLES}
-    answer["algorithm"] = 1
+    answer["algorithm"] = PROFILE_ALGORITHM_ID
     answer["generation"] = int(stub._profile_generation)
     answer["crc"] = stub._profile_calc_crc()
     answer["crc_actual"] = stub._profile_calc_crc()

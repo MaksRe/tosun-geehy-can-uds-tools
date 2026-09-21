@@ -96,16 +96,30 @@ def test_signed_conversion_for_two_bytes():
     "spread, expected_color",
     [
         (0, Diag.DIAGNOSTICS_COLOR_OK),
-        (12, Diag.DIAGNOSTICS_COLOR_OK),
-        (24, Diag.DIAGNOSTICS_COLOR_OK),
-        (25, Diag.DIAGNOSTICS_COLOR_WARN),
-        (48, Diag.DIAGNOSTICS_COLOR_WARN),
-        (49, Diag.DIAGNOSTICS_COLOR_BAD),
+        (16, Diag.DIAGNOSTICS_COLOR_OK),
+        (33, Diag.DIAGNOSTICS_COLOR_OK),
+        (34, Diag.DIAGNOSTICS_COLOR_WARN),
+        (65, Diag.DIAGNOSTICS_COLOR_WARN),
+        (66, Diag.DIAGNOSTICS_COLOR_BAD),
     ],
 )
 def test_spread_thresholds(spread, expected_color):
     """Границы дрожания измерения не должны сдвигаться незаметно."""
     assert _color(Diag._diagnostics_spread_verdict(spread)) == expected_color
+
+
+def test_spread_thresholds_follow_the_longer_series():
+    """Пороги рассчитаны на серию из 11 выборок, а не из 5.
+
+    Размах серии растёт с её длиной при том же шуме: у 11 выборок ожидаемый
+    размах в 3,173 сигмы, у 5 - в 2,326. Если пороги не пересчитать, исправный
+    контур на новой прошивке получит «Внимание» только из-за длины серии.
+    """
+    growth = 3.173 / 2.326
+    for old, new in ((12, Diag.DIAGNOSTICS_SPREAD_GOOD),
+                     (24, Diag.DIAGNOSTICS_SPREAD_WARN),
+                     (48, Diag.DIAGNOSTICS_SPREAD_BAD)):
+        assert abs(new - old * growth) <= 1.0
 
 
 def test_spread_without_value_is_neutral():

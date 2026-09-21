@@ -74,7 +74,7 @@ class Device:
                 self.put(did, struct.pack("<7h", *pm.AppControllerProfileMixin.PROFILE_DEFAULT_NODES))
             else:
                 self.put(did, bytes(PROFILE_SIZES[did]))
-        self.put(pm.DID_ALGORITHM, struct.pack("<H", 1))
+        self.put(pm.DID_ALGORITHM, struct.pack("<H", pm.PROFILE_ALGORITHM_ID))
         self.put(pm.DID_GENERATION, struct.pack("<H", 1))
         self.put(pm.DID_CRC, struct.pack("<H", self.actual_crc()))
 
@@ -108,7 +108,7 @@ class Device:
         return pm.AppControllerProfileMixin._profile_crc16(b"".join(self.store[did] for _name, did in PROFILE_ORDER))
 
     def trusted(self):
-        return self.u16(pm.DID_CRC) == self.actual_crc() and self.u16(pm.DID_ALGORITHM) == 1
+        return self.u16(pm.DID_CRC) == self.actual_crc() and self.u16(pm.DID_ALGORITHM) == pm.PROFILE_ALGORITHM_ID
 
     def temps(self):
         if self.emul is not None:

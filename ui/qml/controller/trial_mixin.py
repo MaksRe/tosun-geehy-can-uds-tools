@@ -54,6 +54,7 @@ from .bus_guard import background_request_recent, note_background_request, uds_e
 from .contract import AppControllerContract
 from .eeprom_commit_mixin import EEPROM_FLAG_SPI_ERROR, decode_eeprom_state, eeprom_boot_warning
 from .node_live_mixin import NODE_LIVE_INJECT_S, NODE_LIVE_INJECT_VARS
+from .profile_mixin import PROFILE_ALGORITHM_ID
 
 # На шине «эмуляция выключена» передаётся как 0x8000, а читается как -32768.
 TRIAL_EMULATION_OFF_WIRE = 0x8000
@@ -1508,7 +1509,7 @@ class AppControllerTrialMixin(AppControllerContract):
         self._trial_expected.update({
             "crc": self._profile_calc_crc(),
             "generation": int(self._profile_generation),
-            "algorithm": 1,
+            "algorithm": PROFILE_ALGORITHM_ID,
         })
         self._trial_expect_trusted = True
         self._trial_commit_then(
@@ -1714,7 +1715,7 @@ class AppControllerTrialMixin(AppControllerContract):
         }
         if rewrote_profile:
             self._trial_expected.update(
-                {"crc": self._profile_calc_crc(), "generation": int(self._profile_generation), "algorithm": 1})
+                {"crc": self._profile_calc_crc(), "generation": int(self._profile_generation), "algorithm": PROFILE_ALGORITHM_ID})
             self._trial_expect_trusted = True
         else:
             if device_crc is not None:
