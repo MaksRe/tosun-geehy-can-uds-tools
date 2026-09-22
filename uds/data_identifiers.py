@@ -27,7 +27,7 @@ class UdsData:
         "curr_fuel_tank"    : UdsVar(0x0014, 2, "Текущий уровень"),
         "fingerprint"       : UdsVar(0x0015, 2, "Отпечаток пальцев"),
         "type_session"      : UdsVar(0x0016, 1, "Тип сессии"),
-        "k_fuel_level"      : UdsVar(0x0017, 2, "Коэффициент фильтра"),
+        "k_fuel_level"      : UdsVar(0x0017, 2, "Заполнение окна усреднения, промилле"),
         "raw_fuel_level"    : UdsVar(0x0018, 2, "Сырые данные уровня топлива"),
         "raw_temperature"   : UdsVar(0x0019, 2, "Сырые данные текущей температуры"),
 

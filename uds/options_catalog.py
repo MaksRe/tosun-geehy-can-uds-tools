@@ -41,7 +41,7 @@ UDS_OPTIONS: list[UdsOptionParameter] = [
     UdsOptionParameter(0x0014, 2, "Текущий уровень (период)", AccessMode.READ),
     UdsOptionParameter(0x0015, 2, "Отпечаток пальцев", AccessMode.READ_WRITE),
     UdsOptionParameter(0x0016, 1, "Текущая сессия", AccessMode.READ_WRITE),
-    UdsOptionParameter(0x0017, 2, "Коэффициент фильтра уровня топлива", AccessMode.READ),
+    UdsOptionParameter(0x0017, 2, "Заполнение окна усреднения основного контура, промилле", AccessMode.READ),
     UdsOptionParameter(0x0018, 2, "Сырые данные уровня топлива", AccessMode.READ),
     UdsOptionParameter(0x0019, 2, "Сырые данные температуры", AccessMode.READ),
     UdsOptionParameter(0x001B, 2, "K1 температурной компенсации x100", AccessMode.READ_WRITE),
