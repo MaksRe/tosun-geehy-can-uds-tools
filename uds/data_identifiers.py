@@ -109,8 +109,9 @@ class UdsData:
         "eeprom_state": UdsVar(0x0063, 4, "Состояние записи в память прибора"),
         # Возраст последнего измерения основного контура и контура вида топлива, мс.
         "measurement_age": UdsVar(0x0064, 4, "Возраст последнего измерения контуров"),
-        # Окно усреднения показаний обоих контуров в приборе, секунды, 1..60.
-        "fuel_avg_window_s": UdsVar(0x0065, 1, "Окно усреднения показаний контуров, с"),
+        # Окна усреднения показаний контуров в приборе, секунды, 1..60.
+        "fuel_avg_window_main_s": UdsVar(0x0065, 1, "Окно усреднения основного контура, с"),
+        "fuel_avg_window_media_s": UdsVar(0x0066, 1, "Окно усреднения контура вида топлива, с"),
 
         "vmecusndid"        : UdsVar(0xF188, 18, "Номер ПО ЭБУ изготовителя ТС"),
         "vmecusvndid"       : UdsVar(0xF189, 32, "Номер версии ПО ЭБУ изготовителя ТС"),
@@ -207,7 +208,8 @@ class UdsData:
     fuel_compensated_period = vars.get("fuel_compensated_period")
     eeprom_state = vars.get("eeprom_state")
     measurement_age = vars.get("measurement_age")
-    fuel_avg_window_s = vars.get("fuel_avg_window_s")
+    fuel_avg_window_main_s = vars.get("fuel_avg_window_main_s")
+    fuel_avg_window_media_s = vars.get("fuel_avg_window_media_s")
 
     vmecusndid          = vars.get("vmecusndid")
     vmecusvndid         = vars.get("vmecusvndid")
