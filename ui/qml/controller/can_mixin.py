@@ -624,6 +624,8 @@ class AppControllerCanMixin(AppControllerContract):
             self._service_access_busy = False
             self._service_access_pending_action = ""
             self._service_security_unlocked = False
+            # Отказ прерывает и цепочку «сессия, затем доступ» окна параметров.
+            self._options_access_chain = False
             self._service_access_status = f"Отказ UDS: SID 0x{original_sid:02X}, NRC 0x{nrc:02X}."
             self._service_access_status = f"Отказ UDS: SID 0x{original_sid:02X}, NRC 0x{nrc:02X} ({nrc_text})."
             self.serviceAccessChanged.emit()
@@ -662,6 +664,7 @@ class AppControllerCanMixin(AppControllerContract):
                 QColor("#16a34a"),
             )
             self._continue_post_program_version_after_session()
+            self._continue_options_access_after_session()
             return
 
         if self._service_access_pending_action == "security_seed":

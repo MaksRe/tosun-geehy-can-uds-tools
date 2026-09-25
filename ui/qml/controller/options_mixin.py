@@ -1,18 +1,43 @@
 from __future__ import annotations
 
+import csv
 import math
+import re
 import struct
 import time
 from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import QTimer
 
 from j1939.j1939_can_identifier import J1939CanIdentifier
-from uds.options_catalog import UdsOptionParameter, get_option_by_did, get_option_by_index
+from uds.option_values import (
+    INPUT_MODES,
+    OPTION_GROUPS,
+    OptionInputError,
+    default_input_mode,
+    describe_option_bytes,
+    encode_option_input,
+    format_option_value,
+    option_edit_text,
+    option_group,
+    option_input_hint,
+)
+from uds.options_catalog import AccessMode, UdsOptionParameter, get_option_by_did, get_option_by_index
+from uds.services.session import Session
 from uds.uds_identifiers import UdsIdentifiers
 
+from ..calibration_log_csv import CSV_WRITE_ENCODING
 from .contract import AppControllerContract
 from .workers import UdsOptionProxy
+
+# Как показывать право доступа в таблице параметров.
+_ACCESS_SHORT = {
+    AccessMode.READ: "чтение",
+    AccessMode.WRITE: "запись",
+    AccessMode.READ_WRITE: "чтение и запись",
+    AccessMode.UNSUPPORTED: "нет в прошивке",
+}
 
 class AppControllerOptionsMixin(AppControllerContract):
     OPTIONS_OPERATION_TIMEOUT_MS = 4000
@@ -388,6 +413,7 @@ class AppControllerOptionsMixin(AppControllerContract):
         self._options_busy = True
         self._options_status = f"Запись DID 0x{int(parameter.did) & 0xFFFF:04X} (SA 0x{int(target_sa) & 0xFF:02X})..."
         self.optionOperationChanged.emit()
+        self._options_value_mark(int(parameter.did), "Запись...", "#0ea5e9")
 
         self._reset_options_isotp_state()
         self._options_fc_retry_left = 0
@@ -406,7 +432,8 @@ class AppControllerOptionsMixin(AppControllerContract):
                 "Запись",
                 parameter,
                 "Отправлено",
-                f"SA 0x{int(target_sa) & 0xFF:02X} | мультикадровая запись",
+                f"SA 0x{int(target_sa) & 0xFF:02X} | "
+                + ("мультикадровая запись" if cf_frames else "запись одним кадром"),
                 "#0ea5e9",
                 value_bytes=payload,
             )
@@ -461,6 +488,7 @@ class AppControllerOptionsMixin(AppControllerContract):
         self._options_busy = True
         self._options_status = f"Чтение DID 0x{int(parameter.did) & 0xFFFF:04X} (SA 0x{int(target_sa) & 0xFF:02X})..."
         self.optionOperationChanged.emit()
+        self._options_value_mark(int(parameter.did), "Чтение...", "#0ea5e9")
 
         try:
             sent = self._options_read_service.read_data_by_identifier(
@@ -845,8 +873,10 @@ class AppControllerOptionsMixin(AppControllerContract):
         self._options_bulk_rows = updated
         self.optionsBulkRowsChanged.emit()
 
-    def _start_options_bulk_read(self):
-        readable = [item for item in self._options_parameters if bool(item.can_read)]
+    def _start_options_bulk_read(self, parameters: list[UdsOptionParameter] | None = None):
+        """Последовательно читает параметры: все или только переданные (например, показанные фильтром)."""
+        source = self._options_parameters if parameters is None else parameters
+        readable = [item for item in source if bool(item.can_read)]
         self._options_bulk_plan = list(readable)
         self._options_bulk_next_index = 0
         self._options_bulk_success_count = 0
@@ -1013,6 +1043,11 @@ class AppControllerOptionsMixin(AppControllerContract):
         if parameter is not None and request_origin not in ("bulk", "single_verify"):
             self._append_option_history(action, parameter, result, details, color, value_bytes=value_bytes)
 
+        # Таблица окна параметров показывает последнее известное значение каждого DID,
+        # откуда бы его ни прочитали или записали.
+        self._options_value_note_result(
+            pending_did, pending_action, request_origin, bool(success), value_bytes, str(message))
+
         # Для DID 0xF195 синхронизируем компактный виджет версии ПО на главной форме.
         if request_origin in ("sw_version_read", "sw_version_write"):
             if success and pending_action == "read":
@@ -1142,6 +1177,8 @@ class AppControllerOptionsMixin(AppControllerContract):
             self._append_option_history(
                 "Проверка записи", parameter, "Пропущена", "Окно параметров было занято другой операцией",
                 "#d97706", value_bytes=None)
+            self._options_value_mark(int(parameter.did), "Записано, не проверено", "#d97706",
+                                     "Сверка пропущена: шла другая операция")
             return
         if not self._start_options_read_request(
                 parameter, request_origin="single_verify", append_history=False,
@@ -1150,6 +1187,8 @@ class AppControllerOptionsMixin(AppControllerContract):
             self._append_option_history(
                 "Проверка записи", parameter, "Ошибка", "Не удалось отправить чтение для сверки",
                 "#dc2626", value_bytes=None)
+            self._options_value_mark(int(parameter.did), "Записано, не проверено", "#d97706",
+                                     "Не удалось отправить чтение для сверки")
 
     def _finish_options_write_verify(self, success: bool, value_bytes, message: str):
         pending = self._options_write_verify
@@ -1172,6 +1211,12 @@ class AppControllerOptionsMixin(AppControllerContract):
         if parameter is not None:
             self._append_option_history(
                 "Проверка записи", parameter, result, details, color, value_bytes=stored or None)
+        if result == "OK":
+            self._options_value_mark(did, "Записано и проверено", "#16a34a", "", stored, stamp=True)
+        elif success:
+            self._options_value_mark(did, "Не совпало", "#dc2626", details, stored, stamp=True)
+        else:
+            self._options_value_mark(did, "Записано, не проверено", "#d97706", details, stamp=True)
         if result != "OK":
             self.infoMessage.emit("Параметры UDS", f"Проверка записи DID 0x{did:04X}: {details}.")
 
@@ -1182,3 +1227,322 @@ class AppControllerOptionsMixin(AppControllerContract):
         if not self._options_busy:
             return
         self._finish_options_operation(False, str(message))
+
+    # ------------------------------------------------------------------ единая таблица параметров
+    #
+    # Окно параметров показывает все параметры одной таблицей. Значение каждого
+    # параметра хранится в кэше по номеру DID и обновляется, откуда бы его ни
+    # прочитали или записали: одиночное чтение, массовое чтение, запись и сверка
+    # после неё. Поэтому таблица всегда показывает последнее известное значение.
+
+    OPTIONS_GROUP_ALL = "Все параметры"
+    OPTIONS_GROUP_WRITABLE = "Можно записать"
+    OPTIONS_STATUS_UNREAD = ("Не читался", "#94a3b8")
+    OPTIONS_STATUS_ERROR_COLOR = "#dc2626"
+
+    def _options_group_items(self) -> list[str]:
+        """Пункты фильтра групп: все, записываемые и группы по назначению."""
+        return [self.OPTIONS_GROUP_ALL, self.OPTIONS_GROUP_WRITABLE] + list(OPTION_GROUPS)
+
+    def _options_value_entry(self, did: int) -> dict[str, object]:
+        """Запись кэша для DID. Создаётся при первом обращении."""
+        key = int(did) & 0xFFFF
+        entry = self._options_values.get(key)
+        if entry is None:
+            status, color = self.OPTIONS_STATUS_UNREAD
+            entry = {"bytes": None, "status": status, "color": color, "time": "", "details": ""}
+            self._options_values[key] = entry
+        return entry
+
+    def _options_value_mark(
+        self,
+        did: int,
+        status: str,
+        color: str,
+        details: str = "",
+        value_bytes: bytes | None = None,
+        stamp: bool = False,
+    ):
+        """Обновляет состояние параметра в кэше и перестраивает таблицу."""
+        entry = self._options_value_entry(did)
+        entry["status"] = str(status)
+        entry["color"] = str(color)
+        entry["details"] = str(details or "")
+        if value_bytes is not None:
+            entry["bytes"] = bytes(value_bytes)
+        if stamp:
+            entry["time"] = datetime.now().strftime("%H:%M:%S")
+        self._rebuild_options_table()
+
+    def _options_explain_failure(self, message: str) -> str:
+        """Дописывает к ответу прибора с кодом NRC его смысл по-русски."""
+        text = str(message or "")
+        match = re.search(r"NRC=0x([0-9A-Fa-f]{2})", text)
+        if match is None:
+            return text
+        code = int(match.group(1), 16)
+        description = self._uds_nrc_description(code)
+        if code == 0x33:
+            description += ". Откройте доступ на запись"
+        return f"{text}: {description}"
+
+    def _options_value_note_result(
+        self,
+        did: int | None,
+        action: str,
+        origin: str,
+        success: bool,
+        value_bytes: bytes | None,
+        message: str,
+    ):
+        """Переносит итог завершённой операции чтения или записи в кэш значений."""
+        if did is None:
+            return
+        # Итог сверки после записи записывает _finish_options_write_verify.
+        if origin == "single_verify":
+            return
+        if action == "read":
+            if success:
+                self._options_value_mark(did, "Прочитано", "#16a34a", "", value_bytes or b"", stamp=True)
+            else:
+                self._options_value_mark(did, "Ошибка чтения", self.OPTIONS_STATUS_ERROR_COLOR,
+                                         self._options_explain_failure(message), stamp=True)
+        elif action == "write":
+            if success:
+                verify = origin == "single_write"
+                self._options_value_mark(
+                    did,
+                    "Записано, сверка..." if verify else "Записано",
+                    "#0ea5e9" if verify else "#16a34a",
+                    "",
+                    value_bytes or b"",
+                    stamp=True,
+                )
+            else:
+                self._options_value_mark(did, "Ошибка записи", self.OPTIONS_STATUS_ERROR_COLOR,
+                                         self._options_explain_failure(message), stamp=True)
+
+    def _options_parameter_visible(self, parameter: UdsOptionParameter) -> bool:
+        """Проходит ли параметр через выбранную группу и строку поиска."""
+        groups = self._options_group_items()
+        index = int(self._options_group_index)
+        group = groups[index] if 0 <= index < len(groups) else self.OPTIONS_GROUP_ALL
+
+        if group == self.OPTIONS_GROUP_WRITABLE and not parameter.can_write:
+            return False
+        if group not in (self.OPTIONS_GROUP_ALL, self.OPTIONS_GROUP_WRITABLE):
+            if option_group(parameter.did) != group:
+                return False
+
+        needle = str(self._options_filter_text or "").strip().lower()
+        if not needle:
+            return True
+        did = int(parameter.did) & 0xFFFF
+        haystack = " ".join([
+            f"0x{did:04x}", f"{did:04x}", str(parameter.name).lower(), str(parameter.note or "").lower(),
+        ])
+        return all(word in haystack for word in needle.split())
+
+    def _options_table_row(self, parameter: UdsOptionParameter) -> dict[str, object]:
+        """Одна строка таблицы: описание параметра и его последнее значение."""
+        did = int(parameter.did) & 0xFFFF
+        entry = self._options_values.get(did)
+        status, color = self.OPTIONS_STATUS_UNREAD
+        payload = None
+        time_text = ""
+        details = ""
+        if entry is not None:
+            status = str(entry["status"])
+            color = str(entry["color"])
+            payload = entry["bytes"]
+            time_text = str(entry["time"])
+            details = str(entry["details"])
+
+        has_value = payload is not None and len(payload) > 0
+        value = format_option_value(parameter, payload)["display"] if has_value else "—"
+        return {
+            "didInt": did,
+            "did": f"0x{did:04X}",
+            "name": str(parameter.name),
+            "group": option_group(did),
+            "sizeText": f"{int(parameter.size)} Б",
+            "access": _ACCESS_SHORT.get(parameter.access, str(parameter.access.value)),
+            "canRead": bool(parameter.can_read),
+            "canWrite": bool(parameter.can_write),
+            "hasValue": bool(has_value),
+            "value": value,
+            "status": status,
+            "statusColor": color,
+            "time": time_text,
+            "details": details,
+            "note": str(parameter.note or ""),
+        }
+
+    def _options_visible_parameters(self) -> list[UdsOptionParameter]:
+        return [item for item in self._options_parameters if self._options_parameter_visible(item)]
+
+    def _rebuild_options_table(self):
+        """Перестраивает строки таблицы по фильтру и кэшу значений."""
+        rows = [self._options_table_row(item) for item in self._options_visible_parameters()]
+        self._options_table_model.set_rows(rows)
+        self.optionsTableChanged.emit()
+
+    def _options_table_summary(self) -> str:
+        """Строка над таблицей: сколько показано и сколько уже прочитано."""
+        visible = self._options_visible_parameters()
+        total = len(self._options_parameters)
+        known = 0
+        failed = 0
+        for item in visible:
+            entry = self._options_values.get(int(item.did) & 0xFFFF)
+            if entry is None:
+                continue
+            if entry["bytes"]:
+                known += 1
+            if str(entry["color"]) == self.OPTIONS_STATUS_ERROR_COLOR:
+                failed += 1
+        text = f"Показано {len(visible)} из {total} · со значением {known}"
+        if failed:
+            text += f" · с ошибкой {failed}"
+        return text
+
+    def _options_selected_parameter(self) -> UdsOptionParameter | None:
+        return get_option_by_index(self._selected_option_index)
+
+    def _options_selected_view(self) -> dict[str, object]:
+        """Всё о выбранном параметре для правой панели окна."""
+        parameter = self._options_selected_parameter()
+        mode_index = next(
+            (number for number, (key, _title) in enumerate(INPUT_MODES) if key == self._options_input_mode), 0)
+        if parameter is None:
+            return {"did": -1, "didText": "-", "name": "Параметр не выбран", "canRead": False,
+                    "canWrite": False, "hasValue": False, "inputModeIndex": mode_index}
+
+        did = int(parameter.did) & 0xFFFF
+        row = self._options_table_row(parameter)
+        entry = self._options_values.get(did)
+        payload = entry["bytes"] if entry is not None else None
+        formatted = format_option_value(parameter, payload)
+        return {
+            "did": did,
+            "didText": f"0x{did:04X}",
+            "name": str(parameter.name),
+            "group": row["group"],
+            "sizeText": f"{int(parameter.size)} байт",
+            "access": row["access"],
+            "note": str(parameter.note or ""),
+            "canRead": bool(parameter.can_read),
+            "canWrite": bool(parameter.can_write),
+            "hasValue": bool(row["hasValue"]),
+            "display": formatted["display"] or "—",
+            "number": formatted["number"],
+            "hex": formatted["hex"],
+            "raw": formatted["raw"],
+            # Байты как текст полезны только у длинных параметров: у числа это шум.
+            "text": formatted["text"] if int(parameter.size) > 4 else "",
+            "status": row["status"],
+            "statusColor": row["statusColor"],
+            "time": row["time"],
+            "details": row["details"],
+            "inputModeIndex": mode_index,
+            "inputHint": option_input_hint(parameter, self._options_input_mode),
+            "editText": option_edit_text(parameter, payload, self._options_input_mode),
+        }
+
+    def _options_on_selection_changed(self):
+        """После смены параметра способ ввода возвращается к подходящему этому параметру."""
+        parameter = self._options_selected_parameter()
+        if parameter is not None:
+            self._options_input_mode = default_input_mode(parameter)
+        self.optionsTableChanged.emit()
+
+    def _options_select_did(self, did: int) -> bool:
+        """Делает выбранным параметр с номером did. Возвращает False, если такого нет в каталоге."""
+        target = int(did) & 0xFFFF
+        for number, item in enumerate(self._options_parameters):
+            if (int(item.did) & 0xFFFF) == target:
+                if number != self._selected_option_index:
+                    self._selected_option_index = number
+                    self._refresh_options_selection(emit_signal=True)
+                    self._options_on_selection_changed()
+                return True
+        return False
+
+    def _options_preview_input(self, text: str) -> dict[str, object]:
+        """Проверяет ввод для записи и описывает, что уйдёт в прибор."""
+        parameter = self._options_selected_parameter()
+        if parameter is None or not parameter.can_write:
+            return {"ok": False, "text": ""}
+        if not str(text or "").strip():
+            return {"ok": False, "text": ""}
+        try:
+            payload = encode_option_input(parameter, str(text), self._options_input_mode)
+        except OptionInputError as exc:
+            return {"ok": False, "text": str(exc)}
+        return {"ok": True, "text": "Будет записано: " + describe_option_bytes(parameter, payload)}
+
+    def _options_write_access_open(self) -> bool:
+        """Открыт ли доступ на запись для узла, с которым работает окно параметров."""
+        if not bool(self._service_security_unlocked) or self._service_access_target_sa is None:
+            return False
+        return (int(self._service_access_target_sa) & 0xFF) == (int(self._resolve_options_target_sa()) & 0xFF)
+
+    def _options_write_access_text(self) -> str:
+        """Состояние доступа на запись одной строкой для шапки окна."""
+        if bool(self._service_access_busy):
+            return "Открываю доступ..."
+        if self._options_write_access_open():
+            return f"Запись разрешена (узел 0x{int(self._service_access_target_sa) & 0xFF:02X})"
+        if bool(self._service_security_unlocked) and self._service_access_target_sa is not None:
+            return f"Доступ открыт для другого узла 0x{int(self._service_access_target_sa) & 0xFF:02X}"
+        return "Запись закрыта: нужен доступ 0x27"
+
+    def _start_options_write_access(self) -> bool:
+        """Открывает доступ на запись одной кнопкой: расширенная сессия 0x10, затем Security Access 0x27."""
+        self._selected_service_session_index = self._service_session_index_for_value(int(Session.EXTENDED))
+        self._options_access_chain = True
+        self.applySelectedServiceSession()
+        if not bool(self._service_access_busy):
+            self._options_access_chain = False
+            return False
+        return True
+
+    def _continue_options_access_after_session(self):
+        """После подтверждения сессии продолжает цепочку окна параметров запросом Security Access."""
+        if not bool(self._options_access_chain):
+            return
+        self._options_access_chain = False
+        self.requestSecurityAccess()
+
+    def _options_export_directory(self) -> Path:
+        """Каталог выгрузок таблицы параметров рядом с остальными журналами программы."""
+        try:
+            folder = Path(self._project_root_directory) / "logs" / "options"
+            folder.mkdir(parents=True, exist_ok=True)
+            return folder
+        except Exception:
+            folder = Path.cwd() / "logs" / "options"
+            folder.mkdir(parents=True, exist_ok=True)
+            return folder
+
+    def _options_export_csv(self) -> Path:
+        """Сохраняет показанную таблицу параметров в CSV и возвращает путь к файлу."""
+        target_sa = int(self._resolve_options_target_sa()) & 0xFF
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = self._options_export_directory() / f"options_SA{target_sa:02X}_{stamp}.csv"
+        columns = ["DID", "Параметр", "Группа", "Доступ", "Значение", "Число", "HEX", "Байты",
+                   "Состояние", "Время", "Подробности", "Примечание"]
+        with path.open("w", newline="", encoding=CSV_WRITE_ENCODING) as file:
+            writer = csv.writer(file, delimiter=";")
+            writer.writerow(columns)
+            for parameter in self._options_visible_parameters():
+                row = self._options_table_row(parameter)
+                entry = self._options_values.get(int(parameter.did) & 0xFFFF)
+                payload = entry["bytes"] if entry is not None else None
+                formatted = format_option_value(parameter, payload)
+                writer.writerow([
+                    row["did"], row["name"], row["group"], row["access"],
+                    formatted["display"], formatted["number"], formatted["hex"], formatted["raw"],
+                    row["status"], row["time"], row["details"], row["note"],
+                ])
+        return path

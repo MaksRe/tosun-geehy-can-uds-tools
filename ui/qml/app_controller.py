@@ -18,6 +18,8 @@ from uds.services.write_data_by_id import ServiceWriteDataById
 from uds.uds_identifiers import UdsIdentifiers
 from ui.qml.collector_csv_manager import CollectorCombinedCsvManager, CollectorCsvManager
 from ui.qml.collector_sftp_uploader import CollectorSftpConfig, CollectorSftpUploader
+from ui.qml.options_table_model import OptionsTableModel
+from uds.option_values import INPUT_VALUE
 
 from .controller import (
     AppControllerCalibrationLogMixin,
@@ -416,6 +418,14 @@ class AppController(
         self._options_bulk_next_index = 0
         self._options_bulk_success_count = 0
         self._options_bulk_fail_count = 0
+        # Единая таблица окна параметров: последнее известное значение каждого DID,
+        # фильтр по группе и строке поиска, способ ввода значения для записи.
+        self._options_values: dict[int, dict[str, object]] = {}
+        self._options_filter_text = ""
+        self._options_group_index = 0
+        self._options_input_mode = INPUT_VALUE
+        self._options_access_chain = False
+        self._options_table_model = OptionsTableModel(self)
         self._software_version_did = 0xF195
         self._software_version_text = "—"
         self._software_version_status = "Версия ПО не считана."
@@ -455,6 +465,8 @@ class AppController(
 
         self._refresh_uds_identifier_texts(emit_signal=False)
         self._refresh_options_selection(emit_signal=False)
+        self._options_on_selection_changed()
+        self._rebuild_options_table()
 
         self._firmware_loader_thread: QThread | None = None
         self._firmware_loader_worker: FirmwareLoadWorker | None = None

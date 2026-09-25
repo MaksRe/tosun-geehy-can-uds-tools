@@ -50,6 +50,7 @@ class AppControllerContract:
     protocolControlChanged: Any
     optionsBulkChanged: Any
     optionsBulkRowsChanged: Any
+    optionsTableChanged: Any
     optionOperationChanged: Any
     optionSelectionChanged: Any
     optionValueChanged: Any
@@ -414,6 +415,12 @@ class AppControllerContract:
     _options_bulk_next_index: Any
     _options_bulk_plan: Any
     _options_bulk_rows: Any
+    _options_values: Any
+    _options_filter_text: Any
+    _options_group_index: Any
+    _options_input_mode: Any
+    _options_access_chain: Any
+    _options_table_model: Any
     _options_bulk_status: Any
     _options_bulk_step_timer: Any
     _options_bulk_success_count: Any

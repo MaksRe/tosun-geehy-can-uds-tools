@@ -459,43 +459,10 @@ ApplicationWindow {
     }
 
     Window {
-        id: optionsBulkWindow
-        width: 1500
-        height: 780
-        minimumWidth: 1180
-        minimumHeight: 600
-        visible: false
-        modality: Qt.NonModal
-        transientParent: window
-        title: "Массовое чтение DID"
-
-        Rectangle {
-            anchors.fill: parent
-            gradient: Gradient {
-                GradientStop { position: 0.0; color: window.bgStart }
-                GradientStop { position: 1.0; color: window.bgEnd }
-            }
-        }
-
-        OptionsBulkReadCard {
-            anchors.fill: parent
-            anchors.margins: 14
-            appController: window.backendController
-            cardColor: window.cardColor
-            cardBorder: window.cardBorder
-            textMain: window.textMain
-            textSoft: window.textSoft
-            inputBg: window.inputBg
-            inputBorder: window.inputBorder
-            inputFocus: window.inputFocus
-        }
-    }
-
-    Window {
         id: optionsWindow
-        width: 1420
-        height: 940
-        minimumWidth: 1180
+        width: 1560
+        height: 960
+        minimumWidth: 1280
         minimumHeight: 760
         visible: false
         modality: Qt.NonModal
@@ -521,7 +488,6 @@ ApplicationWindow {
             inputBg: window.inputBg
             inputBorder: window.inputBorder
             inputFocus: window.inputFocus
-            onOpenBulkReadRequested: window.raiseToolWindow(optionsBulkWindow)
         }
     }
 

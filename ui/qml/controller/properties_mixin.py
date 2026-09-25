@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Property, Signal
+from PySide6.QtCore import Property, QObject, Signal
 
 from uds.data_identifiers import UdsData
+from uds.option_values import INPUT_MODES
 from uds.uds_identifiers import UdsIdentifiers
 
 from .contract import AppControllerContract
@@ -62,6 +63,7 @@ class AppControllerPropertiesMixin(AppControllerContract):
     optionsTargetNodeChanged = Signal()
     optionsBulkChanged = Signal()
     optionsBulkRowsChanged = Signal()
+    optionsTableChanged = Signal()
     diagnosticsChanged = Signal()
     mediaWizardChanged = Signal()
     markMediaChanged = Signal()
@@ -604,6 +606,44 @@ class AppControllerPropertiesMixin(AppControllerContract):
     @Property("QVariantList", notify=optionsBulkRowsChanged)
     def optionsBulkRows(self):
         return self._options_bulk_rows
+
+    # --- Единая таблица окна параметров ---
+
+    @Property(QObject, constant=True)
+    def optionsTableModel(self):
+        return self._options_table_model
+
+    @Property(str, notify=optionsTableChanged)
+    def optionsTableSummaryText(self):
+        return self._options_table_summary()
+
+    @Property("QStringList", notify=optionsTableChanged)
+    def optionsGroupItems(self):
+        return self._options_group_items()
+
+    @Property(int, notify=optionsTableChanged)
+    def selectedOptionsGroupIndex(self):
+        return int(self._options_group_index)
+
+    @Property(str, notify=optionsTableChanged)
+    def optionsFilterText(self):
+        return str(self._options_filter_text)
+
+    @Property("QStringList", constant=True)
+    def optionsInputModeItems(self):
+        return [title for _key, title in INPUT_MODES]
+
+    @Property("QVariantMap", notify=optionsTableChanged)
+    def selectedOptionView(self):
+        return self._options_selected_view()
+
+    @Property(bool, notify=serviceAccessChanged)
+    def optionsWriteAccessOpen(self):
+        return self._options_write_access_open()
+
+    @Property(str, notify=serviceAccessChanged)
+    def optionsWriteAccessText(self):
+        return self._options_write_access_text()
 
     @Property(bool, notify=calibrationStateChanged)
     def calibrationActive(self):

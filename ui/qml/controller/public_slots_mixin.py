@@ -12,6 +12,7 @@ from PySide6.QtGui import QColor, QGuiApplication
 
 from colors import RowColor
 from uds.data_identifiers import UdsData
+from uds.option_values import INPUT_MODES, OptionInputError, encode_option_input
 from uds.options_catalog import get_option_by_did, get_option_by_index
 from uds.services.session import Session
 from uds.uds_identifiers import UdsIdentifiers
@@ -900,6 +901,8 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._service_access_pending_action = ""
         self._service_access_target_sa = None
         self._service_security_unlocked = False
+        # Цепочка «сессия, затем доступ» окна параметров прервана вместе с доступом.
+        self._options_access_chain = False
         if status_text is not None:
             self._service_access_status = str(status_text)
         self.serviceAccessChanged.emit()
@@ -2031,6 +2034,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
         self._selected_option_index = parsed
         self._refresh_options_selection(emit_signal=True)
+        self._options_on_selection_changed()
 
     @Slot(int)
     def setSelectedOptionsTargetNodeIndex(self, index):
@@ -2050,6 +2054,9 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._options_target_node_sa = None if selected_value is None else int(selected_value) & 0xFF
         self.optionsTargetNodeChanged.emit()
         self._reset_service_access_state("Целевой узел изменен. При необходимости заново установите Session и Security Access.")
+        # Значения в таблице параметров принадлежали прежнему узлу: показывать их у нового нельзя.
+        self._options_values = {}
+        self._rebuild_options_table()
 
         if self._options_target_node_sa is None:
             self._append_log("Параметры UDS: выбран целевой узел Авто (по UDS RX ID).", RowColor.blue)
@@ -2158,6 +2165,139 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._options_history = []
         self._options_history_next_id = 1
         self.optionHistoryChanged.emit()
+
+    # --- Единая таблица окна параметров ---
+
+    def _options_operation_blocked(self, what: str) -> bool:
+        """Можно ли сейчас начать операцию окна параметров. Если нельзя, объясняет почему."""
+        if self._options_busy:
+            self.infoMessage.emit("Параметры UDS", "Идёт другая операция чтения или записи. Дождитесь её конца.")
+            return True
+        if self._programming_active:
+            self.infoMessage.emit("Параметры UDS", f"Завершите программирование перед тем, как {what}.")
+            return True
+        if self._options_bulk_busy:
+            self.infoMessage.emit("Параметры UDS", f"Идёт чтение списка. Остановите его, чтобы {what}.")
+            return True
+        if not self._can.is_connect or not self._can.is_trace:
+            self.infoMessage.emit("Параметры UDS", "Сначала подключите адаптер и запустите трассировку CAN.")
+            return True
+        return False
+
+    @Slot(int)
+    def selectOptionByDid(self, did):
+        """Выбирает параметр по номеру DID: строка таблицы и правая панель."""
+        try:
+            self._options_select_did(int(did))
+        except (TypeError, ValueError):
+            return
+
+    @Slot(int)
+    def readOptionByDid(self, did):
+        """Выбирает параметр и сразу читает его: кнопка чтения в строке таблицы."""
+        try:
+            found = self._options_select_did(int(did))
+        except (TypeError, ValueError):
+            return
+        if found:
+            self.readSelectedOption()
+
+    @Slot(str)
+    def setOptionsFilterText(self, text):
+        value = str(text or "")
+        if value == self._options_filter_text:
+            return
+        self._options_filter_text = value
+        self._rebuild_options_table()
+
+    @Slot(int)
+    def setSelectedOptionsGroupIndex(self, index):
+        try:
+            parsed = int(index)
+        except (TypeError, ValueError):
+            return
+        if not (0 <= parsed < len(self._options_group_items())) or parsed == self._options_group_index:
+            return
+        self._options_group_index = parsed
+        self._rebuild_options_table()
+
+    @Slot(int)
+    def setSelectedOptionInputModeIndex(self, index):
+        try:
+            parsed = int(index)
+        except (TypeError, ValueError):
+            return
+        if not (0 <= parsed < len(INPUT_MODES)):
+            return
+        self._options_input_mode = INPUT_MODES[parsed][0]
+        self.optionsTableChanged.emit()
+
+    @Slot(str, result="QVariantMap")
+    def previewOptionInput(self, text):
+        """Что уйдёт в прибор при записи этого ввода, или почему ввод не подходит."""
+        return self._options_preview_input(str(text or ""))
+
+    @Slot(str)
+    def writeSelectedOptionInput(self, text):
+        """Записывает выбранный параметр: ввод в выбранном способе, затем сверка чтением."""
+        if self._options_operation_blocked("записывать параметр"):
+            return
+
+        parameter = get_option_by_index(self._selected_option_index)
+        if parameter is None:
+            return
+        if not parameter.can_write:
+            self.infoMessage.emit("Параметры UDS", "Этот параметр только для чтения.")
+            return
+
+        try:
+            payload = encode_option_input(parameter, str(text or ""), self._options_input_mode)
+        except OptionInputError as exc:
+            self.infoMessage.emit("Параметры UDS", str(exc))
+            return
+
+        if not self._start_options_write_multiframe_request(
+                parameter, payload, request_origin="single_write", append_history=True):
+            self.infoMessage.emit("Параметры UDS", "Не удалось отправить запрос записи.")
+
+    @Slot()
+    def startOptionsBulkReadVisible(self):
+        """Читает по очереди все параметры, которые сейчас показаны в таблице."""
+        if self._options_bulk_busy:
+            return
+        if self._options_operation_blocked("читать список"):
+            return
+        visible = [item for item in self._options_visible_parameters() if item.can_read]
+        if not visible:
+            self.infoMessage.emit("Параметры UDS", "В таблице нет параметров, которые можно прочитать.")
+            return
+        self._start_options_bulk_read(visible)
+
+    @Slot()
+    def clearOptionsValues(self):
+        """Забывает прочитанные значения: таблица снова пустая."""
+        if self._options_bulk_busy:
+            return
+        self._options_values = {}
+        self._rebuild_options_table()
+
+    @Slot()
+    def exportOptionsTableCsv(self):
+        """Сохраняет показанную таблицу в CSV в папку журналов программы."""
+        try:
+            path = self._options_export_csv()
+        except Exception as exc:
+            self.infoMessage.emit("Параметры UDS", f"Не удалось сохранить таблицу: {exc}")
+            return
+        self._append_log(f"Параметры UDS: таблица сохранена в {path}", RowColor.blue)
+        self.infoMessage.emit("Параметры UDS", f"Таблица сохранена:\n{path}")
+
+    @Slot()
+    def openOptionsWriteAccess(self):
+        """Открывает доступ на запись одной кнопкой: сессия 0x10 Extended, затем Security Access 0x27."""
+        if self._service_access_busy:
+            return
+        self._start_options_write_access()
 
     @Slot()
     def refreshUdsIdentifiers(self):
