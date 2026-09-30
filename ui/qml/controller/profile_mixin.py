@@ -106,6 +106,9 @@ class AppControllerProfileMixin:
         # После записи профиль сразу читается обратно и сверяется.
         self._profile_verify_after_write = False
         self._profile_status = "Профиль не прочитан."
+        # Итог последней законченной операции: "ok", "fail" или None, пока она идёт.
+        # По нему прогон в камере узнаёт, чем кончились запись и сверка.
+        self._profile_last_result = None
         self._profile_status_color = "#64748b"
         self._profile_file_path = ""
 
@@ -195,6 +198,7 @@ class AppControllerProfileMixin:
         self._profile_queue = list(queue)
         self._profile_retries_used = 0
         self._profile_busy = True
+        self._profile_last_result = None
         self._profile_set_status(status, "#64748b")
         return self._profile_send_next()
 
@@ -209,9 +213,11 @@ class AppControllerProfileMixin:
                 # Прибор подтвердил приём каждой таблицы, но это не значит, что в нём лежит записанное.
                 self._profile_verify_after_write = False
                 if not self._profile_verify_on_device():
+                    self._profile_last_result = "fail"
                     self._profile_set_status(
                         "Профиль записан, но сверка не запустилась. Нажмите «Проверить запись».", "#d97706")
             else:
+                self._profile_last_result = "ok"
                 self._profile_set_status("Готово.", "#16a34a")
             return True
 
@@ -246,6 +252,7 @@ class AppControllerProfileMixin:
         self._profile_verify = None
         self._profile_verify_after_write = False
         self._profile_step_timer.stop()
+        self._profile_last_result = "fail"
         self._profile_set_status(f"Операция прервана: {reason}", "#dc2626")
 
     def _handle_profile_options_result(self, *, success: bool, request_origin: str,
@@ -369,6 +376,7 @@ class AppControllerProfileMixin:
         self._profile_device_status = read.get("status")
 
         self._profile_verify_report = problems
+        self._profile_last_result = "fail" if problems else "ok"
         if problems:
             self._profile_set_status(
                 f"Проверка записи не пройдена, расхождений: {len(problems)}. Смотрите список ниже.",

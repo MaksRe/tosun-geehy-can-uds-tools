@@ -72,6 +72,8 @@ Card {
         if (index === 3) {
             if (root.appController.chamberBusy)
                 return "Идёт замер точки"
+            if (root.appController.chamberChain.busy)
+                return "Идёт запись профиля в прибор"
             return "Снято точек: " + root.appController.chamberPointCount
         }
 

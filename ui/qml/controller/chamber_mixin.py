@@ -9,12 +9,13 @@
 КАК ЭТО РАБОТАЕТ
 Оператор доводит камеру до нужной температуры, подключает к прибору эталонный
 конденсатор или собранное изделие, пишет в поле пометку что именно подключено и
-нажимает «Записать точку». Программа делает несколько замеров подряд, усредняет
-их и добавляет строку в журнал прогона.
+нажимает «Записать точку». Раздел всё время показывает текущие показания и их
+скользящее среднее, и кнопка сразу кладёт это среднее в журнал прогона.
 
-Когда все точки сняты, кнопка «Посчитать таблицы» считает обе ступени и сразу
-кладёт результат в таблицу профиля. Отдельный скрипт и ручной перенос файлов
-больше не нужны.
+После каждой точки журнал сам сохраняется в файл, а обе ступени сами
+пересчитываются и попадают в таблицу профиля. Когда данных хватает во всех
+узлах, профиль сам записывается в прибор, сверяется и сохраняется в файл.
+Отдельный скрипт и ручной перенос файлов больше не нужны.
 
 ЧТО ЧИТАЕТСЯ В КАЖДОЙ ТОЧКЕ
 Период основного контура, период контура вида топлива, температура топлива и
@@ -95,6 +96,14 @@ class AppControllerChamberMixin(AppControllerContract):
         self._chamber_status_color = "#64748b"
         self._chamber_report: list[str] = []
         self._chamber_file_path = ""
+
+        # Итог последнего расчёта таблиц: он идёт сам после каждой точки.
+        self._chamber_tables_text = "Таблицы посчитаются сами, когда появятся точки."
+        self._chamber_tables_color = "#64748b"
+        # Данных хватило во всех узлах, и таблицы можно писать в прибор.
+        self._chamber_tables_complete = False
+        # Расчёт отложен, пока профиль пишется в прибор: таблицы нельзя менять посреди записи.
+        self._chamber_tables_deferred = False
 
         # Признак пробной калибровки. Его ставит раздел пробной калибровки на время
         # прогона с эмуляцией температуры в самом приборе, и снятые точки помечаются.
@@ -250,6 +259,19 @@ class AppControllerChamberMixin(AppControllerContract):
                 "Точка не записана: прибор не отдал период или температуру.", "#dc2626")
             return
 
+        self._chamber_append_point({
+            "main": int(main),
+            "media": mean("media"),
+            "fuel_temp_x10": int(fuel_temp),
+            "board_temp_x10": int(board_temp),
+        }, f"среднее {len(self._chamber_samples)} замеров")
+
+    def _chamber_append_point(self, values: dict, detail: str = ""):
+        """Добавляет точку в журнал, сохраняет журнал и пересчитывает таблицы.
+
+        Общая часть для обоих способов снятия: по средним живого опроса и по
+        серии замеров пробной калибровки.
+        """
         # Температура всегда берётся из прибора. При пробной калибровке её задаёт
         # эмуляция в самой прошивке, поэтому точка честно попадает в свой узел.
         rehearsal = bool(self._chamber_rehearsal)
@@ -257,10 +279,10 @@ class AppControllerChamberMixin(AppControllerContract):
         point = {
             "time": datetime.now().strftime("%H:%M:%S"),
             "note": str(self._chamber_label).strip(),
-            "main": int(main),
-            "media": mean("media"),
-            "fuel_temp_x10": int(fuel_temp),
-            "board_temp_x10": int(board_temp),
+            "main": int(values["main"]),
+            "media": None if values.get("media") is None else int(values["media"]),
+            "fuel_temp_x10": int(values["fuel_temp_x10"]),
+            "board_temp_x10": int(values["board_temp_x10"]),
             "rehearsal": rehearsal,
         }
         self._chamber_points.append(point)
@@ -277,8 +299,10 @@ class AppControllerChamberMixin(AppControllerContract):
             color = "#16a34a"
 
         prefix = "Пробная точка" if rehearsal else "Точка"
+        how = f" ({detail})" if detail else ""
+        saved = self._chamber_after_change()
         self._chamber_set_status(
-            f"{prefix} «{point['note']}» записана, {hint}. Всего точек: {len(self._chamber_points)}.",
+            f"{prefix} «{point['note']}» записана{how}, {hint}. Всего точек: {len(self._chamber_points)}.{saved}",
             color,
         )
 
@@ -391,25 +415,73 @@ class AppControllerChamberMixin(AppControllerContract):
             self._chamber_set_status("Убирать нечего, журнал пуст.", "#d97706")
             return False
         removed = self._chamber_points.pop()
+        saved = self._chamber_after_change()
         self._chamber_set_status(
-            f"Точка «{removed['note']}» убрана. Осталось точек: {len(self._chamber_points)}.",
+            f"Точка «{removed['note']}» убрана. Осталось точек: {len(self._chamber_points)}.{saved}",
             "#0f6ab4",
         )
         return True
 
     def _chamber_clear_points(self):
-        """Очищает журнал прогона целиком."""
+        """Очищает журнал прогона целиком.
+
+        Файл прежнего журнала не трогается: следующая точка начнёт новый файл,
+        и случайно нажатая «Очистить» не сотрёт часы прогона на диске.
+        """
         self._chamber_points = []
         self._chamber_report = []
-        self._chamber_set_status("Журнал прогона очищен.", "#64748b")
+        self._chamber_file_path = ""
+        self._chamber_tables_complete = False
+        self._chamber_tables_text = "Таблицы посчитаются сами, когда появятся точки."
+        self._chamber_tables_color = "#64748b"
+        self._chamber_set_status("Журнал прогона очищен. Следующая точка начнёт новый файл.", "#64748b")
 
-    def _chamber_save_file(self, path: str) -> bool:
-        """Сохраняет журнал прогона в CSV, чтобы прогон можно было прервать."""
-        if not self._chamber_points:
-            self._chamber_set_status("Сохранять нечего, журнал пуст.", "#d97706")
-            return False
+    def _chamber_after_change(self) -> str:
+        """После каждой правки журнала: сохраняет его в файл и пересчитывает таблицы.
+
+        Возвращает хвост строки хода работы: куда сохранён журнал. Точки пробной
+        калибровки не сохраняются и не считаются: их таблицы в прибор писать нельзя,
+        а проверку она ведёт сама.
+        """
+        if self._chamber_rehearsal:
+            self.chamberChanged.emit()
+            return ""
+        path = self._chamber_autosave()
+        self._chamber_auto_compute()
+        self.chamberChanged.emit()
+        if not path:
+            return " Журнал сохранить не удалось, сохраните его вручную."
+        return f" Журнал сохранён: {pathlib.Path(path).name}."
+
+    def _chamber_autosave_directory(self):
+        """Папка журналов прогона: logs/chamber рядом с программой, или None."""
+        root = getattr(self, "_project_root_directory", None)
+        if root is None:
+            return None
+        return pathlib.Path(root) / "logs" / "chamber"
+
+    def _chamber_autosave(self) -> str:
+        """Сохраняет журнал в его файл, а у нового прогона сначала заводит файл сам.
+
+        Прогон длится часами: забытое сохранение или упавшая программа не должны
+        стоить снятых точек. Возвращает путь или пустую строку при неудаче.
+        """
+        path = str(self._chamber_file_path or "")
+        if not path:
+            folder = self._chamber_autosave_directory()
+            if folder is None:
+                return ""
+            path = str(folder / f"chamber_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+        if self._chamber_write_csv(path) is not None:
+            return ""
+        self._chamber_file_path = path
+        return path
+
+    def _chamber_write_csv(self, path: str):
+        """Пишет журнал в CSV. Возвращает None или текст ошибки."""
         try:
             target = pathlib.Path(str(path))
+            target.parent.mkdir(parents=True, exist_ok=True)
             with target.open("w", newline="", encoding="utf-8-sig") as file:
                 writer = csv.writer(file, delimiter=";")
                 writer.writerow(self.CHAMBER_COLUMNS)
@@ -424,6 +496,16 @@ class AppControllerChamberMixin(AppControllerContract):
                         self.CHAMBER_REHEARSAL_MARK if point.get("rehearsal") else "",
                     ))
         except OSError as error:
+            return str(error)
+        return None
+
+    def _chamber_save_file(self, path: str) -> bool:
+        """Сохраняет журнал прогона в выбранный файл. Дальше автосохранение пишет туда же."""
+        if not self._chamber_points:
+            self._chamber_set_status("Сохранять нечего, журнал пуст.", "#d97706")
+            return False
+        error = self._chamber_write_csv(path)
+        if error is not None:
             self._chamber_set_status(f"Не удалось записать файл: {error}", "#dc2626")
             return False
 
@@ -482,15 +564,51 @@ class AppControllerChamberMixin(AppControllerContract):
         self._chamber_file_path = str(path)
         self._chamber_report = []
         self._chamber_set_status(f"Загружено точек: {len(points)}.", "#16a34a")
+        # Загруженный журнал сразу пересчитывается: таблицы профиля должны ему соответствовать.
+        self._chamber_auto_compute()
+        self.chamberChanged.emit()
         return True
 
     # ------------------------------------------------------------------ расчёт
 
-    def _chamber_compute_tables(self) -> bool:
-        """Считает обе ступени по снятым точкам и кладёт результат в таблицу профиля."""
+    def _chamber_set_tables_state(self, text: str, color: str, complete: bool = False):
+        """Запоминает итог расчёта таблиц для строки рядом с кнопкой расчёта."""
+        self._chamber_tables_text = str(text)
+        self._chamber_tables_color = str(color)
+        self._chamber_tables_complete = bool(complete)
+
+    def _chamber_auto_compute(self) -> bool:
+        """Пересчёт таблиц после правки журнала, без сообщений в строке хода работы."""
         if not self._chamber_points:
-            self._chamber_set_status("Считать нечего: не снято ни одной точки.", "#dc2626")
+            self._chamber_report = []
+            self._chamber_set_tables_state("Таблицы посчитаются сами, когда появятся точки.", "#64748b")
             return False
+        return self._chamber_compute_tables(quiet=True)
+
+    def _chamber_compute_tables(self, quiet: bool = False) -> bool:
+        """Считает обе ступени по снятым точкам и кладёт результат в таблицу профиля.
+
+        quiet=True означает пересчёт после точки: итог идёт в строку у кнопки
+        расчёта, а строка хода работы остаётся за точкой.
+        """
+        def report_status(text: str, color: str):
+            if not quiet:
+                self._chamber_set_status(text, color)
+
+        if not self._chamber_points:
+            self._chamber_set_tables_state("Считать нечего: не снято ни одной точки.", "#64748b")
+            report_status("Считать нечего: не снято ни одной точки.", "#dc2626")
+            return False
+
+        # Таблицы на экране и есть то, что сейчас уходит в прибор. Менять их посреди записи нельзя.
+        if bool(getattr(self, "_profile_busy", False)):
+            self._chamber_tables_deferred = True
+            self._chamber_set_tables_state(
+                "Пересчёт отложен: идёт обмен профилем с прибором. Таблицы пересчитаются после него.",
+                "#d97706", self._chamber_tables_complete)
+            report_status("Идёт обмен профилем с прибором, пересчёт выполнится после него.", "#d97706")
+            return False
+        self._chamber_tables_deferred = False
 
         try:
             result = chamber_fit.compute_tables(
@@ -499,11 +617,13 @@ class AppControllerChamberMixin(AppControllerContract):
                 span_main=self._chamber_span_main,
                 span_media=self._chamber_span_media)
         except Exception as error:
-            self._chamber_set_status(f"Расчёт не выполнен: {error}", "#dc2626")
+            self._chamber_set_tables_state(f"Расчёт не выполнен: {error}", "#dc2626")
+            report_status(f"Расчёт не выполнен: {error}", "#dc2626")
             return False
 
         self._chamber_report = list(result.get("замечания") or [])
-        if any(point.get("rehearsal") for point in self._chamber_points):
+        rehearsal = any(point.get("rehearsal") for point in self._chamber_points)
+        if rehearsal:
             self._chamber_report.insert(0, (
                 "в прогоне есть точки пробной калибровки с эмуляцией температуры. "
                 "Эти таблицы годятся только для проверки порядка работы, "
@@ -511,22 +631,36 @@ class AppControllerChamberMixin(AppControllerContract):
             ))
 
         if not result.get("ступень_платы") and not result.get("ступень_платы_вида"):
-            self._chamber_set_status(
+            self._chamber_set_tables_state(
+                "Таблицы пока не считаются: ступени платы не хватает данных. Чего не хватает - в списке ниже.",
+                "#d97706")
+            report_status(
                 "Ступень платы не посчитана ни для одного контура, таблицы не заполнены. "
                 "Смотрите список ниже.", "#dc2626")
             return False
 
         self._profile_apply_chamber_format(result)
+        crc = self._profile_calc_crc()
         self._profile_set_status(
-            f"Таблицы посчитаны по прогону, сумма 0x{self._profile_calc_crc():04X}. "
+            f"Таблицы посчитаны по прогону, сумма 0x{crc:04X}. "
             "В прибор они ещё не записаны.", "#d97706")
 
         if self._chamber_report:
-            self._chamber_set_status(
+            self._chamber_set_tables_state(
+                f"Таблицы пересчитаны и перенесены в профиль (сумма 0x{crc:04X}), "
+                f"но данных хватило не везде: замечаний {len(self._chamber_report)}.", "#d97706")
+            report_status(
                 "Таблицы посчитаны, но данных хватило не везде. Смотрите список ниже.", "#d97706")
         else:
-            self._chamber_set_status(
+            self._chamber_set_tables_state(
+                f"Таблицы посчитаны по всем узлам и перенесены в профиль, сумма 0x{crc:04X}.",
+                "#16a34a", complete=True)
+            report_status(
                 "Таблицы посчитаны и перенесены в профиль. Данных хватило везде.", "#16a34a")
+            # Данных хватило везде: профиль можно писать в прибор без оператора.
+            chain = getattr(self, "_chamber_chain_maybe_auto", None)
+            if chain is not None:
+                chain()
         return True
 
     def _chamber_export_tables(self, path: str) -> bool:
@@ -573,6 +707,9 @@ class AppControllerChamberMixin(AppControllerContract):
             self._chamber_span_media = value
         else:
             self._chamber_span_main = value
+        # Размах меняет строки «в жидкости», поэтому таблицы сразу пересчитываются.
+        if self._chamber_extend_liquid:
+            self._chamber_auto_compute()
         self.chamberChanged.emit()
         return True
 

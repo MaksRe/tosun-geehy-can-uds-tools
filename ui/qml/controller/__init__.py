@@ -2,6 +2,8 @@ from .calibration_log_mixin import AppControllerCalibrationLogMixin
 from .calibration_mixin import AppControllerCalibrationMixin
 from .can_mixin import AppControllerCanMixin
 from .capacitance_mixin import AppControllerCapacitanceMixin
+from .chamber_chain_mixin import AppControllerChamberChainMixin
+from .chamber_live_mixin import AppControllerChamberLiveMixin
 from .chamber_mixin import AppControllerChamberMixin
 from .trial_mixin import AppControllerTrialMixin
 from .collector_mixin import AppControllerCollectorMixin
@@ -25,6 +27,8 @@ __all__ = [
     "AppControllerCalibrationMixin",
     "AppControllerCanMixin",
     "AppControllerCapacitanceMixin",
+    "AppControllerChamberChainMixin",
+    "AppControllerChamberLiveMixin",
     "AppControllerChamberMixin",
     "AppControllerTrialMixin",
     "AppControllerCollectorMixin",

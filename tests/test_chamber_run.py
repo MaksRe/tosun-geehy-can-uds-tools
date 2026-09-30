@@ -50,6 +50,10 @@ class _ChamberStub(AppControllerChamberMixin):
         self._chamber_span_main = None
         self._chamber_span_media = None
         self._chamber_rehearsal = False
+        self._chamber_tables_text = ""
+        self._chamber_tables_color = ""
+        self._chamber_tables_complete = False
+        self._chamber_tables_deferred = False
         self._profile_status = ""
         self._profile_status_color = ""
 

@@ -119,6 +119,37 @@ class AppControllerContract:
     _chamber_gap_timer: Any
     _chamber_timeout_timer: Any
     chamberChanged: Any
+    chamberLiveChanged: Any
+    _chamber_tables_text: Any
+    _chamber_tables_color: Any
+    _chamber_tables_complete: Any
+    _chamber_tables_deferred: Any
+    _chamber_live_read: Any
+    _chamber_live_wanted: Any
+    _chamber_live_last: Any
+    _chamber_live_seen: Any
+    _chamber_live_recent: Any
+    _chamber_live_outliers: Any
+    _chamber_live_restart_s: Any
+    _chamber_live_refusals: Any
+    _chamber_live_missing: Any
+    _chamber_live_pending: Any
+    _chamber_live_pending_s: Any
+    _chamber_live_index: Any
+    _chamber_live_timer: Any
+    _chamber_window_s: Any
+    _chamber_capture_waiting: Any
+    _chamber_capture_wait_since: Any
+    _chamber_auto_write: Any
+    _chamber_chain_stage: Any
+    _chamber_chain_steps: Any
+    _chamber_chain_status: Any
+    _chamber_chain_color: Any
+    _chamber_chain_deadline: Any
+    _chamber_chain_crc: Any
+    _chamber_written_crc: Any
+    _chamber_chain_timer: Any
+    _profile_last_result: Any
     trialChanged: Any
     nodeLiveChanged: Any
     _trial_read: Any

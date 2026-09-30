@@ -26,6 +26,8 @@ from .controller import (
     AppControllerCalibrationMixin,
     AppControllerCanMixin,
     AppControllerCapacitanceMixin,
+    AppControllerChamberChainMixin,
+    AppControllerChamberLiveMixin,
     AppControllerChamberMixin,
     AppControllerTrialMixin,
     AppControllerEepromCommitMixin,
@@ -61,6 +63,8 @@ class AppController(
     AppControllerCalibrationLogMixin,
     AppControllerProfileMixin,
     AppControllerChamberMixin,
+    AppControllerChamberLiveMixin,
+    AppControllerChamberChainMixin,
     AppControllerTrialMixin,
     AppControllerEepromCommitMixin,
     AppControllerCanMixin,
@@ -596,6 +600,10 @@ class AppController(
         self._init_profile_state()
         # Прогон в камере пользуется таблицами профиля, поэтому идёт после него.
         self._init_chamber_state()
+        # Живые показания прогона: текущее и среднее рядом, как в калибровке бака.
+        self._init_chamber_live_state()
+        # Запись посчитанного профиля в прибор одной операцией.
+        self._init_chamber_chain_state()
         # Пробная калибровка опирается на прогон и профиль, поэтому готовится последней.
         self._init_trial_state()
         # Контроль сохранения замечает записи всех разделов, поэтому готовится после них.

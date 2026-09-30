@@ -3274,8 +3274,34 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot()
     def captureChamberPoint(self):
-        """Цель функции в снятии одной точки прогона, затем она усредняет несколько замеров подряд."""
-        self._chamber_capture_point()
+        """Цель функции в снятии одной точки прогона, затем она сразу кладёт в журнал средние из живых показаний."""
+        self._chamber_capture_from_average()
+
+    @Slot(bool)
+    def setChamberLiveEnabled(self, enabled):
+        """Цель функции в включении живого опроса прогона, затем он идёт, пока раздел открыт."""
+        self._chamber_live_set_enabled(bool(enabled))
+
+    @Slot(str)
+    def setChamberWindow(self, text):
+        """Цель функции в задании окна среднего, затем точка усредняется за столько секунд."""
+        self._chamber_live_set_window(str(text))
+
+    @Slot(bool)
+    def setChamberAutoWrite(self, enabled):
+        """Цель функции в разрешении самостоятельной записи профиля, затем при полных данных он пишется сам."""
+        value = bool(enabled)
+        if value == self._chamber_auto_write:
+            return
+        self._chamber_auto_write = value
+        self.chamberChanged.emit()
+        if value:
+            self._chamber_chain_maybe_auto()
+
+    @Slot()
+    def writeChamberProfile(self):
+        """Цель функции в записи посчитанного профиля, затем она открывает доступ, пишет, сверяет и сохраняет файл."""
+        self._chamber_chain_start(automatic=False)
 
     @Slot()
     def removeLastChamberPoint(self):
@@ -3294,6 +3320,8 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         if value == self._chamber_extend_liquid:
             return
         self._chamber_extend_liquid = value
+        # Настройка меняет строки «в жидкости», поэтому таблицы сразу пересчитываются.
+        self._chamber_auto_compute()
         self.chamberChanged.emit()
 
     @Slot(str)

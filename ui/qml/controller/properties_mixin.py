@@ -70,6 +70,7 @@ class AppControllerPropertiesMixin(AppControllerContract):
     liveFreshnessChanged = Signal()
     profileChanged = Signal()
     chamberChanged = Signal()
+    chamberLiveChanged = Signal()
     trialChanged = Signal()
     nodeLiveChanged = Signal()
     nodeTrendChanged = Signal()
@@ -1031,6 +1032,31 @@ class AppControllerPropertiesMixin(AppControllerContract):
     def chamberFilePath(self):
         """Цель функции в показе пути журнала прогона, затем оператор видит, куда он сохранён."""
         return str(self._chamber_file_path)
+
+    @Property("QVariantMap", notify=chamberLiveChanged)
+    def chamberLive(self):
+        """Цель функции в показе живых показаний прогона, затем рядом с текущим видно среднее для точки."""
+        return self._chamber_live_view()
+
+    @Property(bool, notify=chamberLiveChanged)
+    def chamberWaiting(self):
+        """Цель функции в признаке ожидания среднего, затем кнопка точки показывает, что запись вот-вот будет."""
+        return bool(self._chamber_capture_waiting)
+
+    @Property(str, notify=chamberChanged)
+    def chamberTablesText(self):
+        """Цель функции в итоге последнего расчёта таблиц, затем видно, хватило ли данных."""
+        return str(self._chamber_tables_text)
+
+    @Property(str, notify=chamberChanged)
+    def chamberTablesColor(self):
+        """Цель функции в цвете итога расчёта, затем он отделяет полные таблицы от неполных."""
+        return str(self._chamber_tables_color)
+
+    @Property("QVariantMap", notify=chamberChanged)
+    def chamberChain(self):
+        """Цель функции в показе записи профиля в прибор, затем видно, какой шаг идёт и чем кончился."""
+        return self._chamber_chain_view()
 
     @Property("QVariantList", notify=profileChanged)
     def profileRows(self):
