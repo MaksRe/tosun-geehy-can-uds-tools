@@ -26,13 +26,14 @@ def _synthetic_run() -> list[dict]:
     records: list[dict] = []
 
     for node in chamber_fit.NODES_X10:
-        for capacitance in (0.0, 60.0, 120.0):
+        for capacitance, media_cap in ((0.0, 0.0), (60.0, 22.0), (120.0, 47.0)):
             for _ in range(4):
                 raw = _slope_at(node) * capacitance + _intercept_at(node)
+                media = _media_slope_at(node) * media_cap + _media_intercept_at(node)
                 records.append({
-                    "note": f"{capacitance:g} пФ",
+                    "note": f"{capacitance:g}/{media_cap:g}",
                     "main": raw + random.uniform(-0.4, 0.4),
-                    "media": None,
+                    "media": media + random.uniform(-0.4, 0.4),
                     "fuel_temp_x10": node,
                     "board_temp_x10": node + random.randint(-8, 8),
                 })
@@ -44,7 +45,7 @@ def _synthetic_run() -> list[dict]:
                 assembly_span = 60.0 + 0.05 * (node - chamber_fit.REFERENCE_X10) / 10.0
                 capacitance = assembly_air + assembly_span * immersion
                 raw = _slope_at(node) * capacitance + _intercept_at(node)
-                media = _slope_at(node) * (30.0 + 30.0 * immersion) + _intercept_at(node)
+                media = _media_slope_at(node) * (30.0 + 30.0 * immersion) + _media_intercept_at(node)
                 records.append({
                     "note": state,
                     "main": raw + random.uniform(-0.4, 0.4),
@@ -64,6 +65,26 @@ def _slope_at(node_x10: int) -> float:
 def _intercept_at(node_x10: int) -> float:
     """Собственное показание платы без внешней ёмкости при этой температуре."""
     return 4820.0 + 0.35 * (node_x10 - chamber_fit.REFERENCE_X10) / 10.0
+
+
+def _media_slope_at(node_x10: int) -> float:
+    """Чувствительность второго контура: уходит иначе, чем у основного."""
+    return 41.3 * (1.0 - 0.00007 * (node_x10 - chamber_fit.REFERENCE_X10) / 10.0)
+
+
+def _media_intercept_at(node_x10: int) -> float:
+    """Собственное показание второго контура: свой уход, другого знака."""
+    return 4500.0 - 0.6 * (node_x10 - chamber_fit.REFERENCE_X10) / 10.0
+
+
+def _expected_pairs(slope, intercept):
+    """Какие сдвиг и растяжение должен дать расчёт для заданной физики контура."""
+    ref = chamber_fit.REFERENCE_X10
+    pairs = []
+    for node in chamber_fit.NODES_X10:
+        gain = slope(node) / slope(ref)
+        pairs.append((intercept(ref) * gain - intercept(node), (gain - 1.0) * 1_000_000))
+    return pairs
 
 
 def test_board_stage_recovers_the_coefficients_it_was_built_from():
@@ -261,3 +282,102 @@ def test_measured_rows_are_never_overwritten():
 
     assert plain["full_main"] == extended["full_main"]
     assert plain["full_media"] == extended["full_media"]
+
+
+# ------------------------------------------------------------------ таблица второго контура
+
+def test_media_board_table_is_built_from_its_own_references():
+    """У контура вида топлива своя физика, и таблица должна восстановить именно её."""
+    result = chamber_fit.compute_tables(_synthetic_run())
+    board = result["ступень_платы_вида"]
+    assert len(board) == len(chamber_fit.NODES_X10)
+    for (got_offset, got_gain), (want_offset, want_gain) in zip(
+            board, _expected_pairs(_media_slope_at, _media_intercept_at)):
+        assert abs(got_gain - want_gain) <= 400.0
+        assert abs(got_offset - want_offset) <= 3.0
+    assert result["ступень_платы"] != board, "контуры получили одну таблицу на двоих"
+
+
+def test_run_with_references_on_one_channel_names_the_other():
+    """Эталоны подключили к одному входу - второй контур без поправки, и об этом надо сказать."""
+    records = [dict(point, note=point["note"].split("/")[0] + " пФ") if "/" in point["note"] else point
+               for point in _synthetic_run()]
+    result = chamber_fit.compute_tables(records)
+    assert result["ступень_платы"]
+    assert result["ступень_платы_вида"] == []
+    assert any(item.startswith("контур вида топлива: эталонов в пометках нет") for item in result["замечания"])
+
+
+def test_media_tube_rows_use_media_board_table():
+    """Строки трубки второго контура считаются его собственной поправкой платы, как в приборе."""
+    records = _synthetic_run()
+    result = chamber_fit.compute_tables(records)
+    media_board = [tuple(pair) for pair in result["ступень_платы_вида"]]
+    tube = result["ступень_трубки"]
+
+    for index, node in enumerate(chamber_fit.NODES_X10):
+        raw = [point["media"] for point in records
+               if point["note"] == chamber_fit.AIR_NOTE and point["fuel_temp_x10"] == node]
+        corrected = [chamber_fit.apply_board_table(value, media_board, chamber_fit.nearest_node(point["board_temp_x10"]))
+                     for value, point in zip(raw, [p for p in records
+                                                   if p["note"] == chamber_fit.AIR_NOTE and p["fuel_temp_x10"] == node])]
+        assert abs(tube["air_media"][index] - sum(corrected) / len(corrected)) <= 1.0
+
+
+def test_media_rows_after_board_stage_barely_depend_on_temperature():
+    """После своей поправки платы сухой плоский конденсатор почти не зависит от температуры."""
+    tube = chamber_fit.compute_tables(_synthetic_run())["ступень_трубки"]
+    assert max(tube["air_media"]) - min(tube["air_media"]) <= 4
+
+
+def test_tube_only_journal_warns_about_missing_board_stage():
+    """Второй этап отдельным журналом без эталонов считает трубку без поправки платы - это надо видеть."""
+    records = [point for point in _synthetic_run() if point["note"] in (chamber_fit.AIR_NOTE, chamber_fit.LIQUID_NOTE)]
+    result = chamber_fit.compute_tables(records)
+    assert any("загрузите журнал первого этапа" in item for item in result["замечания"])
+
+
+def test_reference_notes_for_both_channels():
+    parse = chamber_fit.parse_references
+    assert parse("150/47") == {"main": 150.0, "media": 47.0}
+    assert parse("150 пФ / 47 пФ") == {"main": 150.0, "media": 47.0}
+    assert parse("0/0") == {"main": 0.0, "media": 0.0}
+    assert parse("осн 150 вид 47") == {"main": 150.0, "media": 47.0}
+    assert parse("вид топлива 22, основной 68") == {"main": 68.0, "media": 22.0}
+    assert parse("вид 47") == {"main": None, "media": 47.0}
+    assert parse("300 пФ") == {"main": 300.0, "media": None}
+    assert parse("воздух") == {"main": None, "media": None}
+    assert parse("12,5/4,7") == {"main": 12.5, "media": 4.7}
+
+
+# ------------------------------------------------------------------ сверка с копией в прошивке
+
+_FIRMWARE_COPY = Path(__file__).resolve().parents[2].parent / "_Embedded" / "Embedded_git" / \
+    "apm32f103cbt7_fuel_intake_iar" / "tools" / "chamber_fit.py"
+
+
+def test_firmware_script_copy_computes_the_same():
+    """Копия расчёта в репозитории прошивки обязана давать те же таблицы на тех же точках."""
+    import importlib.util
+
+    import pytest
+
+    if not _FIRMWARE_COPY.is_file():
+        pytest.skip("репозиторий прошивки рядом не найден")
+    spec = importlib.util.spec_from_file_location("firmware_chamber_fit", _FIRMWARE_COPY)
+    firmware = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(firmware)
+
+    records = _synthetic_run()
+
+    def run(module):
+        report: list[str] = []
+        boards = {}
+        for channel, title in module.CHANNELS:
+            boards[channel], _fits = module.build_board_table(module.group_stage1(records, channel), report, title)
+        tube = module.build_tube_tables(records, boards, chamber_fit.AIR_NOTE, chamber_fit.LIQUID_NOTE, report)
+        return boards, tube, report
+
+    assert run(chamber_fit) == run(firmware)
+    for note in ("150/47", "осн 150 вид 47", "300 пФ", "вид 22", "воздух", "0/0"):
+        assert chamber_fit.parse_references(note) == firmware.parse_references(note)

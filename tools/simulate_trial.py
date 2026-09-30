@@ -143,6 +143,7 @@ class Device:
         computed = {
             pid(UdsData.curr_fuel_tank): struct.pack("<H", RAW_MAIN),
             pid(UdsData.fuel_media_flatcap_raw): struct.pack("<H", RAW_MEDIA),
+            pid(UdsData.fuel_media_raw_period): struct.pack("<H", RAW_MEDIA),
             pid(UdsData.raw_temperature): struct.pack("<h", fuel_t),
             pid(UdsData.raw_board_temperature): struct.pack("<h", board_t),
             pid(UdsData.temperature_emulation_x10): struct.pack("<H", 0x8000 if self.emul is None else self.emul & 0xFFFF),

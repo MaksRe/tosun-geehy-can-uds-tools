@@ -57,7 +57,7 @@ Card {
 
             Text {
                 Layout.fillWidth: true
-                text: "Доведите камеру до температуры, подключите эталон, напишите что подключено и снимите точку"
+                text: "Доведите камеру до температуры, подключите эталоны к обоим входам, напишите что подключено и снимите точку"
                 color: root.textSoft
                 font.pixelSize: 12
                 font.family: "Bahnschrift"
@@ -96,7 +96,7 @@ Card {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 34
                         text: root.appController ? root.appController.chamberLabel : ""
-                        placeholderText: "например: 300 пФ, 600 пФ, воздух, жидкость"
+                        placeholderText: "например: 0/0, 68/22, 150/47 (основной/вид топлива), воздух, жидкость"
                         textColor: root.textMain
                         bgColor: root.inputBg
                         borderColor: root.inputBorder
@@ -129,7 +129,7 @@ Card {
 
                     Text {
                         Layout.fillWidth: true
-                        text: "Пометка с числом идёт в расчёт платы, «воздух» и «жидкость» в расчёт трубки"
+                        text: "«150/47»: эталон основного и вида топлива, у каждого контура своя таблица платы. «воздух» и «жидкость» - в расчёт трубки"
                         color: root.textSoft
                         font.pixelSize: 11
                         font.family: "Bahnschrift"
@@ -187,7 +187,7 @@ Card {
                 spacing: 6
 
                 Text {
-                    text: "Чего ещё не хватает"
+                    text: "Чего ещё не хватает  ·  эталоны: основной · вид топлива, нужно по 2"
                     color: root.textMain
                     font.pixelSize: 13
                     font.bold: true
@@ -230,7 +230,7 @@ Card {
 
                                 Text {
                                     Layout.fillWidth: true
-                                    text: "эталоны " + modelData.caps
+                                    text: modelData.caps
                                     color: modelData.capsOk ? "#15803d" : "#b45309"
                                     font.pixelSize: 11
                                     font.family: "Bahnschrift"

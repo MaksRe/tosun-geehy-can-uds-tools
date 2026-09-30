@@ -19,6 +19,10 @@
 ЧТО ЧИТАЕТСЯ В КАЖДОЙ ТОЧКЕ
 Период основного контура, период контура вида топлива, температура топлива и
 температура платы. Больше для расчёта ничего не нужно.
+
+Оба периода читаются ДО температурной компенсации прибора (0x0014 и 0x0067):
+расчёт сам применяет поправки так же, как прибор, и показание, уже поправленное
+записанным профилем, было бы поправлено дважды.
 """
 
 from __future__ import annotations
@@ -71,7 +75,7 @@ class AppControllerChamberMixin(AppControllerContract):
         """Величины одной точки. True означает, что значение знаковое."""
         return (
             ("main", UdsData.curr_fuel_tank, False),
-            ("media", UdsData.fuel_media_flatcap_raw, False),
+            ("media", UdsData.fuel_media_raw_period, False),
             ("fuel_temp", UdsData.raw_temperature, True),
             ("board_temp", UdsData.raw_board_temperature, True),
         )
@@ -506,9 +510,10 @@ class AppControllerChamberMixin(AppControllerContract):
                 "в рабочий прибор их писать нельзя"
             ))
 
-        if not result.get("ступень_платы"):
+        if not result.get("ступень_платы") and not result.get("ступень_платы_вида"):
             self._chamber_set_status(
-                "Ступень платы не посчитана, таблицы не заполнены. Смотрите список ниже.", "#dc2626")
+                "Ступень платы не посчитана ни для одного контура, таблицы не заполнены. "
+                "Смотрите список ниже.", "#dc2626")
             return False
 
         self._profile_apply_chamber_format(result)
@@ -595,11 +600,13 @@ class AppControllerChamberMixin(AppControllerContract):
             node = chamber_fit.nearest_node(point["board_temp_x10"])
             if node is None:
                 continue
-            bucket = counts.setdefault(node, {"caps": set(), "air": 0, "liquid": 0})
-            capacitance = chamber_fit.parse_reference_pf(point["note"])
+            bucket = counts.setdefault(node, {"main": set(), "media": set(), "air": 0, "liquid": 0})
+            references = chamber_fit.parse_references(point["note"])
             note = str(point["note"]).strip().casefold()
-            if capacitance is not None:
-                bucket["caps"].add(capacitance)
+            if references["main"] is not None or references["media"] is not None:
+                for channel in ("main", "media"):
+                    if references[channel] is not None:
+                        bucket[channel].add(references[channel])
             elif note == chamber_fit.AIR_NOTE:
                 bucket["air"] += 1
             elif note == chamber_fit.LIQUID_NOTE:
@@ -607,13 +614,16 @@ class AppControllerChamberMixin(AppControllerContract):
 
         rows = []
         for node in chamber_fit.NODES_X10:
-            bucket = counts.get(node, {"caps": set(), "air": 0, "liquid": 0})
-            caps = len(bucket["caps"])
-            board_ok = caps >= chamber_fit.MIN_REFERENCES_PER_NODE
+            bucket = counts.get(node, {"main": set(), "media": set(), "air": 0, "liquid": 0})
+            main_caps = len(bucket["main"])
+            media_caps = len(bucket["media"])
+            # Таблица платы нужна обоим контурам: у каждого свои эталоны.
+            board_ok = min(main_caps, media_caps) >= chamber_fit.MIN_REFERENCES_PER_NODE
             tube_ok = bucket["air"] > 0 and bucket["liquid"] > 0
             rows.append({
                 "node": chamber_fit.node_text(node),
-                "caps": f"{caps} из {chamber_fit.MIN_REFERENCES_PER_NODE}",
+                # Сколько разных эталонов снято у основного контура и у контура вида топлива.
+                "caps": f"эталоны {main_caps} · {media_caps}",
                 "capsOk": board_ok,
                 "tube": ("есть" if tube_ok else
                          ("нет обеих" if (bucket["air"] == 0 and bucket["liquid"] == 0) else

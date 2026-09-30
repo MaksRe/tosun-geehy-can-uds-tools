@@ -16,15 +16,27 @@
 состояния: сухая трубка и полностью погружённая в опорную жидкость.
 
 ЧТО НА ВХОДЕ
-Список точек. Каждая точка это один замер с пометкой оператора о том, что было
-подключено:
+Список точек. Каждая точка это один замер обоих контуров с пометкой оператора
+о том, что было подключено:
 
-    «300 пФ»   - подключён эталонный конденсатор 300 пикофарад
-    «воздух»   - собранное изделие, трубка сухая
-    «жидкость» - собранное изделие, трубка полностью погружена
+    «150/47»           - к основному контуру эталон 150 пФ, к контуру вида
+                         топлива 47 пФ; «0/0» - к обоим ничего, только своя
+                         ёмкость платы
+    «осн 150 вид 47»   - то же словами, порядок любой; можно указать и один канал
+    «150 пФ»           - одно число: эталон только основного контура (так
+                         помечались точки до того, как появилась таблица второго
+                         контура)
+    «воздух»           - собранное изделие, трубка сухая
+    «жидкость»         - собранное изделие, трубка полностью погружена
 
-Пометка с числом идёт в расчёт ступени платы, пометки «воздух» и «жидкость» -
-в расчёт ступени трубки.
+Пометки с числами идут в расчёт ступени платы, «воздух» и «жидкость» - в расчёт
+ступени трубки.
+
+ТАБЛИЦА ПЛАТЫ У КАЖДОГО КОНТУРА СВОЯ
+Контуры собраны на разных компараторах и резисторах и уходят с температурой
+по-разному, поэтому таблица платы считается для каждого по его собственным
+эталонам. Строки ступени трубки каждого контура считаются после поправки платы
+этого же контура - ровно так, как прибор применяет обе ступени.
 """
 
 from __future__ import annotations
@@ -52,12 +64,48 @@ AIR_NOTE = "воздух"
 LIQUID_NOTE = "жидкость"
 
 
+# Контуры прибора: ключ в точке прогона и название для отчёта.
+CHANNELS = (("main", "основной контур"), ("media", "контур вида топлива"))
+
+_NUMBER = r"(-?\d+(?:[.,]\d+)?)"
+_MAIN_WORD = re.compile(r"(?:осн\w*|main)\D{0,12}?" + _NUMBER)
+_MEDIA_WORD = re.compile(r"(?:вид\w*|плоск\w*|media)\D{0,12}?" + _NUMBER)
+
+
+def _to_float(text: str) -> float:
+    return float(text.replace(",", "."))
+
+
+def parse_references(note: str) -> dict:
+    """Номиналы эталонов по каналам из пометки оператора.
+
+    Возвращает {"main": пФ или None, "media": пФ или None}. None означает, что
+    для этого канала пометка эталона не задаёт. Виды пометок - в описании модуля.
+    """
+    text = str(note).casefold()
+    result = {"main": None, "media": None}
+
+    main = _MAIN_WORD.search(text)
+    media = _MEDIA_WORD.search(text)
+    if main is not None or media is not None:
+        if main is not None:
+            result["main"] = _to_float(main.group(1))
+        if media is not None:
+            result["media"] = _to_float(media.group(1))
+        return result
+
+    numbers = re.findall(_NUMBER, text)
+    if "/" in text and len(numbers) >= 2:
+        result["main"] = _to_float(numbers[0])
+        result["media"] = _to_float(numbers[1])
+    elif numbers:
+        result["main"] = _to_float(numbers[0])
+    return result
+
+
 def parse_reference_pf(note: str):
-    """Достаёт номинал эталона из пометки оператора. Без числа возвращает None."""
-    match = re.search(r"-?\d+(?:[.,]\d+)?", str(note))
-    if match is None:
-        return None
-    return float(match.group(0).replace(",", "."))
+    """Номинал эталона основного контура из пометки. Без числа возвращает None."""
+    return parse_references(note)["main"]
 
 
 def nearest_node(temperature_x10):
@@ -109,19 +157,19 @@ def fit_line(points):
     return a, b, residual
 
 
-def group_stage1(records) -> dict:
-    """Собирает данные ступени платы: узел -> номинал эталона -> среднее показание."""
+def group_stage1(records, channel: str = "main") -> dict:
+    """Собирает данные ступени платы канала: узел -> номинал эталона -> среднее показание."""
     grouped: dict[int, dict[float, list[float]]] = {}
     for item in records:
-        capacitance = parse_reference_pf(item["note"])
+        capacitance = parse_references(item["note"])[channel]
         if capacitance is None:
             continue
-        if item.get("main") is None:
+        if item.get(channel) is None:
             continue
         node = nearest_node(item["board_temp_x10"])
         if node is None:
             continue
-        grouped.setdefault(node, {}).setdefault(capacitance, []).append(item["main"])
+        grouped.setdefault(node, {}).setdefault(capacitance, []).append(item[channel])
 
     return {
         node: {cap: average(values) for cap, values in caps.items()}
@@ -129,39 +177,39 @@ def group_stage1(records) -> dict:
     }
 
 
-def build_board_table(stage1: dict, report: list[str]):
-    """Строит таблицу ступени платы: на каждый узел сдвиг и растяжение."""
+def build_board_table(stage1: dict, report: list[str], title: str = "основной контур"):
+    """Строит таблицу ступени платы одного канала: на каждый узел сдвиг и растяжение."""
     fits: dict[int, tuple[float, float]] = {}
 
     for node in sorted(stage1):
         points = sorted(stage1[node].items())
         if len(points) < MIN_REFERENCES_PER_NODE:
             report.append(
-                f"узел {node_text(node)}: только {len(points)} {capacity_word(len(points))}, "
+                f"{title}, узел {node_text(node)}: только {len(points)} {capacity_word(len(points))}, "
                 f"нужно минимум {MIN_REFERENCES_PER_NODE}. Разделить сдвиг и растяжение нельзя"
             )
             continue
 
         result = fit_line(points)
         if result is None:
-            report.append(f"узел {node_text(node)}: ёмкости совпали, прямая не строится")
+            report.append(f"{title}, узел {node_text(node)}: ёмкости совпали, прямая не строится")
             continue
 
         slope, intercept, residual = result
         if slope <= 0:
-            report.append(f"узел {node_text(node)}: показание не растёт с ёмкостью, проверьте оснастку")
+            report.append(f"{title}, узел {node_text(node)}: показание не растёт с ёмкостью, проверьте оснастку")
             continue
 
         fits[node] = (slope, intercept)
         if len(points) > 2 and residual > 0.02 * abs(slope) * max(cap for cap, _ in points):
             report.append(
-                f"узел {node_text(node)}: точки плохо ложатся на прямую, "
+                f"{title}, узел {node_text(node)}: точки плохо ложатся на прямую, "
                 f"наибольшее отклонение {residual:.1f} отсчёта"
             )
 
     if REFERENCE_X10 not in fits:
         report.append(
-            f"нет данных в опорной точке {node_text(REFERENCE_X10)}. "
+            f"{title}: нет данных в опорной точке {node_text(REFERENCE_X10)}. "
             "Без неё не от чего отсчитывать поправку"
         )
         return None, fits
@@ -212,13 +260,19 @@ def apply_board_table(value: float, table, node_x10) -> float:
     return corrected * 1_000_000.0 / gain_units
 
 
-def build_tube_tables(records, board_table, air_note: str, liquid_note: str, report: list[str]):
+def build_tube_tables(records, board_tables, air_note: str, liquid_note: str, report: list[str]):
     """Строит ряды ступени трубки: показания на воздухе и в опорной жидкости.
+
+    board_tables - таблицы платы по каналам {"main": ..., "media": ...}: каждый
+    канал поправляется своей, как в приборе. Отсутствующая таблица означает,
+    что прибор этот канал по плате не поправляет, и здесь его тоже не трогаем.
 
     Состояния заполняются независимо друг от друга. Так сохраняются те строки
     «на воздухе», которые сняты, даже если погружение в этом узле сделать не
     удалось: их потом можно достроить по размаху опорной точки.
     """
+    board_main = board_tables.get("main") if isinstance(board_tables, dict) else board_tables
+    board_media = board_tables.get("media") if isinstance(board_tables, dict) else None
     collected: dict[str, dict[int, dict[str, list[float]]]] = {air_note: {}, liquid_note: {}}
 
     for item in records:
@@ -241,9 +295,9 @@ def build_tube_tables(records, board_table, air_note: str, liquid_note: str, rep
         board_x10 = board_node if board_node is not None else item["board_temp_x10"]
 
         target = collected[bucket].setdefault(node, {"main": [], "media": []})
-        target["main"].append(apply_board_table(item["main"], board_table, board_x10))
+        target["main"].append(apply_board_table(item["main"], board_main, board_x10))
         if item.get("media") is not None:
-            target["media"].append(apply_board_table(item["media"], board_table, board_x10))
+            target["media"].append(apply_board_table(item["media"], board_media, board_x10))
 
     rows = {"air_main": [], "full_main": [], "air_media": [], "full_media": []}
     missing_air = []
@@ -370,22 +424,56 @@ def compute_tables(records, air_note: str = AIR_NOTE, liquid_note: str = LIQUID_
 
     Признак extend_liquid включает достройку недостающих строк «в жидкости» по
     постоянному размаху, см. extend_liquid_rows.
+
+    Таблица платы основного контура лежит под ключом «ступень_платы», контура
+    вида топлива - под «ступень_платы_вида». Пустой список - таблица не
+    посчитана, и окно профиля оставит прежнюю.
     """
     report: list[str] = []
+    boards: dict[str, list | None] = {}
+    nodes: dict[str, list[int]] = {}
 
-    stage1 = group_stage1(records)
-    if not stage1:
+    stages = {channel: group_stage1(records, channel) for channel, _title in CHANNELS}
+    if not any(stages.values()):
         report.append("в пометках не встретилось ни одного номинала эталона")
 
-    board_table, fits = build_board_table(stage1, report)
-    tube = build_tube_tables(records, board_table, air_note, liquid_note, report)
+    for channel, title in CHANNELS:
+        stage1 = stages[channel]
+        if not stage1:
+            # Одна таблица без другой - частая ошибка оснастки: эталоны подключили
+            # только к одному входу. Молча оставлять второй контур без поправки нельзя.
+            if any(stages.values()):
+                report.append(
+                    f"{title}: эталонов в пометках нет, таблица платы для него не посчитана. "
+                    "Пометка для обоих каналов пишется так: «150/47»"
+                )
+            boards[channel] = None
+            nodes[channel] = []
+            continue
+        board, fits = build_board_table(stage1, report, title)
+        boards[channel] = board
+        nodes[channel] = sorted(fits)
+
+    tube = build_tube_tables(records, boards, air_note, liquid_note, report)
     if extend_liquid:
         tube = extend_liquid_rows(tube, report, span_main=span_main, span_media=span_media)
 
+    has_tube_points = any(any(tube[key]) for key in ("air_main", "full_main", "air_media", "full_media"))
+    if has_tube_points and not any(stages.values()):
+        report.append(
+            "строки трубки посчитаны без поправки платы: в журнале нет эталонов. Если таблицы "
+            "платы уже записаны в прибор, загрузите журнал первого этапа и считайте вместе с ним"
+        )
+
+    def pairs(board):
+        return [[clamp_i16(offset), clamp_i16(gain)] for offset, gain in (board or [])]
+
     return {
         "узлы_x10": list(NODES_X10),
-        "ступень_платы": [[clamp_i16(offset), clamp_i16(gain)] for offset, gain in (board_table or [])],
+        "ступень_платы": pairs(boards["main"]),
+        "ступень_платы_вида": pairs(boards["media"]),
         "ступень_трубки": tube,
         "замечания": report,
-        "узлы_ступени_платы": sorted(fits),
+        "узлы_ступени_платы": nodes["main"],
+        "узлы_ступени_платы_вида": nodes["media"],
     }

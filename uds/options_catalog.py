@@ -162,6 +162,8 @@ UDS_OPTIONS: list[UdsOptionParameter] = [
     UdsOptionParameter(0x0066, 1, "Окно усреднения контура вида топлива", AccessMode.READ_WRITE,
                        "1..60 с, по умолчанию 30. В уровень идёт через двухминутный фильтр, поэтому "
                        "длинное окно реакцию уровня почти не портит. Действует сразу"),
+    UdsOptionParameter(0x0067, 2, "Контур вида топлива до температурной компенсации", AccessMode.READ,
+                       "То же, что 0x0014 для основного контура. По нему считается таблица платы в камере"),
     UdsOptionParameter(0xF188, 18, "Номер ПО ЭБУ", AccessMode.READ_WRITE),
     UdsOptionParameter(0xF189, 32, "Версия ПО ЭБУ", AccessMode.READ_WRITE),
     UdsOptionParameter(0xF18A, 32, "Поставщик системы и адрес", AccessMode.READ_WRITE),

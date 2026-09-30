@@ -142,13 +142,14 @@ PRESENTATIONS: dict[int, OptionPresentation] = {
     0x0064: _p(KIND_AGE_PAIR),
     0x0065: _p(KIND_UINT, unit="с", min_value=1, max_value=60),
     0x0066: _p(KIND_UINT, unit="с", min_value=1, max_value=60),
+    0x0067: _p(KIND_UINT, unit=_COUNT),
 }
 
 # Группы для фильтра окна параметров: название и принадлежащие ей DID.
 _GROUP_RANGES: list[tuple[str, tuple[int, ...]]] = [
     ("Связь и сессия", (0x0010, 0x0011, 0x0015, 0x0016)),
     ("Уровень и бак", (0x0012, 0x0013, 0x0014, 0x0017, 0x0018, 0x002D, 0x0062, 0x0065)),
-    ("Вид топлива", tuple(range(0x002E, 0x003A)) + (0x0066,)),
+    ("Вид топлива", tuple(range(0x002E, 0x003A)) + (0x0066, 0x0067)),
     ("Температура и профиль", (0x0019, 0x003A, 0x003B, 0x003C) + tuple(range(0x0043, 0x0053))
      + tuple(range(0x005C, 0x0062))),
     ("Модель по двум контурам", tuple(range(0x0053, 0x005C))),

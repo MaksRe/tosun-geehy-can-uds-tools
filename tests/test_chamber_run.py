@@ -70,10 +70,11 @@ def _full_run_points() -> list[dict]:
     """Полный прогон: в каждом узле две ёмкости и оба состояния трубки."""
     points = []
     for node in chamber_fit.NODES_X10:
-        for note, capacitance in (("0 пФ", 0.0), ("120 пФ", 120.0)):
+        for note, capacitance, media_cap in (("0/0", 0.0, 0.0), ("120/47", 120.0, 47.0)):
             points.append({
                 "time": "12:00:00", "note": note,
-                "main": int(round(4820 + 40.9 * capacitance)), "media": 2400,
+                "main": int(round(4820 + 40.9 * capacitance)),
+                "media": int(round(4500 + 40.9 * media_cap)),
                 "fuel_temp_x10": node, "board_temp_x10": node, "rehearsal": False,
             })
         for note, immersion in ((chamber_fit.AIR_NOTE, 0.0), (chamber_fit.LIQUID_NOTE, 1.0)):

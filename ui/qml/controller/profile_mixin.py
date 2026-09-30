@@ -532,6 +532,14 @@ class AppControllerProfileMixin:
                 flat.extend([int(pair[0]), int(pair[1])])
             self._profile_values["board_main"] = flat
 
+        # Таблица платы контура вида топлива: у этого контура свои эталоны.
+        board_media = payload.get("ступень_платы_вида")
+        if isinstance(board_media, list) and len(board_media) == PROFILE_POINTS:
+            flat_media: list[int] = []
+            for pair in board_media:
+                flat_media.extend([int(pair[0]), int(pair[1])])
+            self._profile_values["board_media"] = flat_media
+
         tube = payload.get("ступень_трубки") or {}
         mapping = {
             "tube_air_main": "air_main",
