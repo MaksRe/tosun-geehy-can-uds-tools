@@ -78,6 +78,15 @@ Card {
         }
 
         if (index === 4) {
+            var climate = root.appController.climate
+            if (climate.run && climate.run.active)
+                return "Автопрогон: " + climate.run.stage
+            if (!climate.connected)
+                return "Не подключена"
+            return climate.ok ? "В камере " + climate.actualText : "Нет связи"
+        }
+
+        if (index === 5) {
             if (root.appController.trialBusy)
                 return "Идёт проверка"
             return root.appController.trialSummaryText
@@ -228,6 +237,10 @@ Card {
                             "hint": "Снятие точек и расчёт таблиц"
                         },
                         {
+                            "title": "Климатическая камера",
+                            "hint": "Связь с камерой и автоматический прогон"
+                        },
+                        {
                             "title": "Пробная калибровка",
                             "hint": "Проверка всего порядка на столе"
                         },
@@ -357,6 +370,18 @@ Card {
                     onSaveLogRequested: root.saveChamberLogRequested()
                     onLoadLogRequested: root.loadChamberLogRequested()
                     onExportTablesRequested: root.exportChamberTablesRequested()
+                }
+
+                // Камера задаёт температуру сама: прогон идёт без человека у камеры.
+                ClimateChamberCard {
+                    appController: root.appController
+                    cardColor: root.cardColor
+                    cardBorder: root.cardBorder
+                    textMain: root.textMain
+                    textSoft: root.textSoft
+                    inputBg: root.inputBg
+                    inputBorder: root.inputBorder
+                    inputFocus: root.inputFocus
                 }
 
                 TrialCard {

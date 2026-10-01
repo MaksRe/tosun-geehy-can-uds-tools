@@ -3334,6 +3334,56 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._chamber_test_walk_stop()
 
     @Slot(str, str)
+    def setClimateSetting(self, key, value):
+        """Цель функции в правке настройки камеры, затем она сохраняется, а связь переподключается."""
+        self._climate_set(str(key), str(value))
+
+    @Slot(str, bool)
+    def setClimateFlag(self, key, enabled):
+        """Цель функции в правке признака камеры, затем он сохраняется в файл."""
+        self._climate_set(str(key), bool(enabled))
+
+    @Slot()
+    def connectClimate(self):
+        """Цель функции в подключении к камере, затем она опрашивается в своём потоке."""
+        self._climate_connect()
+
+    @Slot()
+    def disconnectClimate(self):
+        """Цель функции в отключении от камеры, затем её показания больше не читаются."""
+        self._climate_disconnect()
+
+    @Slot(str)
+    def setClimateSetpoint(self, text):
+        """Цель функции в задании уставки камере, затем камера идёт к новой температуре."""
+        self._climate_set_setpoint_text(str(text))
+
+    @Slot(bool)
+    def setClimateRunning(self, on):
+        """Цель функции в пуске или остановке камеры из программы."""
+        self._climate_send_run(bool(on))
+
+    @Slot()
+    def startClimateRun(self):
+        """Цель функции в запуске автоматического прогона, затем узлы проходятся сами."""
+        self._climate_run_start()
+
+    @Slot()
+    def stopClimateRun(self):
+        """Цель функции в остановке автоматического прогона, затем уставка камеры остаётся как есть."""
+        self._climate_run_stop()
+
+    @Slot(bool)
+    def pauseClimateRun(self, paused):
+        """Цель функции в паузе прогона, затем он ждёт, не переходя к следующему шагу."""
+        self._climate_run_pause(bool(paused))
+
+    @Slot()
+    def continueClimateRun(self):
+        """Цель функции в подтверждении, что эталоны переключены, затем прогон снимает следующую точку."""
+        self._climate_run_continue()
+
+    @Slot(str, str)
     def setRemoteSetting(self, key, value):
         """Цель функции в правке настройки наблюдения, затем она сохраняется в файл и применяется сразу."""
         self._remote_set(str(key), str(value))

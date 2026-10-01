@@ -43,6 +43,7 @@ from ui.qml.remote_status_server import RemoteStatusServer, local_addresses
 from ui.qml.telegram_notifier import TelegramNotifier
 
 from .contract import AppControllerContract
+from .stability import is_stable, rate_and_spread
 
 # Запасная страница, если файл страницы не нашёлся рядом с программой.
 FALLBACK_PAGE = ("<!doctype html><meta charset='utf-8'><title>Прогон в камере</title>"
@@ -438,19 +439,8 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
 
     def _remote_board_rate(self, now: float):
         """Скорость и разброс температуры платы за окно устойчивости: (°C/мин, °C, охват с) или None."""
-        samples = [(stamp, board) for stamp, board, _main, _media in self._remote_history
-                   if board is not None and now - stamp <= self.REMOTE_STABLE_WINDOW_S]
-        if len(samples) < 3:
-            return None
-        count = float(len(samples))
-        mean_t = sum(stamp for stamp, _ in samples) / count
-        mean_v = sum(value for _, value in samples) / count
-        spread_t = sum((stamp - mean_t) ** 2 for stamp, _ in samples)
-        if spread_t <= 0.0:
-            return None
-        slope_per_s = sum((stamp - mean_t) * (value - mean_v) for stamp, value in samples) / spread_t
-        values = [value for _, value in samples]
-        return slope_per_s * 60.0, max(values) - min(values), samples[-1][0] - samples[0][0]
+        return rate_and_spread(((stamp, board) for stamp, board, _main, _media in self._remote_history),
+                               now, self.REMOTE_STABLE_WINDOW_S)
 
     def _remote_check_stability(self, now: float):
         """Правило прогона: плата устоялась, если 5 минут меняется медленнее 0,05 °C/мин."""
@@ -462,7 +452,8 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         rate, spread, covered = result
         rate_text = f"{rate:+.3f} °C/мин".replace(".", ",")
         full_window = covered >= self.REMOTE_STABLE_WINDOW_S * 0.9
-        stable = full_window and abs(rate) < self.REMOTE_STABLE_RATE_C_MIN and spread < self.REMOTE_STABLE_SPREAD_C
+        stable = is_stable(result, self.REMOTE_STABLE_WINDOW_S, self.REMOTE_STABLE_RATE_C_MIN,
+                           self.REMOTE_STABLE_SPREAD_C)
         board = self._remote_history[-1][1]
 
         if stable:
@@ -541,6 +532,7 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
                 "rows": self._chamber_rows()[:15],
             },
             "chain": self._chamber_chain_view(),
+            "climate": self._remote_climate_snapshot(),
             "test": self._chamber_test_view(),
             "history": {
                 "t": [round(stamp - now, 1) for stamp, *_rest in history],
@@ -550,6 +542,16 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             },
             "events": list(self._remote_events)[:30],
         }
+
+    def _remote_climate_snapshot(self) -> dict:
+        """Камера для страницы: температура, уставка, авария и ход автопрогона."""
+        view = getattr(self, "_climate_view", None)
+        if view is None:
+            return {}
+        climate = view()
+        return {key: climate.get(key) for key in (
+            "connected", "ok", "status", "actualText", "setpointText", "runningText", "alarmText", "alarm",
+            "run", "history")}
 
     def _remote_view(self) -> dict:
         """Состояние наблюдения для окна программы."""

@@ -1049,9 +1049,9 @@ Card {
 
                     // Ширина колонок считается один раз и применяется и к шапке, и к
                     // строкам: иначе подписи разъедутся с данными.
-                    readonly property var weights: [0.11, 0.24, 0.15, 0.15, 0.12, 0.12, 0.11]
+                    readonly property var weights: [0.10, 0.22, 0.13, 0.13, 0.105, 0.105, 0.105, 0.105]
                     function columnWidth(index) {
-                        return Math.max(54, (width - 6 * 6) * weights[index])
+                        return Math.max(54, (width - 7 * 6) * weights[index])
                     }
 
                     RowLayout {
@@ -1060,7 +1060,7 @@ Card {
 
                         Repeater {
                             model: ["Время", "Что подключено", "Основной", "Вид топлива",
-                                    "T топлива", "T платы", "Узел"]
+                                    "T топлива", "T платы", "T камеры", "Узел"]
 
                             Text {
                                 required property int index
@@ -1090,7 +1090,8 @@ Card {
                             Repeater {
                                 model: [logRow.modelData.time, logRow.modelData.note, logRow.modelData.main,
                                         logRow.modelData.media, logRow.modelData.fuelTemp,
-                                        logRow.modelData.boardTemp, logRow.modelData.node]
+                                        logRow.modelData.boardTemp, logRow.modelData.chamberTemp,
+                                        logRow.modelData.node]
 
                                 Text {
                                     required property int index
@@ -1098,7 +1099,7 @@ Card {
                                     Layout.preferredWidth: logBody.columnWidth(index)
                                     Layout.fillWidth: false
                                     text: modelData
-                                    color: (index === 6 && !logRow.modelData.nodeOk) ? "#b45309" : root.textMain
+                                    color: (index === 7 && !logRow.modelData.nodeOk) ? "#b45309" : root.textMain
                                     font.pixelSize: 12
                                     font.family: "Bahnschrift"
                                     elide: Text.ElideRight

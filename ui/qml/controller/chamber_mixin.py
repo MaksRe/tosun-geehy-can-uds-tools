@@ -67,7 +67,10 @@ class AppControllerChamberMixin(AppControllerContract):
         "Температура топлива (°C)",
         "Температура платы (°C)",
         "Режим",
+        "Температура камеры (°C)",
     )
+    # Журналы до связи с камерой: без последнего столбца. Читаются так же.
+    CHAMBER_LEGACY_COLUMNS = 7
 
     # Пометка пробной точки в журнале. По ней видно, что температуру задавала эмуляция.
     CHAMBER_REHEARSAL_MARK = "репетиция"
@@ -296,6 +299,11 @@ class AppControllerChamberMixin(AppControllerContract):
             "board_temp_x10": int(values["board_temp_x10"]),
             "rehearsal": rehearsal,
         }
+        # Температура воздуха камеры рядом с температурой платы: видно, насколько плата отстала.
+        chamber_temp = getattr(self, "_climate_point_temperature", None)
+        chamber_x10 = chamber_temp() if chamber_temp is not None else None
+        if chamber_x10 is not None:
+            point["chamber_temp_x10"] = int(chamber_x10)
         self._chamber_points.append(point)
 
         node = chamber_fit.nearest_node(point["board_temp_x10"])
@@ -508,6 +516,8 @@ class AppControllerChamberMixin(AppControllerContract):
                         f"{point['fuel_temp_x10'] / 10:.1f}".replace(".", ","),
                         f"{point['board_temp_x10'] / 10:.1f}".replace(".", ","),
                         self.CHAMBER_REHEARSAL_MARK if point.get("rehearsal") else "",
+                        "" if point.get("chamber_temp_x10") is None
+                        else f"{point['chamber_temp_x10'] / 10:.1f}".replace(".", ","),
                     ))
         except OSError as error:
             return str(error)
@@ -536,7 +546,9 @@ class AppControllerChamberMixin(AppControllerContract):
             return False
 
         rows = list(csv.reader(text.splitlines(), delimiter=";"))
-        if not rows or [cell.strip() for cell in rows[0]] != list(self.CHAMBER_COLUMNS):
+        header = [cell.strip() for cell in rows[0]] if rows else []
+        legacy = list(self.CHAMBER_COLUMNS[:self.CHAMBER_LEGACY_COLUMNS])
+        if not rows or (header != list(self.CHAMBER_COLUMNS) and header != legacy):
             self._chamber_set_status(
                 "Файл не похож на журнал прогона: не совпали названия колонок.", "#dc2626")
             return False
@@ -552,7 +564,7 @@ class AppControllerChamberMixin(AppControllerContract):
 
         points: list[dict] = []
         for row in rows[1:]:
-            if len(row) < len(self.CHAMBER_COLUMNS):
+            if len(row) < self.CHAMBER_LEGACY_COLUMNS:
                 continue
             main = number(row[2])
             fuel_temp = number(row[4])
@@ -560,7 +572,7 @@ class AppControllerChamberMixin(AppControllerContract):
             if main is None or fuel_temp is None or board_temp is None:
                 continue
             media = number(row[3])
-            points.append({
+            point = {
                 "time": str(row[0]).strip(),
                 "note": str(row[1]).strip(),
                 "main": int(round(main)),
@@ -568,7 +580,11 @@ class AppControllerChamberMixin(AppControllerContract):
                 "fuel_temp_x10": int(round(fuel_temp * 10)),
                 "board_temp_x10": int(round(board_temp * 10)),
                 "rehearsal": str(row[6]).strip().casefold() == self.CHAMBER_REHEARSAL_MARK,
-            })
+            }
+            chamber_temp = number(row[7]) if len(row) > 7 else None
+            if chamber_temp is not None:
+                point["chamber_temp_x10"] = int(round(chamber_temp * 10))
+            points.append(point)
 
         if not points:
             self._chamber_set_status("В файле нет ни одной пригодной точки.", "#dc2626")
@@ -750,6 +766,8 @@ class AppControllerChamberMixin(AppControllerContract):
                 "media": "-" if point["media"] is None else str(point["media"]),
                 "fuelTemp": f"{point['fuel_temp_x10'] / 10:+.1f}",
                 "boardTemp": f"{point['board_temp_x10'] / 10:+.1f}",
+                "chamberTemp": ("-" if point.get("chamber_temp_x10") is None
+                                else f"{point['chamber_temp_x10'] / 10:+.1f}"),
                 "node": "вне сетки" if node is None else chamber_fit.node_text(node),
                 "nodeOk": node is not None,
             })

@@ -71,6 +71,10 @@
     <div id="device"></div>
   </div>
   <div class="card">
+    <h2>Климатическая камера</h2>
+    <div id="climate"></div>
+  </div>
+  <div class="card">
     <h2>Температура</h2>
     <div class="pair">
       <div><small>Плата, текущая</small><span class="big" id="boardNow">—</span></div>
@@ -97,6 +101,7 @@
     <h2>История за последние часы</h2>
     <div class="legend">
       <span><i style="background:#ea580c"></i>температура платы, °C (левая шкала)</span>
+      <span><i style="background:#9333ea"></i>воздух камеры, °C (левая шкала)</span>
       <span><i style="background:#0284c7"></i>основной контур, отклонение, отсчёты (правая шкала)</span>
       <span><i style="background:#16a34a"></i>вид топлива, отклонение, отсчёты (правая шкала)</span>
     </div>
@@ -148,7 +153,7 @@
     return bytes + " Б";
   }
 
-  function drawChart(history) {
+  function drawChart(history, chamber) {
     const canvas = $("chart");
     const ratio = window.devicePixelRatio || 1;
     const width = canvas.clientWidth, height = canvas.clientHeight;
@@ -160,11 +165,13 @@
     ctx.font = "11px sans-serif";
     ctx.fillStyle = styles.getPropertyValue("--soft");
     const t = history.t || [];
-    if (t.length < 2) { ctx.fillText("История ещё копится...", 10, 20); return; }
+    const ct = (chamber && chamber.t) || [];
+    if (t.length < 2 && ct.length < 2) { ctx.fillText("История ещё копится...", 10, 20); return; }
 
     const left = 44, right = 56, top = 8, bottom = 22;
     const plotW = width - left - right, plotH = height - top - bottom;
-    const tMin = t[0], tMax = t[t.length - 1] || 1;
+    const allT = [...t, ...ct];
+    const tMin = Math.min(...allT), tMax = Math.max(...allT, 1);
     const x = (v) => left + (v - tMin) / Math.max(1, tMax - tMin) * plotW;
 
     function range(values) {
@@ -182,7 +189,8 @@
       return (values || []).map((v) => (v === null || base === undefined) ? null : v - base);
     }
     const mainShift = shifted(history.main), mediaShift = shifted(history.media);
-    const tempRange = range(history.board || []);
+    const chamberActual = (chamber && chamber.actual) || [];
+    const tempRange = range([...(history.board || []), ...chamberActual]);
     const periodRange = range([...mainShift, ...mediaShift]);
 
     ctx.strokeStyle = styles.getPropertyValue("--border");
@@ -203,17 +211,19 @@
     ctx.fillText("−" + minutes + " мин", left, height - 6);
     ctx.fillText("сейчас", left + plotW - 34, height - 6);
 
-    function line(values, rangeOf, color) {
+    function line(values, rangeOf, color, times) {
       if (!rangeOf) return;
+      times = times || t;
       const y = (v) => top + (rangeOf[1] - v) / (rangeOf[1] - rangeOf[0]) * plotH;
       ctx.strokeStyle = color; ctx.lineWidth = 1.6; ctx.beginPath();
       let started = false;
       values.forEach((v, i) => {
         if (v === null) { started = false; return; }
-        if (!started) { ctx.moveTo(x(t[i]), y(v)); started = true; } else ctx.lineTo(x(t[i]), y(v));
+        if (!started) { ctx.moveTo(x(times[i]), y(v)); started = true; } else ctx.lineTo(x(times[i]), y(v));
       });
       ctx.stroke();
     }
+    line(chamberActual, tempRange, "#9333ea", ct);
     line(history.board || [], tempRange, "#ea580c");
     line(mainShift, periodRange, "#0284c7");
     line(mediaShift, periodRange, "#16a34a");
@@ -286,7 +296,21 @@
                `<td>${sizeText(f.size)}</td><td>${esc(when)}</td></tr>`;
       }).join("");
 
-    drawChart(s.history || {});
+    const climate = s.climate || {};
+    const climateRun = climate.run || {};
+    $("climate").innerHTML = !climate.connected
+      ? `<span class="soft">Связь с камерой не включена.</span>`
+      : `<div class="pair"><div><small>В камере</small><span class="big">${esc(climate.actualText)}</span></div>` +
+        `<div><small>Уставка</small><span class="big avg">${esc(climate.setpointText)}</span></div></div>` +
+        `<div>${esc(climate.runningText)} · авария: <span class="${climate.alarm ? "bad" : ""}">${esc(climate.alarmText)}</span></div>` +
+        `<div class="${climate.ok ? "soft" : "bad"}">${esc(climate.status)}</div>` +
+        (climateRun.active
+          ? `<div class="chips" style="margin-top:6px">${(climateRun.nodes || []).map((n) =>
+              `<span class="chip ${n.state === "done" ? "ok" : n.state}">${esc(n.text)}${n.state === "done" ? " ✓" : ""}</span>`).join("")}</div>` +
+            `<div style="color:${esc(climateRun.color)}">${esc(climateRun.status)}</div>`
+          : `<div class="soft">Автопрогон не идёт.</div>`);
+
+    drawChart(s.history || {}, climate.history || {});
   }
 
   async function refresh() {

@@ -72,6 +72,7 @@ class AppControllerPropertiesMixin(AppControllerContract):
     chamberChanged = Signal()
     chamberLiveChanged = Signal()
     remoteMonitorChanged = Signal()
+    climateChanged = Signal()
     trialChanged = Signal()
     nodeLiveChanged = Signal()
     nodeTrendChanged = Signal()
@@ -1053,6 +1054,11 @@ class AppControllerPropertiesMixin(AppControllerContract):
     def chamberTablesColor(self):
         """Цель функции в цвете итога расчёта, затем он отделяет полные таблицы от неполных."""
         return str(self._chamber_tables_color)
+
+    @Property("QVariantMap", notify=climateChanged)
+    def climate(self):
+        """Цель функции в показе связи с камерой, затем видно её температуру, уставку и ход автопрогона."""
+        return self._climate_view()
 
     @Property("QVariantMap", notify=remoteMonitorChanged)
     def remoteMonitor(self):

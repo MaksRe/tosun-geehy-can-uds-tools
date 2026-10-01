@@ -171,6 +171,40 @@ class AppControllerContract:
     _chamber_test_check_color: Any
     _chamber_test_timer: Any
     remoteMonitorChanged: Any
+    climateChanged: Any
+    _climate_lock: Any
+    _climate_incoming: Any
+    _climate_settings: Any
+    _climate_link: Any
+    _climate_reading: Any
+    _climate_last_ok_s: Any
+    _climate_status: Any
+    _climate_ok: Any
+    _climate_command_status: Any
+    _climate_lost_reported: Any
+    _climate_alarm_reported: Any
+    _climate_history: Any
+    _climate_board: Any
+    _climate_last_board_s: Any
+    _climate_bridge_last_s: Any
+    _climate_bridge_status: Any
+    _climate_timer: Any
+    _climate_run_stage: Any
+    _climate_run_nodes: Any
+    _climate_run_index: Any
+    _climate_run_labels: Any
+    _climate_run_order: Any
+    _climate_run_label_index: Any
+    _climate_run_connected: Any
+    _climate_run_since: Any
+    _climate_run_warned: Any
+    _climate_run_paused: Any
+    _climate_run_points: Any
+    _climate_run_attempts: Any
+    _climate_run_retry_at: Any
+    _climate_run_done: Any
+    _climate_run_status: Any
+    _climate_run_color: Any
     _chamber_live_section: Any
     _remote_lock: Any
     _remote_incoming: Any

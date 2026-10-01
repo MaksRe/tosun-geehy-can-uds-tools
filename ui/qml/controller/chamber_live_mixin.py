@@ -269,8 +269,11 @@ class AppControllerChamberLiveMixin(AppControllerContract):
         Наблюдению опрос нужен всегда: оператор у камеры может переключить окно
         на другой раздел, а страница и сообщения должны жить дальше.
         """
-        keeps = getattr(self, "_remote_keeps_live", None)
-        value = bool(getattr(self, "_chamber_live_section", False)) or bool(keeps is not None and keeps())
+        value = bool(getattr(self, "_chamber_live_section", False))
+        # Наблюдению и связи с камерой опрос нужен, даже когда раздел закрыт.
+        for name in ("_remote_keeps_live", "_climate_keeps_live"):
+            keeps = getattr(self, name, None)
+            value = value or bool(keeps is not None and keeps())
         if value == self._chamber_live_wanted:
             return
         self._chamber_live_wanted = value

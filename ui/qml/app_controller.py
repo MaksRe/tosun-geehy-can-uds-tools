@@ -30,6 +30,7 @@ from .controller import (
     AppControllerChamberLiveMixin,
     AppControllerChamberMixin,
     AppControllerChamberTestMixin,
+    AppControllerClimateChamberMixin,
     AppControllerTrialMixin,
     AppControllerEepromCommitMixin,
     AppControllerCollectorMixin,
@@ -69,6 +70,7 @@ class AppController(
     AppControllerChamberChainMixin,
     AppControllerChamberTestMixin,
     AppControllerRemoteMonitorMixin,
+    AppControllerClimateChamberMixin,
     AppControllerTrialMixin,
     AppControllerEepromCommitMixin,
     AppControllerCanMixin,
@@ -616,5 +618,7 @@ class AppController(
         self._init_eeprom_commit_state()
         # Наблюдение издалека смотрит на прогон и калибровку, поэтому готовится после всех.
         self._init_remote_monitor_state()
+        # Связь с климатической камерой сообщает о себе наблюдению, поэтому идёт после него.
+        self._init_climate_state()
 
         self._rebuild_can_traffic_view()

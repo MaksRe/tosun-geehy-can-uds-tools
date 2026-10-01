@@ -27,6 +27,8 @@ logs/**
 
 # Настройки удалённого наблюдения: в них пароли и токен бота
 **/config/remote_monitor.json
+# Настройки связи с камерой у каждого рабочего места свои
+**/config/climate_chamber.json
 
 # OS files
 Thumbs.db
