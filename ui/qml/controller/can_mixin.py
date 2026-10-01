@@ -73,6 +73,7 @@ class AppControllerCanMixin(AppControllerContract):
             self._handle_live_age_frame(identifier, payload)
             self._handle_chamber_frame(identifier, payload)
             self._handle_chamber_live_frame(identifier, payload)
+            self._handle_chamber_test_frame(identifier, payload)
             self._handle_trial_frame(identifier, payload)
             self._handle_node_live_frame(identifier, payload)
             self._handle_eeprom_commit_frame(identifier, payload)

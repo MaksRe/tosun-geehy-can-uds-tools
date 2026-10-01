@@ -1054,6 +1054,11 @@ class AppControllerPropertiesMixin(AppControllerContract):
         return str(self._chamber_tables_color)
 
     @Property("QVariantMap", notify=chamberChanged)
+    def chamberTest(self):
+        """Цель функции в показе тестового режима, затем видно заданную температуру, обход и сверку."""
+        return self._chamber_test_view()
+
+    @Property("QVariantMap", notify=chamberChanged)
     def chamberChain(self):
         """Цель функции в показе записи профиля в прибор, затем видно, какой шаг идёт и чем кончился."""
         return self._chamber_chain_view()

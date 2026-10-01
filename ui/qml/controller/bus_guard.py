@@ -24,6 +24,7 @@ def uds_exchange_busy(ctrl, ignore: tuple[str, ...] = ()) -> str:
         ("options", bool(flag("_options_busy") or flag("_options_bulk_busy"))),
         ("profile", bool(flag("_profile_busy"))),
         ("chamber", bool(flag("_chamber_busy"))),
+        ("chamber_test", bool(flag("_chamber_test_pending"))),
         ("trial", bool(flag("_trial_busy"))),
         ("media_wizard", bool(flag("_media_wizard_busy")) or flag("_media_wizard_pending", None) is not None),
         ("mark_media", bool(flag("_mark_media_active"))),

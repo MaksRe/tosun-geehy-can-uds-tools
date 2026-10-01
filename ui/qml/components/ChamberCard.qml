@@ -10,7 +10,8 @@ import "."
   - по кнопке сразу кладёт средние в журнал прогона;
   - после каждой точки сам сохраняет журнал и пересчитывает обе ступени в таблицу профиля;
   - показывает, чего ещё не хватает по каждому узлу температурной сетки;
-  - пишет профиль в прибор, сверяет и сохраняет в файл: по кнопке или сам при полных данных.
+  - пишет профиль в прибор, сверяет и сохраняет в файл: по кнопке или сам при полных данных;
+  - в тестовом режиме задаёт прибору температуру эмуляцией и проходит все узлы на столе.
 
   Публичные свойства:
   - appController: контроллер приложения;
@@ -35,6 +36,10 @@ Card {
     readonly property bool waiting: root.appController ? root.appController.chamberWaiting : false
     readonly property var live: root.appController ? root.appController.chamberLive : ({})
     readonly property var chain: root.appController ? root.appController.chamberChain : ({})
+    readonly property var test: root.appController ? root.appController.chamberTest : ({})
+    // Температуру можно менять, когда не идёт ни замер, ни смена температуры, ни обход, ни запись профиля.
+    readonly property bool testIdle: root.appController !== null && root.test.mode === true && !root.busy
+                                     && !root.waiting && !root.test.busy && !root.test.walking && !root.chain.busy
 
     // Прибор опрашивается, только пока раздел открыт и окно не свёрнуто.
     readonly property bool liveWanted: root.visible && root.Window.visibility !== Window.Hidden
@@ -265,6 +270,190 @@ Card {
                             onAccepted: if (root.appController) root.appController.setChamberWindow(text)
                             onEditingFinished: if (root.appController) root.appController.setChamberWindow(text)
                         }
+                    }
+                }
+            }
+
+            // --- Тестовый режим: камера на столе, температуру задаёт эмуляция в приборе ---
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: testLayout.implicitHeight + 16
+                radius: 12
+                color: root.test.mode ? "#fff7ed" : "#f8fafc"
+                border.width: 1
+                border.color: root.test.mode ? "#fdba74" : "#e2e8f0"
+
+                ColumnLayout {
+                    id: testLayout
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    spacing: 6
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        FancySwitch {
+                            checked: root.test.mode === true
+                            enabled: root.appController !== null && !root.busy
+                            onToggled: if (root.appController) root.appController.setChamberTestMode(checked)
+                        }
+
+                        Text {
+                            text: "Тестовый режим на столе"
+                            color: root.textMain
+                            font.pixelSize: 13
+                            font.bold: true
+                            font.family: "Bahnschrift"
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: root.test.mode
+                                ? "Температуру задаёт эмуляция в приборе. Сейчас: " + (root.test.emulationText || "настоящая")
+                                  + ". Точки помечаются как пробные"
+                                : "Температура задаётся прибору вручную: весь прогон проходится на столе без камеры"
+                            color: root.test.mode ? "#9a3412" : root.textSoft
+                            font.pixelSize: 12
+                            font.family: "Bahnschrift"
+                            elide: Text.ElideRight
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        visible: root.test.mode === true
+                        spacing: 6
+
+                        Text {
+                            text: "Задать:"
+                            color: root.textSoft
+                            font.pixelSize: 12
+                            font.family: "Bahnschrift"
+                            Layout.alignment: Qt.AlignVCenter
+                        }
+
+                        Repeater {
+                            model: root.test.nodes || []
+
+                            FancyButton {
+                                required property var modelData
+                                Layout.preferredWidth: 76
+                                Layout.preferredHeight: 28
+                                fontPixelSize: 12
+                                text: modelData.text
+                                tone: modelData.current ? "#ea580c" : "#64748b"
+                                toneHover: modelData.current ? "#c2410c" : "#475569"
+                                tonePressed: modelData.current ? "#9a3412" : "#334155"
+                                enabled: root.testIdle
+                                onClicked: if (root.appController) root.appController.setChamberTestTemperature(modelData.value)
+                            }
+                        }
+
+                        FancyTextField {
+                            id: testTempField
+                            Layout.preferredWidth: 80
+                            Layout.preferredHeight: 30
+                            placeholderText: "°C"
+                            horizontalAlignment: TextInput.AlignHCenter
+                            textColor: root.textMain
+                            bgColor: root.inputBg
+                            borderColor: root.inputBorder
+                            focusBorderColor: root.inputFocus
+                            onAccepted: if (root.appController && root.testIdle) root.appController.setChamberTestTemperatureText(text)
+                        }
+
+                        FancyButton {
+                            Layout.preferredWidth: 80
+                            Layout.preferredHeight: 28
+                            fontPixelSize: 12
+                            text: "Задать"
+                            tone: "#64748b"
+                            toneHover: "#475569"
+                            tonePressed: "#334155"
+                            toolTipText: "Любая температура от -40 до +85 °C, например -12,5"
+                            enabled: root.testIdle && testTempField.text.length > 0
+                            onClicked: if (root.appController) root.appController.setChamberTestTemperatureText(testTempField.text)
+                        }
+
+                        FancyButton {
+                            Layout.preferredWidth: 100
+                            Layout.preferredHeight: 28
+                            fontPixelSize: 12
+                            text: "Настоящая"
+                            tone: "#0f766e"
+                            toneHover: "#115e59"
+                            tonePressed: "#134e4a"
+                            toolTipText: "Выключить эмуляцию: прибор вернётся к своим датчикам"
+                            enabled: root.testIdle
+                            onClicked: if (root.appController) root.appController.chamberTestEmulationOff()
+                        }
+
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        visible: root.test.mode === true
+                        spacing: 8
+
+                        FancyButton {
+                            Layout.preferredWidth: 270
+                            Layout.preferredHeight: 30
+                            fontPixelSize: 12
+                            text: root.test.walking ? "Остановить обход" : "Пройти все узлы с текущей пометкой"
+                            tone: root.test.walking ? "#b45309" : "#ea580c"
+                            toneHover: root.test.walking ? "#92400e" : "#c2410c"
+                            tonePressed: root.test.walking ? "#78350f" : "#9a3412"
+                            toolTipText: "По очереди задаёт -40 ... +85 °C, ждёт, пока прибор их покажет, и в каждой пишет точку. В конце выключает эмуляцию"
+                            enabled: root.appController !== null && !root.busy && !root.chain.busy
+                                    && (root.test.walking || !root.test.busy)
+                            onClicked: {
+                                if (!root.appController)
+                                    return
+                                root.appController.setChamberLabel(labelField.text)
+                                if (root.test.walking)
+                                    root.appController.stopChamberTestWalk()
+                                else
+                                    root.appController.startChamberTestWalk()
+                            }
+                        }
+
+                        FancySwitch {
+                            checked: root.test.drift === true
+                            enabled: root.appController !== null
+                            onToggled: if (root.appController) root.appController.setChamberTestDrift(checked)
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: "Имитировать уход платы: " + (root.test.driftText || "")
+                            color: root.textMain
+                            font.pixelSize: 12
+                            font.family: "Bahnschrift"
+                            elide: Text.ElideRight
+                        }
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        visible: root.test.mode === true
+                        text: root.test.status || ""
+                        color: root.test.color || root.textSoft
+                        font.pixelSize: 12
+                        font.family: "Bahnschrift"
+                        elide: Text.ElideRight
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        visible: root.test.mode === true && (root.test.checkText || "").length > 0
+                        text: root.test.checkText || ""
+                        color: root.test.checkColor || root.textSoft
+                        font.pixelSize: 12
+                        font.bold: true
+                        font.family: "Bahnschrift"
+                        wrapMode: Text.WordWrap
                     }
                 }
             }

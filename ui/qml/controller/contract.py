@@ -150,6 +150,26 @@ class AppControllerContract:
     _chamber_written_crc: Any
     _chamber_chain_timer: Any
     _profile_last_result: Any
+    _chamber_test_write_service: Any
+    _chamber_test_mode: Any
+    _chamber_test_drift_on: Any
+    _chamber_test_emulation: Any
+    _chamber_test_target: Any
+    _chamber_test_stage: Any
+    _chamber_test_deadline: Any
+    _chamber_test_pending: Any
+    _chamber_test_pending_s: Any
+    _chamber_test_attempt: Any
+    _chamber_test_status: Any
+    _chamber_test_color: Any
+    _chamber_test_walk: Any
+    _chamber_test_walk_stage: Any
+    _chamber_test_walk_points: Any
+    _chamber_test_walk_deadline: Any
+    _chamber_test_walk_total: Any
+    _chamber_test_check_text: Any
+    _chamber_test_check_color: Any
+    _chamber_test_timer: Any
     trialChanged: Any
     nodeLiveChanged: Any
     _trial_read: Any

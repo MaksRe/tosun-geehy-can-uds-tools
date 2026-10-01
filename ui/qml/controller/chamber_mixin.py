@@ -134,6 +134,10 @@ class AppControllerChamberMixin(AppControllerContract):
         self._chamber_timeout_timer.setInterval(self.CHAMBER_TIMEOUT_MS)
         self._chamber_timeout_timer.timeout.connect(self._on_chamber_timeout)
 
+    def _chamber_test_on(self) -> bool:
+        """Включён ли тестовый режим: точки снимаются с эмуляцией температуры на столе."""
+        return bool(getattr(self, "_chamber_test_mode", False))
+
     def _chamber_set_status(self, text: str, color: str):
         """Записывает строку хода работы и рассылает уведомление окну."""
         self._chamber_status = str(text)
@@ -272,9 +276,10 @@ class AppControllerChamberMixin(AppControllerContract):
         Общая часть для обоих способов снятия: по средним живого опроса и по
         серии замеров пробной калибровки.
         """
-        # Температура всегда берётся из прибора. При пробной калибровке её задаёт
-        # эмуляция в самой прошивке, поэтому точка честно попадает в свой узел.
-        rehearsal = bool(self._chamber_rehearsal)
+        # Температура всегда берётся из прибора. При пробной калибровке и в тестовом
+        # режиме её задаёт эмуляция в самой прошивке, поэтому точка честно попадает
+        # в свой узел, но помечается как пробная.
+        rehearsal = bool(self._chamber_rehearsal) or self._chamber_test_on()
 
         point = {
             "time": datetime.now().strftime("%H:%M:%S"),
@@ -622,6 +627,9 @@ class AppControllerChamberMixin(AppControllerContract):
             return False
 
         self._chamber_report = list(result.get("замечания") or [])
+        # Полнота считается по замечаниям самого расчёта: предупреждение о пробных
+        # точках в тестовом режиме ожидаемо и запись на стенде не запрещает.
+        data_complete = not self._chamber_report
         rehearsal = any(point.get("rehearsal") for point in self._chamber_points)
         if rehearsal:
             self._chamber_report.insert(0, (
@@ -629,6 +637,12 @@ class AppControllerChamberMixin(AppControllerContract):
                 "Эти таблицы годятся только для проверки порядка работы, "
                 "в рабочий прибор их писать нельзя"
             ))
+        complete = data_complete and (not rehearsal or self._chamber_test_on())
+
+        # В тестовом режиме с имитацией ухода таблицы сверяются с заложенным уходом.
+        check = getattr(self, "_chamber_test_after_compute", None)
+        if check is not None:
+            check(result)
 
         if not result.get("ступень_платы") and not result.get("ступень_платы_вида"):
             self._chamber_set_tables_state(
@@ -645,15 +659,16 @@ class AppControllerChamberMixin(AppControllerContract):
             f"Таблицы посчитаны по прогону, сумма 0x{crc:04X}. "
             "В прибор они ещё не записаны.", "#d97706")
 
-        if self._chamber_report:
+        if not complete:
             self._chamber_set_tables_state(
                 f"Таблицы пересчитаны и перенесены в профиль (сумма 0x{crc:04X}), "
                 f"но данных хватило не везде: замечаний {len(self._chamber_report)}.", "#d97706")
             report_status(
                 "Таблицы посчитаны, но данных хватило не везде. Смотрите список ниже.", "#d97706")
         else:
+            test = " Тестовый прогон: таблицы годятся только для стенда." if rehearsal else ""
             self._chamber_set_tables_state(
-                f"Таблицы посчитаны по всем узлам и перенесены в профиль, сумма 0x{crc:04X}.",
+                f"Таблицы посчитаны по всем узлам и перенесены в профиль, сумма 0x{crc:04X}.{test}",
                 "#16a34a", complete=True)
             report_status(
                 "Таблицы посчитаны и перенесены в профиль. Данных хватило везде.", "#16a34a")

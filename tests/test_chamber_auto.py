@@ -452,12 +452,16 @@ def test_same_profile_is_not_written_twice_by_itself(tmp_path: Path):
     assert stub._chamber_chain_stage == "access"
 
 
-def test_rehearsal_tables_are_never_written(tmp_path: Path):
+def test_rehearsal_tables_are_written_only_in_test_mode(tmp_path: Path):
+    """Пробные таблицы в рабочий прибор не пишутся, а на стенде в тестовом режиме - пишутся."""
     stub = _ChainStub(tmp_path)
     stub._chamber_points[0]["rehearsal"] = True
 
     assert not stub._chamber_chain_start()
-    assert "пробной" in stub._chamber_chain_status
+    assert "тестовом режиме" in stub._chamber_chain_status
+
+    stub._chamber_test_mode = True
+    assert stub._chamber_chain_start()
 
 
 def test_auto_write_can_be_switched_off(tmp_path: Path):

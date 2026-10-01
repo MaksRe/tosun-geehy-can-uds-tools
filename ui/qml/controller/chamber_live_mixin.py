@@ -192,6 +192,14 @@ class AppControllerChamberLiveMixin(AppControllerContract):
         detail = f"среднее за {_decimal(main['span_s'], 0)} с по {main['count']} показаниям, разброс {main['spread']}"
         if media is not None:
             detail += f" / {media['spread']}"
+
+        # Тестовый режим на столе: к периодам добавляется заложенный уход платы.
+        drift = getattr(self, "_chamber_test_apply_drift", None)
+        if drift is not None:
+            drifted = drift(point)
+            if drifted is not point:
+                point = drifted
+                detail += ", с имитацией ухода"
         return point, detail
 
     # ------------------------------------------------------------------ точка по среднему
@@ -419,6 +427,9 @@ class AppControllerChamberLiveMixin(AppControllerContract):
                 "ok": self._chamber_live_fresh(key, now),
             }
 
+        main_view = channel("main")
+        media_view = channel("media")
+
         seen = [float(stamp) for stamp in self._chamber_live_seen.values() if stamp > 0.0]
         if not connected:
             fresh_text = "Нет связи: подключите адаптер и включите трассировку"
@@ -433,10 +444,18 @@ class AppControllerChamberLiveMixin(AppControllerContract):
                           else f"Прибор молчит уже {int(age)} с")
 
         point, _detail = self._chamber_live_point(now)
+        # С имитацией ухода в точку идёт не то, что показывает прибор: оператор видит оба числа.
+        drift_on = bool(getattr(self, "_chamber_test_drift_active", lambda: False)())
+        if drift_on and point is not None:
+            main_view = dict(main_view)
+            main_view["info"] = f"в точку с имитацией ухода: {point['main']}"
+            if point.get("media") is not None:
+                media_view = dict(media_view)
+                media_view["info"] = f"в точку с имитацией ухода: {point['media']}"
         return {
             "enabled": bool(self._chamber_live_wanted),
-            "main": channel("main"),
-            "media": channel("media"),
+            "main": main_view,
+            "media": media_view,
             "fuelTemp": temperature("fuel_temp"),
             "boardTemp": temperature("board_temp"),
             "windowText": _decimal(float(self._chamber_window_s), 0),

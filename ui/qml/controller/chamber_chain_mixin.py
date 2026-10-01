@@ -84,8 +84,13 @@ class AppControllerChamberChainMixin(AppControllerContract):
         """Причина, по которой писать профиль сейчас нельзя, или пустая строка."""
         if not self._chamber_points:
             return "в журнале нет ни одной точки"
-        if any(point.get("rehearsal") for point in self._chamber_points):
-            return "в журнале есть точки пробной калибровки, их таблицы в прибор писать нельзя"
+        if any(point.get("rehearsal") for point in self._chamber_points) and \
+                not bool(getattr(self, "_chamber_test_mode", False)):
+            # На стенде в тестовом режиме запись и проверяется, в остальных случаях она запрещена.
+            return "в журнале есть пробные точки, их таблицы пишутся только в тестовом режиме"
+        test_busy = getattr(self, "_chamber_test_busy", None)
+        if test_busy is not None and test_busy():
+            return "идёт смена температуры в тестовом режиме"
         if self._chamber_busy or getattr(self, "_chamber_capture_waiting", False):
             return "идёт снятие точки"
         if bool(getattr(self, "_trial_busy", False)):

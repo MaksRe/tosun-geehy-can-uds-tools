@@ -3298,6 +3298,41 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         if value:
             self._chamber_chain_maybe_auto()
 
+    @Slot(bool)
+    def setChamberTestMode(self, enabled):
+        """Цель функции в включении тестового режима, затем температуру задаёт эмуляция в приборе."""
+        self._chamber_test_set_mode(bool(enabled))
+
+    @Slot(int)
+    def setChamberTestTemperature(self, value_x10):
+        """Цель функции в задании температуры узла, затем прибор показывает её обоими датчиками."""
+        self._chamber_test_start_set(int(value_x10))
+
+    @Slot(str)
+    def setChamberTestTemperatureText(self, text):
+        """Цель функции в задании любой температуры из поля, затем она пишется в эмуляцию прибора."""
+        self._chamber_test_set_text(str(text))
+
+    @Slot()
+    def chamberTestEmulationOff(self):
+        """Цель функции в возврате настоящей температуры, затем эмуляция в приборе выключается."""
+        self._chamber_test_start_set(None, force=True)
+
+    @Slot(bool)
+    def setChamberTestDrift(self, enabled):
+        """Цель функции в имитации ухода платы, затем расчёт можно сверить с заложенным уходом."""
+        self._chamber_test_set_drift(bool(enabled))
+
+    @Slot()
+    def startChamberTestWalk(self):
+        """Цель функции в обходе всех узлов, затем при каждой температуре сама записывается точка."""
+        self._chamber_test_walk_start()
+
+    @Slot()
+    def stopChamberTestWalk(self):
+        """Цель функции в остановке обхода, затем он кончается после текущего шага."""
+        self._chamber_test_walk_stop()
+
     @Slot()
     def writeChamberProfile(self):
         """Цель функции в записи посчитанного профиля, затем она открывает доступ, пишет, сверяет и сохраняет файл."""

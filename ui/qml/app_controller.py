@@ -29,6 +29,7 @@ from .controller import (
     AppControllerChamberChainMixin,
     AppControllerChamberLiveMixin,
     AppControllerChamberMixin,
+    AppControllerChamberTestMixin,
     AppControllerTrialMixin,
     AppControllerEepromCommitMixin,
     AppControllerCollectorMixin,
@@ -65,6 +66,7 @@ class AppController(
     AppControllerChamberMixin,
     AppControllerChamberLiveMixin,
     AppControllerChamberChainMixin,
+    AppControllerChamberTestMixin,
     AppControllerTrialMixin,
     AppControllerEepromCommitMixin,
     AppControllerCanMixin,
@@ -604,6 +606,8 @@ class AppController(
         self._init_chamber_live_state()
         # Запись посчитанного профиля в прибор одной операцией.
         self._init_chamber_chain_state()
+        # Тестовый режим прогона: камера на столе, температуру задаёт эмуляция в приборе.
+        self._init_chamber_test_state()
         # Пробная калибровка опирается на прогон и профиль, поэтому готовится последней.
         self._init_trial_state()
         # Контроль сохранения замечает записи всех разделов, поэтому готовится после них.

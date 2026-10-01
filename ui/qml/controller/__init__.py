@@ -5,6 +5,7 @@ from .capacitance_mixin import AppControllerCapacitanceMixin
 from .chamber_chain_mixin import AppControllerChamberChainMixin
 from .chamber_live_mixin import AppControllerChamberLiveMixin
 from .chamber_mixin import AppControllerChamberMixin
+from .chamber_test_mixin import AppControllerChamberTestMixin
 from .trial_mixin import AppControllerTrialMixin
 from .collector_mixin import AppControllerCollectorMixin
 from .contract import AppControllerContract
@@ -30,6 +31,7 @@ __all__ = [
     "AppControllerChamberChainMixin",
     "AppControllerChamberLiveMixin",
     "AppControllerChamberMixin",
+    "AppControllerChamberTestMixin",
     "AppControllerTrialMixin",
     "AppControllerCollectorMixin",
     "AppControllerContract",
