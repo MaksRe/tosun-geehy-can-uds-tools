@@ -170,6 +170,32 @@ class AppControllerContract:
     _chamber_test_check_text: Any
     _chamber_test_check_color: Any
     _chamber_test_timer: Any
+    remoteMonitorChanged: Any
+    _chamber_live_section: Any
+    _remote_lock: Any
+    _remote_incoming: Any
+    _remote_found_chat: Any
+    _remote_settings: Any
+    _remote_events: Any
+    _remote_history: Any
+    _remote_last_history_s: Any
+    _remote_stable_announced: Any
+    _remote_stable_text: Any
+    _remote_stable_ok: Any
+    _remote_device_silent: Any
+    _remote_adapter_lost: Any
+    _remote_tables_were_complete: Any
+    _remote_last_calibration_sync_s: Any
+    _remote_server_status: Any
+    _remote_server_ok: Any
+    _remote_telegram_status: Any
+    _remote_telegram_ok: Any
+    _remote_sync_status: Any
+    _remote_sync_ok: Any
+    _remote_server: Any
+    _remote_telegram: Any
+    _remote_sync: Any
+    _remote_timer: Any
     trialChanged: Any
     nodeLiveChanged: Any
     _trial_read: Any

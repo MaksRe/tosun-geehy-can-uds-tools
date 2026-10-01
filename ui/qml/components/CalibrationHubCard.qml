@@ -77,9 +77,18 @@ Card {
             return "Снято точек: " + root.appController.chamberPointCount
         }
 
-        if (root.appController.trialBusy)
-            return "Идёт проверка"
-        return root.appController.trialSummaryText
+        if (index === 4) {
+            if (root.appController.trialBusy)
+                return "Идёт проверка"
+            return root.appController.trialSummaryText
+        }
+
+        var remote = root.appController.remoteMonitor
+        var parts = []
+        if (remote.serverEnabled) parts.push("страница")
+        if (remote.telegramEnabled) parts.push("Telegram")
+        if (remote.syncEnabled) parts.push("копия журналов")
+        return parts.length > 0 ? "Включено: " + parts.join(", ") : "Выключено"
     }
 
     cardColor: "#ffffff"
@@ -221,6 +230,10 @@ Card {
                         {
                             "title": "Пробная калибровка",
                             "hint": "Проверка всего порядка на столе"
+                        },
+                        {
+                            "title": "Удалённое наблюдение",
+                            "hint": "Страница в браузере, Telegram, копия журналов"
                         }
                     ]
 
@@ -356,6 +369,18 @@ Card {
                     inputBorder: root.inputBorder
                     inputFocus: root.inputFocus
                     onSaveProtocolRequested: root.saveTrialProtocolRequested()
+                }
+
+                // Камера далеко от рабочего места: прогон видно издалека.
+                RemoteMonitorCard {
+                    appController: root.appController
+                    cardColor: root.cardColor
+                    cardBorder: root.cardBorder
+                    textMain: root.textMain
+                    textSoft: root.textSoft
+                    inputBg: root.inputBg
+                    inputBorder: root.inputBorder
+                    inputFocus: root.inputFocus
                 }
             }
         }

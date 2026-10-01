@@ -25,6 +25,8 @@ if __name__ == "__main__":
     engine = QQmlApplicationEngine()
     controller = AppController()
     engine.rootContext().setContextProperty("appController", controller)
+    # Страница состояния и фоновые отправки закрываются вместе с программой.
+    app.aboutToQuit.connect(controller._remote_shutdown)
 
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         base_path = Path(sys._MEIPASS)

@@ -374,6 +374,8 @@ class AppControllerChamberTestMixin(AppControllerContract):
         self._chamber_test_walk_stage = ""
         prefix = "Обход узлов остановлен" if walking else "Температура не задана"
         self._chamber_test_set(f"{prefix}: {reason}.", "#dc2626")
+        if walking:
+            self._chamber_remote("_remote_note_test", f"{prefix.lower()}: {reason}.", False)
 
     def _handle_chamber_test_frame(self, identifier: int, payload):
         """Ответ прибора на запись эмуляции."""
@@ -485,6 +487,10 @@ class AppControllerChamberTestMixin(AppControllerContract):
             self._chamber_test_set(
                 f"Обход с пометкой «{self._chamber_label}» закончен: {self._chamber_test_walk_total} точек, "
                 "эмуляция выключена. Подключите следующие эталоны и пройдите узлы снова.", "#16a34a")
+            self._chamber_remote(
+                "_remote_note_test",
+                f"тестовый обход с пометкой «{self._chamber_label}» закончен: {self._chamber_test_walk_total} точек.",
+                True)
             # Пока шёл обход, запись профиля ждала: таблицы могли стать полными на последней точке.
             chain = getattr(self, "_chamber_chain_maybe_auto", None)
             if chain is not None:

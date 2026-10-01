@@ -42,6 +42,7 @@ from .controller import (
     AppControllerOptionsMixin,
     AppControllerProfileMixin,
     AppControllerPropertiesMixin,
+    AppControllerRemoteMonitorMixin,
     AppControllerPublicSlotsMixin,
     AppControllerRuntimeMixin,
     FirmwareLoadWorker,
@@ -67,6 +68,7 @@ class AppController(
     AppControllerChamberLiveMixin,
     AppControllerChamberChainMixin,
     AppControllerChamberTestMixin,
+    AppControllerRemoteMonitorMixin,
     AppControllerTrialMixin,
     AppControllerEepromCommitMixin,
     AppControllerCanMixin,
@@ -612,5 +614,7 @@ class AppController(
         self._init_trial_state()
         # Контроль сохранения замечает записи всех разделов, поэтому готовится после них.
         self._init_eeprom_commit_state()
+        # Наблюдение издалека смотрит на прогон и калибровку, поэтому готовится после всех.
+        self._init_remote_monitor_state()
 
         self._rebuild_can_traffic_view()

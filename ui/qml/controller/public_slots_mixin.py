@@ -3333,6 +3333,44 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         """Цель функции в остановке обхода, затем он кончается после текущего шага."""
         self._chamber_test_walk_stop()
 
+    @Slot(str, str)
+    def setRemoteSetting(self, key, value):
+        """Цель функции в правке настройки наблюдения, затем она сохраняется в файл и применяется сразу."""
+        self._remote_set(str(key), str(value))
+
+    @Slot(str, bool)
+    def setRemoteFlag(self, key, enabled):
+        """Цель функции в включении части наблюдения, затем страница, бот или копия начинают работать."""
+        self._remote_set(str(key), bool(enabled))
+
+    @Slot()
+    def newRemoteServerKey(self):
+        """Цель функции в новом ключе доступа к странице, затем открыть её можно только по адресу с ключом."""
+        self._remote_new_key()
+
+    @Slot()
+    def findRemoteTelegramChat(self):
+        """Цель функции в поиске номера чата, затем его не нужно узнавать вручную."""
+        self._remote_find_chat()
+
+    @Slot()
+    def sendRemoteTelegramTest(self):
+        """Цель функции в пробном сообщении, затем видно, что бот, чат и сеть у камеры работают."""
+        self._remote_test_message()
+
+    @Slot()
+    def syncRemoteNow(self):
+        """Цель функции в копировании журналов сейчас, затем не нужно ждать следующей точки."""
+        self._remote_sync_now()
+
+    @Slot(str)
+    def copyTextToClipboard(self, text):
+        """Цель функции в копировании адреса страницы, затем его можно переслать коллегам."""
+        from PySide6.QtGui import QGuiApplication
+        clipboard = QGuiApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(str(text))
+
     @Slot()
     def writeChamberProfile(self):
         """Цель функции в записи посчитанного профиля, затем она открывает доступ, пишет, сверяет и сохраняет файл."""

@@ -134,6 +134,12 @@ class AppControllerChamberMixin(AppControllerContract):
         self._chamber_timeout_timer.setInterval(self.CHAMBER_TIMEOUT_MS)
         self._chamber_timeout_timer.timeout.connect(self._on_chamber_timeout)
 
+    def _chamber_remote(self, name: str, *args):
+        """Сообщает наблюдению издалека о событии прогона, если наблюдение есть."""
+        handler = getattr(self, name, None)
+        if handler is not None:
+            handler(*args)
+
     def _chamber_test_on(self) -> bool:
         """Включён ли тестовый режим: точки снимаются с эмуляцией температуры на столе."""
         return bool(getattr(self, "_chamber_test_mode", False))
@@ -306,6 +312,8 @@ class AppControllerChamberMixin(AppControllerContract):
         prefix = "Пробная точка" if rehearsal else "Точка"
         how = f" ({detail})" if detail else ""
         saved = self._chamber_after_change()
+        if not self._chamber_rehearsal:
+            self._chamber_remote("_remote_note_point", point)
         self._chamber_set_status(
             f"{prefix} «{point['note']}» записана{how}, {hint}. Всего точек: {len(self._chamber_points)}.{saved}",
             color,
@@ -480,6 +488,7 @@ class AppControllerChamberMixin(AppControllerContract):
         if self._chamber_write_csv(path) is not None:
             return ""
         self._chamber_file_path = path
+        self._chamber_remote("_remote_note_journal_saved", path)
         return path
 
     def _chamber_write_csv(self, path: str):
@@ -581,6 +590,7 @@ class AppControllerChamberMixin(AppControllerContract):
         self._chamber_tables_text = str(text)
         self._chamber_tables_color = str(color)
         self._chamber_tables_complete = bool(complete)
+        self._chamber_remote("_remote_note_tables", bool(complete))
 
     def _chamber_auto_compute(self) -> bool:
         """Пересчёт таблиц после правки журнала, без сообщений в строке хода работы."""

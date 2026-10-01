@@ -18,6 +18,7 @@ from .node_live_mixin import AppControllerNodeLiveMixin
 from .node_trend_mixin import AppControllerNodeTrendMixin
 from .options_mixin import AppControllerOptionsMixin
 from .profile_mixin import AppControllerProfileMixin
+from .remote_monitor_mixin import AppControllerRemoteMonitorMixin
 from .properties_mixin import AppControllerPropertiesMixin
 from .public_slots_mixin import AppControllerPublicSlotsMixin
 from .runtime_mixin import AppControllerRuntimeMixin
@@ -44,6 +45,7 @@ __all__ = [
     "AppControllerNodeTrendMixin",
     "AppControllerOptionsMixin",
     "AppControllerProfileMixin",
+    "AppControllerRemoteMonitorMixin",
     "AppControllerPropertiesMixin",
     "AppControllerPublicSlotsMixin",
     "AppControllerRuntimeMixin",

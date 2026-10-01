@@ -127,7 +127,7 @@ datas: list[tuple[str, str]] = []
 datas += collect_tree(
     QML_ROOT,
     "ui/qml",
-    ("*.qml", "*.js", "*.json", "*.png", "*.svg", "*.qm", "*.ttf", "*.otf"),
+    ("*.qml", "*.js", "*.json", "*.png", "*.svg", "*.qm", "*.ttf", "*.otf", "*.html"),
 )
 
 # Static resources used by the Python side and icon helpers.

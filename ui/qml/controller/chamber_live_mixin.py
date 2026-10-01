@@ -260,7 +260,17 @@ class AppControllerChamberLiveMixin(AppControllerContract):
 
     def _chamber_live_set_enabled(self, enabled: bool):
         """Просьба раздела: опрашивать прибор, пока раздел открыт."""
-        value = bool(enabled)
+        self._chamber_live_section = bool(enabled)
+        self._chamber_live_apply_wanted()
+
+    def _chamber_live_apply_wanted(self):
+        """Опрос идёт, пока открыт раздел или пока включено наблюдение издалека.
+
+        Наблюдению опрос нужен всегда: оператор у камеры может переключить окно
+        на другой раздел, а страница и сообщения должны жить дальше.
+        """
+        keeps = getattr(self, "_remote_keeps_live", None)
+        value = bool(getattr(self, "_chamber_live_section", False)) or bool(keeps is not None and keeps())
         if value == self._chamber_live_wanted:
             return
         self._chamber_live_wanted = value

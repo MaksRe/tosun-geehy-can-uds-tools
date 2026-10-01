@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Прогон в камере</title>
+<!--
+  Страница состояния прогона в климатической камере.
+  Её отдаёт программа настройки на компьютере у камеры. Страница только
+  показывает: раз в две секунды забирает /status.json и перерисовывается.
+  Внешних библиотек нет намеренно: в сети цеха интернета может не быть.
+-->
+<style>
+  :root {
+    --bg: #eef4fb; --card: #ffffff; --border: #d6e2ef; --text: #1f2d3d; --soft: #607084;
+    --ok: #16a34a; --warn: #d97706; --bad: #dc2626; --info: #0f6ab4; --teal: #0f766e;
+    --chip: #f1f5f9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f172a; --card: #1e293b; --border: #334155; --text: #e2e8f0; --soft: #94a3b8;
+      --ok: #4ade80; --warn: #fbbf24; --bad: #f87171; --info: #60a5fa; --teal: #2dd4bf; --chip: #273449;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+         font: 14px/1.4 "Bahnschrift", "Segoe UI", system-ui, sans-serif; }
+  h1 { font-size: 20px; margin: 0; }
+  .top { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; margin-bottom: 12px; }
+  .soft { color: var(--soft); }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px; min-width: 0; }
+  .card h2 { font-size: 13px; margin: 0 0 8px; color: var(--soft); font-weight: 600; }
+  .wide { grid-column: 1 / -1; }
+  .big { font-size: 26px; font-weight: 700; }
+  .avg { color: var(--teal); }
+  .pair { display: flex; gap: 20px; flex-wrap: wrap; }
+  .pair small { display: block; color: var(--soft); font-size: 11px; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); } .info { color: var(--info); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { background: var(--chip); border: 1px solid var(--border); border-radius: 12px; padding: 2px 10px; font-size: 12px; }
+  .chip.ok { border-color: var(--ok); } .chip.run { border-color: var(--info); color: var(--info); }
+  .chip.fail { border-color: var(--bad); color: var(--bad); }
+  .nodes { display: grid; gap: 6px; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); }
+  .node { border: 1px solid var(--warn); border-radius: 9px; padding: 4px; text-align: center; font-size: 12px; }
+  .node.done { border-color: var(--ok); }
+  .node b { display: block; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--soft); font-weight: 600; }
+  .scroll { overflow-x: auto; }
+  canvas { width: 100%; height: 220px; display: block; }
+  .legend { display: flex; gap: 14px; font-size: 12px; flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 4px; }
+  a { color: var(--info); }
+  ul { margin: 0; padding-left: 18px; }
+  .events li { margin: 2px 0; }
+</style>
+</head>
+<body>
+<div class="top">
+  <h1>Прогон в климатической камере</h1>
+  <span id="link"></span>
+  <span class="soft" id="stamp"></span>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>Прибор</h2>
+    <div id="device"></div>
+  </div>
+  <div class="card">
+    <h2>Температура</h2>
+    <div class="pair">
+      <div><small>Плата, текущая</small><span class="big" id="boardNow">—</span></div>
+      <div><small>Плата, средняя</small><span class="big avg" id="boardAvg">—</span></div>
+      <div><small>Топливо</small><span class="big" id="fuelNow">—</span></div>
+    </div>
+    <div id="stability" style="margin-top:6px"></div>
+  </div>
+  <div class="card">
+    <h2>Контуры: период</h2>
+    <div class="pair">
+      <div><small>Основной, текущий</small><span class="big" id="mainNow">—</span></div>
+      <div><small>Основной, среднее</small><span class="big avg" id="mainAvg">—</span></div>
+    </div>
+    <div class="soft" id="mainInfo"></div>
+    <div class="pair" style="margin-top:6px">
+      <div><small>Вид топлива, текущий</small><span class="big" id="mediaNow">—</span></div>
+      <div><small>Вид топлива, среднее</small><span class="big avg" id="mediaAvg">—</span></div>
+    </div>
+    <div class="soft" id="mediaInfo"></div>
+  </div>
+
+  <div class="card wide">
+    <h2>История за последние часы</h2>
+    <div class="legend">
+      <span><i style="background:#ea580c"></i>температура платы, °C (левая шкала)</span>
+      <span><i style="background:#0284c7"></i>основной контур, отклонение, отсчёты (правая шкала)</span>
+      <span><i style="background:#16a34a"></i>вид топлива, отклонение, отсчёты (правая шкала)</span>
+    </div>
+    <canvas id="chart"></canvas>
+  </div>
+
+  <div class="card wide">
+    <h2>Ход прогона</h2>
+    <div id="run"></div>
+    <div class="nodes" id="nodes" style="margin-top:8px"></div>
+    <div id="report" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card">
+    <h2>Запись профиля в прибор</h2>
+    <div class="chips" id="steps"></div>
+    <div id="chain" style="margin-top:6px"></div>
+  </div>
+  <div class="card">
+    <h2>Тестовый режим</h2>
+    <div id="test"></div>
+  </div>
+
+  <div class="card wide">
+    <h2>Последние точки</h2>
+    <div class="scroll"><table id="points"></table></div>
+  </div>
+  <div class="card">
+    <h2>События</h2>
+    <ul class="events" id="events"></ul>
+  </div>
+  <div class="card">
+    <h2>Журналы: скачать</h2>
+    <div class="scroll"><table id="files"></table></div>
+  </div>
+</div>
+
+<script>
+  // Ключ доступа из адреса страницы передаётся и в запросы данных.
+  const query = window.location.search;
+  const $ = (id) => document.getElementById(id);
+  const esc = (text) => String(text ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+  const tone = (ok) => ok ? "ok" : "warn";
+  let lastOk = 0;
+
+  function sizeText(bytes) {
+    if (bytes > 1048576) return (bytes / 1048576).toFixed(1) + " МБ";
+    if (bytes > 1024) return (bytes / 1024).toFixed(0) + " КБ";
+    return bytes + " Б";
+  }
+
+  function drawChart(history) {
+    const canvas = $("chart");
+    const ratio = window.devicePixelRatio || 1;
+    const width = canvas.clientWidth, height = canvas.clientHeight;
+    canvas.width = width * ratio; canvas.height = height * ratio;
+    const ctx = canvas.getContext("2d");
+    ctx.scale(ratio, ratio);
+    ctx.clearRect(0, 0, width, height);
+    const styles = getComputedStyle(document.documentElement);
+    ctx.font = "11px sans-serif";
+    ctx.fillStyle = styles.getPropertyValue("--soft");
+    const t = history.t || [];
+    if (t.length < 2) { ctx.fillText("История ещё копится...", 10, 20); return; }
+
+    const left = 44, right = 56, top = 8, bottom = 22;
+    const plotW = width - left - right, plotH = height - top - bottom;
+    const tMin = t[0], tMax = t[t.length - 1] || 1;
+    const x = (v) => left + (v - tMin) / Math.max(1, tMax - tMin) * plotW;
+
+    function range(values) {
+      const list = values.filter((v) => v !== null);
+      if (!list.length) return null;
+      let lo = Math.min(...list), hi = Math.max(...list);
+      if (hi - lo < 1e-6) { lo -= 1; hi += 1; }
+      const pad = (hi - lo) * 0.08;
+      return [lo - pad, hi + pad];
+    }
+    // Контуры отличаются в разы, поэтому оба рисуются отклонением от первого значения окна:
+    // на общей шкале дрейф в несколько отсчётов иначе не виден.
+    function shifted(values) {
+      const base = (values || []).find((v) => v !== null);
+      return (values || []).map((v) => (v === null || base === undefined) ? null : v - base);
+    }
+    const mainShift = shifted(history.main), mediaShift = shifted(history.media);
+    const tempRange = range(history.board || []);
+    const periodRange = range([...mainShift, ...mediaShift]);
+
+    ctx.strokeStyle = styles.getPropertyValue("--border");
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+      const y = top + plotH * i / 4;
+      ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(left + plotW, y); ctx.stroke();
+      if (tempRange) {
+        const v = tempRange[1] - (tempRange[1] - tempRange[0]) * i / 4;
+        ctx.fillText(v.toFixed(1), 4, y + 4);
+      }
+      if (periodRange) {
+        const v = periodRange[1] - (periodRange[1] - periodRange[0]) * i / 4;
+        ctx.fillText((v > 0 ? "+" : "") + v.toFixed(Math.abs(v) < 10 ? 1 : 0), left + plotW + 6, y + 4);
+      }
+    }
+    const minutes = Math.round((tMax - tMin) / 60);
+    ctx.fillText("−" + minutes + " мин", left, height - 6);
+    ctx.fillText("сейчас", left + plotW - 34, height - 6);
+
+    function line(values, rangeOf, color) {
+      if (!rangeOf) return;
+      const y = (v) => top + (rangeOf[1] - v) / (rangeOf[1] - rangeOf[0]) * plotH;
+      ctx.strokeStyle = color; ctx.lineWidth = 1.6; ctx.beginPath();
+      let started = false;
+      values.forEach((v, i) => {
+        if (v === null) { started = false; return; }
+        if (!started) { ctx.moveTo(x(t[i]), y(v)); started = true; } else ctx.lineTo(x(t[i]), y(v));
+      });
+      ctx.stroke();
+    }
+    line(history.board || [], tempRange, "#ea580c");
+    line(mainShift, periodRange, "#0284c7");
+    line(mediaShift, periodRange, "#16a34a");
+  }
+
+  function render(s) {
+    $("stamp").textContent = "обновлено " + (s.time || "");
+    const d = s.device || {};
+    $("device").innerHTML =
+      `<div><span class="dot" style="background:var(--${d.freshOk ? "ok" : "bad"})"></span>${esc(d.freshText)}</div>` +
+      `<div class="soft">Адаптер: ${d.connected ? "подключён" : "<span class=bad>не подключён</span>"}` +
+      ` · прибор ${esc(d.node)} · запись ${d.writeOpen ? "открыта" : "закрыта"}</div>`;
+
+    const live = s.live || {};
+    const board = live.boardTemp || {}, fuel = live.fuelTemp || {}, main = live.main || {}, media = live.media || {};
+    $("boardNow").textContent = board.now || "—";
+    $("boardAvg").textContent = board.avg || "—";
+    $("fuelNow").textContent = fuel.now || "—";
+    $("mainNow").textContent = main.now || "—";
+    $("mainAvg").textContent = main.avg || "—";
+    $("mainInfo").textContent = main.info || "";
+    $("mediaNow").textContent = media.now || "—";
+    $("mediaAvg").textContent = media.avg || "—";
+    $("mediaInfo").textContent = media.info || "";
+    const st = s.stability || {};
+    $("stability").innerHTML = `<span class="${st.ok ? "ok" : "warn"}">${esc(st.text)}</span>`;
+
+    const run = s.run || {};
+    $("run").innerHTML =
+      `<div>Точек: <b>${run.points ?? 0}</b> · журнал: ${esc(run.file || "ещё не сохранён")}</div>` +
+      `<div style="color:${esc(run.statusColor)}">${esc(run.status)}</div>` +
+      `<div style="color:${esc(run.tablesColor)}">${esc(run.tablesText)}</div>`;
+    $("nodes").innerHTML = (run.coverage || []).map((row) =>
+      `<div class="node ${row.capsOk && row.tubeOk ? "done" : ""}"><b>${esc(row.node)}</b>` +
+      `<span class="${tone(row.capsOk)}">${esc(row.caps)}</span><br>` +
+      `<span class="${tone(row.tubeOk)}">трубка: ${esc(row.tube)}</span></div>`).join("");
+    const report = run.report || [];
+    $("report").innerHTML = report.length
+      ? `<div class="warn"><b>Чего не хватило расчёту:</b><ul>${report.map((r) => `<li>${esc(r)}</li>`).join("")}</ul></div>` : "";
+
+    const chain = s.chain || {};
+    $("steps").innerHTML = (chain.steps || []).map((step, i) =>
+      `<span class="chip ${esc(step.state)}">${i + 1}. ${esc(step.title)}${step.state === "ok" ? " ✓" : step.state === "fail" ? " ✗" : step.state === "run" ? " …" : ""}</span>`).join("");
+    $("chain").innerHTML = `<span style="color:${esc(chain.color)}">${esc(chain.status)}</span>` +
+      `<div class="soft">Сама запись при полных данных: ${chain.autoWrite ? "включена" : "выключена"}</div>`;
+
+    const test = s.test || {};
+    $("test").innerHTML = test.mode
+      ? `<div class="warn"><b>Включён</b>: температуру задаёт эмуляция, сейчас ${esc(test.emulationText)}</div>` +
+        `<div style="color:${esc(test.color)}">${esc(test.status)}</div>` +
+        (test.checkText ? `<div style="color:${esc(test.checkColor)}">${esc(test.checkText)}</div>` : "")
+      : `<span class="soft">Выключен: температура настоящая.</span>`;
+
+    const rows = run.rows || [];
+    $("points").innerHTML = "<tr><th>Время</th><th>Что подключено</th><th>Основной</th><th>Вид топлива</th>" +
+      "<th>T топлива</th><th>T платы</th><th>Узел</th></tr>" +
+      rows.map((r) => `<tr><td>${esc(r.time)}</td><td>${esc(r.note)}</td><td>${esc(r.main)}</td><td>${esc(r.media)}</td>` +
+        `<td>${esc(r.fuelTemp)}</td><td>${esc(r.boardTemp)}</td><td class="${r.nodeOk ? "" : "warn"}">${esc(r.node)}</td></tr>`).join("");
+
+    $("events").innerHTML = (s.events || []).map((e) =>
+      `<li><span class="soft">${esc(e.time)}</span> <span class="${esc(e.level)}">${esc(e.text)}</span></li>`).join("")
+      || "<li class=soft>Событий пока нет.</li>";
+
+    const key = new URLSearchParams(query).get("key");
+    $("files").innerHTML = "<tr><th>Папка</th><th>Файл</th><th>Размер</th><th>Изменён</th></tr>" +
+      (s.files || []).map((f) => {
+        const url = f.url + (key ? "&key=" + encodeURIComponent(key) : "");
+        const when = new Date(f.mtime * 1000).toLocaleString("ru-RU");
+        return `<tr><td>${esc(f.folder)}</td><td><a href="${esc(url)}">${esc(f.name)}</a></td>` +
+               `<td>${sizeText(f.size)}</td><td>${esc(when)}</td></tr>`;
+      }).join("");
+
+    drawChart(s.history || {});
+  }
+
+  async function refresh() {
+    try {
+      const answer = await fetch("status.json" + query, { cache: "no-store" });
+      if (!answer.ok) throw new Error("HTTP " + answer.status);
+      render(await answer.json());
+      lastOk = Date.now();
+      $("link").innerHTML = '<span class="ok">● связь с программой есть</span>';
+    } catch (error) {
+      const silent = lastOk ? Math.round((Date.now() - lastOk) / 1000) + " с" : "с открытия страницы";
+      $("link").innerHTML = `<span class="bad">● нет связи с программой у камеры ${silent}</span>`;
+    }
+  }
+  refresh();
+  setInterval(refresh, 2000);
+</script>
+</body>
+</html>

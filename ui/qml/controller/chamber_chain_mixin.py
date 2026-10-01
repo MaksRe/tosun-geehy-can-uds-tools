@@ -249,14 +249,16 @@ class AppControllerChamberChainMixin(AppControllerContract):
         self._profile_set_status(
             f"Профиль записан в прибор, сверен и сохранён в файл {pathlib.Path(path).name}. "
             f"Сумма 0x{crc:04X}.", "#16a34a")
-        self._chamber_chain_finish(
-            f"Профиль записан в прибор, сверен и сохранён: {pathlib.Path(path).name}. Сумма 0x{crc:04X}.",
-            "#16a34a")
+        text = f"Профиль записан в прибор, сверен и сохранён: {pathlib.Path(path).name}. Сумма 0x{crc:04X}."
+        self._chamber_chain_finish(text, "#16a34a")
+        self._chamber_remote("_remote_note_chain", True, text, path)
 
     def _chamber_chain_fail(self, step: str, reason: str):
         """Останавливает цепочку на шаге и называет причину."""
         self._chamber_chain_steps[step] = "fail"
-        self._chamber_chain_finish(f"Профиль не записан до конца: {reason}", "#dc2626")
+        text = f"Профиль не записан до конца: {reason}"
+        self._chamber_chain_finish(text, "#dc2626")
+        self._chamber_remote("_remote_note_chain", False, text, "")
 
     def _chamber_chain_finish(self, text: str, color: str):
         """Завершает цепочку и выполняет пересчёт, отложенный на время записи."""

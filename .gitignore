@@ -25,6 +25,9 @@ release_assets/
 logs/**
 !logs/.gitkeep
 
+# Настройки удалённого наблюдения: в них пароли и токен бота
+**/config/remote_monitor.json
+
 # OS files
 Thumbs.db
 .DS_Store

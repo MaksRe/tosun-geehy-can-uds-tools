@@ -71,6 +71,7 @@ class AppControllerPropertiesMixin(AppControllerContract):
     profileChanged = Signal()
     chamberChanged = Signal()
     chamberLiveChanged = Signal()
+    remoteMonitorChanged = Signal()
     trialChanged = Signal()
     nodeLiveChanged = Signal()
     nodeTrendChanged = Signal()
@@ -1052,6 +1053,11 @@ class AppControllerPropertiesMixin(AppControllerContract):
     def chamberTablesColor(self):
         """Цель функции в цвете итога расчёта, затем он отделяет полные таблицы от неполных."""
         return str(self._chamber_tables_color)
+
+    @Property("QVariantMap", notify=remoteMonitorChanged)
+    def remoteMonitor(self):
+        """Цель функции в показе наблюдения издалека, затем видно адреса страницы, Telegram и копию журналов."""
+        return self._remote_view()
 
     @Property("QVariantMap", notify=chamberChanged)
     def chamberTest(self):
