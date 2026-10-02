@@ -38,6 +38,7 @@ from ui.qml.climate_chamber import (
     DRIVER_MODBUS_RTU,
     DRIVER_MODBUS_TCP,
     DRIVER_NONE,
+    DRIVER_SIMCON,
     DRIVER_SIMULATOR,
     ChamberLink,
     ModbusMap,
@@ -47,10 +48,11 @@ from ui.qml.climate_chamber import (
 from .contract import AppControllerContract
 from .stability import is_stable, rate_and_spread
 
-DRIVERS = (DRIVER_NONE, DRIVER_SIMULATOR, DRIVER_MODBUS_TCP, DRIVER_MODBUS_RTU)
+DRIVERS = (DRIVER_NONE, DRIVER_SIMULATOR, DRIVER_SIMCON, DRIVER_MODBUS_TCP, DRIVER_MODBUS_RTU)
 DRIVER_TITLES = {
     DRIVER_NONE: "без связи",
     DRIVER_SIMULATOR: "имитатор",
+    DRIVER_SIMCON: "Weiss SIMCON/32",
     DRIVER_MODBUS_TCP: "Modbus TCP",
     DRIVER_MODBUS_RTU: "Modbus RTU (RS-485)",
 }
@@ -116,6 +118,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         self._climate_last_board_s = 0.0
         self._climate_bridge_last_s = 0.0
         self._climate_bridge_status = ""
+        # Строки оператора камере и её ответы: для проверки связи на месте.
+        self._climate_raw_log: deque = deque(maxlen=20)
 
         self._climate_run_reset()
 
@@ -159,6 +163,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             "rtu_baud": 9600,
             "rtu_parity": "N",
             "rtu_stopbits": 1,
+            # Адрес камеры Weiss из меню пульта «Address», по умолчанию там 0.
+            "simcon_address": 0,
             "sim_speed": 1.0,
             "sim_bridge": True,
             "map": ModbusMap().to_dict(),
@@ -246,7 +252,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 return True
             settings[key] = value
             reconnect = key in ("driver", "poll_s", "unit", "tcp_host", "tcp_port", "rtu_port", "rtu_baud",
-                                "rtu_parity", "rtu_stopbits", "sim_speed")
+                                "rtu_parity", "rtu_stopbits", "sim_speed", "simcon_address")
         self._climate_save_settings()
         if reconnect and self._climate_link is not None:
             self._climate_connect()
@@ -313,6 +319,13 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                     self._climate_lost_reported = False
                     self._climate_event("связь с камерой восстановлена.", "ok")
                 self._climate_watch_alarm()
+            elif state.get("kind") == "raw":
+                self._climate_raw_log.appendleft({
+                    "time": time.strftime("%H:%M:%S"),
+                    "sent": str(state.get("sent", "")),
+                    "answer": str(state.get("text", "")),
+                    "ok": bool(state.get("ok")),
+                })
             elif state.get("kind") == "reading":
                 self._climate_status = f"Нет связи с камерой: {state.get('text')}. Повторяю..."
                 self._climate_ok = False
@@ -365,6 +378,20 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             self.climateChanged.emit()
             return False
         self._climate_link.command("run", bool(on))
+        self.climateChanged.emit()
+        return True
+
+    def _climate_send_raw(self, text: str) -> bool:
+        """Строка камере как есть: проверка протокола на месте, например «$00I»."""
+        line = str(text).strip()
+        if not line:
+            return False
+        if self._climate_link is None:
+            self._climate_command_status = "Камера не подключена."
+            self.climateChanged.emit()
+            return False
+        self._climate_link.command("raw", line)
+        self._climate_command_status = f"Отправляю «{line}»: ответ придёт не раньше чем через 5 с после прошлой строки."
         self.climateChanged.emit()
         return True
 
@@ -726,6 +753,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                           else ("нет" if not reading.alarm else f"АВАРИЯ, код {reading.alarm}")),
             "alarm": bool(getattr(reading, "alarm", 0)),
             "productText": _c(getattr(reading, "product_c", None)),
+            "rawLog": list(self._climate_raw_log),
             "bridgeStatus": self._climate_bridge_status,
             "settings": {key: (value if not isinstance(value, float) else f"{value:g}".replace(".", ","))
                          for key, value in settings.items() if key != "map"},

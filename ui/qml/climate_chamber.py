@@ -37,6 +37,7 @@ DRIVER_NONE = "none"
 DRIVER_SIMULATOR = "simulator"
 DRIVER_MODBUS_TCP = "modbus_tcp"
 DRIVER_MODBUS_RTU = "modbus_rtu"
+DRIVER_SIMCON = "simcon_ascii2"
 
 VALUE_TYPES = ("int16", "uint16", "int32", "uint32", "float32")
 
@@ -498,6 +499,202 @@ class SimulatedChamber(ChamberDriver):
         self.running = bool(on)
 
 
+# ====================================================================== Weiss SIMCON/32
+
+def simcon_ascii1_checksum(text: str) -> str:
+    """Контрольная сумма протокола ASCII-1 контроллера SIMCON/32.
+
+    По инструкции: дополнение остатка от деления суммы кодов всех символов
+    строки на 256, включая STX, без ETX и самой суммы; две заглавные
+    шестнадцатеричные цифры. Пример инструкции: STX "1?" -> "8E".
+    """
+    value = 0
+    for char in text:
+        value = (value - ord(char)) & 0xFF
+    return f"{value:02X}"
+
+
+@dataclass
+class SimconState:
+    """Разобранный ответ SIMCON/32 на запрос «I» протокола ASCII-2."""
+
+    temp_setpoint: float
+    temp_actual: float
+    humidity_setpoint: float
+    humidity_actual: float
+    fan_setpoint: float
+    fan_actual: float
+    pt100: list
+    digital: str
+
+    @property
+    def running(self) -> bool:
+        # Канал 0 не используется, канал 1 - «Старт», канал 2 - «Влажность».
+        return len(self.digital) > 1 and self.digital[1] == "1"
+
+
+def parse_simcon_state(line: str) -> SimconState:
+    """Разбирает ответ на «$xxI»: 14 чисел и строка цифровых каналов из нулей и единиц.
+
+    Порядок по инструкции SIMCON/32 (приложение «Interface protocol», 2.4.2):
+    уставка и факт температуры, уставка и факт влажности, задание и факт
+    вентилятора, затем четыре пары «не используется / Pt100-n» и цифровые каналы.
+    """
+    tokens = str(line).replace("\r", " ").replace("\n", " ").split()
+    numbers = []
+    digital = ""
+    for token in tokens:
+        # Отзыв адреса, если контроллер его добавит, к данным не относится.
+        if token.startswith("$"):
+            continue
+        if len(token) >= 3 and set(token) <= {"0", "1"} and len(numbers) >= 6:
+            digital = token
+            continue
+        try:
+            numbers.append(float(token.replace(",", ".")))
+        except ValueError:
+            raise ChamberError(f"камера ответила непонятно: {line.strip()[:60]}") from None
+    if len(numbers) < 4:
+        raise ChamberError(f"в ответе камеры мало чисел: {line.strip()[:60]}")
+    while len(numbers) < 14:
+        numbers.append(0.0)
+    return SimconState(
+        temp_setpoint=numbers[0], temp_actual=numbers[1],
+        humidity_setpoint=numbers[2], humidity_actual=numbers[3],
+        fan_setpoint=numbers[4], fan_actual=numbers[5],
+        pt100=[numbers[7], numbers[9], numbers[11], numbers[13]],
+        digital=digital,
+    )
+
+
+def simcon_number(value: float) -> str:
+    """Число в виде протокола ASCII-2: шесть знаков с одной цифрой после точки, «0023.0», «-040.0»."""
+    return f"{float(value):06.1f}"
+
+
+def build_simcon_setpoints(address: int, temp: float, humidity: float, fan: float, digital: str) -> str:
+    """Строка «$xxE»: уставки температуры, влажности, вентилятора и все цифровые каналы сразу.
+
+    Команда задаёт всё одной строкой, поэтому влажность, вентилятор и каналы
+    берутся из последнего ответа камеры: менять их программа не должна.
+    """
+    unused = " ".join(simcon_number(0.0) for _ in range(4))
+    return (f"${int(address):02d}E {simcon_number(temp)} {simcon_number(humidity)} {simcon_number(fan)} "
+            f"{unused} {digital}\r")
+
+
+class SimconAscii2Chamber(ChamberDriver):
+    """Камера Weiss с контроллером SIMCON/32, протокол ASCII-2 по RS-232.
+
+    По инструкции (приложение «Interface protocol», раздел 2):
+    - запрос «$xxI<CR>» возвращает уставки, факты и цифровые каналы одной строкой;
+    - «$xxE ...<CR>» задаёт уставки и цифровые каналы, камера отвечает строкой с <CR>;
+    - строки нельзя слать чаще одной в 5 секунд: иначе страдает регулирование;
+    - чтобы компьютер мог задавать уставку, на пульте включается режим EXTERN.
+    Пуск и остановка - цифровой канал 1 «Старт».
+    """
+
+    title = "SIMCON/32 (Weiss, RS-232)"
+    can_set = True
+    can_run = True
+    # Пауза между строками, с. Её требует инструкция, сокращать нельзя.
+    MIN_INTERVAL_S = 5.0
+
+    def __init__(self, port: str, baudrate: int, address: int, timeout_s: float = 3.0, serial_factory=None,
+                 sleep=time.sleep, clock=time.monotonic):
+        self.port = str(port)
+        self.baudrate = int(baudrate)
+        self.address = int(address)
+        self.timeout_s = float(timeout_s)
+        self._serial_factory = serial_factory
+        self._serial = None
+        self._sleep = sleep
+        self._clock = clock
+        self._last_send = -1e9
+        self.last_state: SimconState | None = None
+        self.title = f"SIMCON/32 на {self.port}"
+
+    def _connect(self):
+        if self._serial is not None:
+            return
+        factory = self._serial_factory
+        if factory is None:
+            try:
+                import serial  # pyserial
+            except ImportError:
+                raise ChamberError("для RS-232 нужен пакет pyserial: pip install pyserial") from None
+            factory = serial.Serial
+        try:
+            self._serial = factory(port=self.port, baudrate=self.baudrate, parity="N", stopbits=1,
+                                   bytesize=8, timeout=self.timeout_s)
+        except Exception as error:  # noqa: BLE001 - у pyserial свои классы ошибок
+            raise ChamberError(f"порт {self.port} не открылся: {error}") from None
+
+    def _exchange(self, line: str) -> str:
+        """Отправляет строку и читает ответ до <CR>, соблюдая паузу 5 с между строками."""
+        self._connect()
+        wait = self.MIN_INTERVAL_S - (self._clock() - self._last_send)
+        if wait > 0:
+            self._sleep(wait)
+        try:
+            self._serial.reset_input_buffer()
+            self._serial.write(line.encode("ascii"))
+            self._last_send = self._clock()
+            answer = self._serial.read_until(b"\r")
+        except Exception as error:  # noqa: BLE001
+            self.close()
+            raise ChamberError(f"обмен по RS-232 прервался: {error}") from None
+        if not answer or not answer.endswith(b"\r"):
+            raise ChamberError("камера не ответила по RS-232: проверьте кабель (нуль-модем), скорость, "
+                               "адрес и протокол ASCII-2 в меню пульта")
+        return answer.decode("ascii", errors="replace").strip()
+
+    def read(self) -> ChamberReading:
+        state = parse_simcon_state(self._exchange(f"${self.address:02d}I\r"))
+        self.last_state = state
+        return ChamberReading(actual_c=state.temp_actual, setpoint_c=state.temp_setpoint,
+                              running=state.running, alarm=None)
+
+    def _current(self) -> SimconState:
+        return self.last_state if self.last_state is not None else parse_simcon_state(
+            self._exchange(f"${self.address:02d}I\r"))
+
+    def _send_setpoints(self, temp: float, digital: str):
+        state = self._current()
+        if not digital:
+            raise ChamberError("камера не отдала цифровые каналы, задать уставку безопасно нельзя")
+        self._exchange(build_simcon_setpoints(self.address, temp, state.humidity_setpoint,
+                                              state.fan_setpoint, digital))
+
+    def set_setpoint(self, value_c: float):
+        state = self._current()
+        self._send_setpoints(value_c, state.digital)
+
+    def set_running(self, on: bool):
+        state = self._current()
+        digital = state.digital
+        if len(digital) < 2:
+            raise ChamberError("камера не отдала цифровые каналы, пустить её нельзя")
+        digital = digital[0] + ("1" if on else "0") + digital[2:]
+        self._exchange(build_simcon_setpoints(self.address, state.temp_setpoint, state.humidity_setpoint,
+                                              state.fan_setpoint, digital))
+
+    def raw(self, text: str) -> str:
+        """Строка оператора как есть, для проверки на месте: «$01I» и т. п."""
+        line = str(text)
+        if not line.endswith("\r"):
+            line += "\r"
+        return self._exchange(line)
+
+    def close(self):
+        if self._serial is not None:
+            try:
+                self._serial.close()
+            except Exception:  # noqa: BLE001
+                pass
+        self._serial = None
+
+
 def make_driver(settings: dict) -> ChamberDriver | None:
     """Драйвер по настройкам раздела. None - связь с камерой выключена."""
     kind = settings.get("driver", DRIVER_NONE)
@@ -508,6 +705,9 @@ def make_driver(settings: dict) -> ChamberDriver | None:
     if kind == DRIVER_MODBUS_TCP:
         client = ModbusTcpClient(settings.get("tcp_host", ""), int(settings.get("tcp_port", 502)), unit)
         return ModbusChamber(client, register_map, f"Modbus TCP {settings.get('tcp_host', '')}")
+    if kind == DRIVER_SIMCON:
+        return SimconAscii2Chamber(settings.get("rtu_port", ""), int(settings.get("rtu_baud", 9600)),
+                                   int(settings.get("simcon_address", 0)))
     if kind == DRIVER_MODBUS_RTU:
         client = ModbusRtuClient(settings.get("rtu_port", ""), int(settings.get("rtu_baud", 9600)),
                                  settings.get("rtu_parity", "N"), int(settings.get("rtu_stopbits", 1)), unit)
@@ -529,7 +729,8 @@ class ChamberLink:
     def __init__(self, driver: ChamberDriver, poll_s: float,
                  on_state: Callable[[dict], None]):
         self.driver = driver
-        self.poll_s = max(0.2, float(poll_s))
+        # Камере, которой нельзя слать строки чаще заданного, опрос чаще и не нужен.
+        self.poll_s = max(0.2, float(poll_s), float(getattr(driver, "MIN_INTERVAL_S", 0.0)))
         self._on_state = on_state
         self._commands: queue.Queue = queue.Queue()
         self._stop = threading.Event()
@@ -568,12 +769,19 @@ class ChamberLink:
                 elif name == "run":
                     self.driver.set_running(bool(value))
                     self._on_state({"kind": "command", "ok": True, "text": "камера пущена" if value else "камера остановлена"})
+                elif name == "raw":
+                    raw = getattr(self.driver, "raw", None)
+                    if raw is None:
+                        raise ChamberError("эта связь не умеет посылать строки как есть")
+                    answer = raw(str(value))
+                    self._on_state({"kind": "raw", "ok": True, "sent": str(value), "text": answer})
                 # После команды показание читается сразу: окно видит её итог.
                 reading = self.driver.read()
                 self._on_state({"kind": "reading", "ok": True, "reading": reading})
                 next_poll = time.monotonic() + self.poll_s
             except ChamberError as error:
-                self._on_state({"kind": "command" if name != "poll" else "reading", "ok": False, "text": str(error)})
+                kind = "reading" if name == "poll" else ("raw" if name == "raw" else "command")
+                self._on_state({"kind": kind, "ok": False, "sent": str(value or ""), "text": str(error)})
                 next_poll = time.monotonic() + self.RECONNECT_PAUSE_S
             except Exception as error:  # noqa: BLE001 - поток связи не должен падать
                 self._on_state({"kind": "reading", "ok": False, "text": f"сбой связи: {error}"})

@@ -164,7 +164,8 @@ Card {
                 Text {
                     Layout.fillWidth: true
                     text: "Программа задаёт камере температуру, ждёт, пока устоится плата, и сама снимает точки прогона. "
-                          + "Пока интерфейса камеры нет, весь порядок отлаживается на имитаторе вместе с тестовым режимом прибора."
+                          + "Камера Weiss WK1-600/70 подключается кнопкой «Weiss SIMCON/32» по RS-232. Весь порядок можно сначала "
+                          + "пройти на имитаторе вместе с тестовым режимом прибора."
                     color: root.textSoft
                     font.pixelSize: 12
                     font.family: "Bahnschrift"
@@ -185,7 +186,7 @@ Card {
 
                         FancyButton {
                             required property var modelData
-                            Layout.preferredWidth: 150
+                            Layout.preferredWidth: 140
                             Layout.preferredHeight: 28
                             fontPixelSize: 12
                             text: modelData.title
@@ -243,6 +244,76 @@ Card {
                     Caption { text: "Номер устройства" }
                     SettingField { key: "unit"; Layout.preferredWidth: 60 }
                     Item { Layout.fillWidth: true }
+                }
+
+                // Камера Weiss WK1-600/70: контроллер SIMCON/32, протокол ASCII-2 по RS-232.
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: root.climate.driver === "simcon_ascii2"
+                    spacing: 8
+                    Caption { text: "COM-порт" }
+                    SettingField { key: "rtu_port"; Layout.preferredWidth: 90 }
+                    Caption { text: "Скорость" }
+                    SettingField { key: "rtu_baud"; Layout.preferredWidth: 80 }
+                    Caption { text: "Адрес (меню пульта «Address»)" }
+                    SettingField { key: "simcon_address"; Layout.preferredWidth: 60 }
+                    Item { Layout.fillWidth: true }
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    visible: root.climate.driver === "simcon_ascii2"
+                    text: "На пульте камеры: «Специальные функции» - протокол ASCII-2, та же скорость и адрес, режим EXTERN "
+                          + "(иначе уставку можно только читать). Кабель RS-232 - нуль-модем: 2↔3 крест, 5 - земля. "
+                          + "Камера принимает не больше одной строки в 5 секунд, поэтому показания обновляются раз в 5 с."
+                    color: root.textSoft
+                    font.pixelSize: 11
+                    font.family: "Bahnschrift"
+                    wrapMode: Text.WordWrap
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: root.climate.driver === "simcon_ascii2"
+                    spacing: 8
+                    Caption { text: "Команда камере" }
+
+                    FancyTextField {
+                        id: rawField
+                        Layout.preferredWidth: 260
+                        Layout.preferredHeight: 30
+                        placeholderText: "например $00I"
+                        textColor: root.textMain
+                        bgColor: root.inputBg
+                        borderColor: root.inputBorder
+                        focusBorderColor: root.inputFocus
+                        onAccepted: if (root.appController) root.appController.sendClimateRaw(text)
+                    }
+
+                    FancyButton {
+                        Layout.preferredWidth: 110
+                        Layout.preferredHeight: 30
+                        fontPixelSize: 12
+                        text: "Отправить"
+                        tone: "#64748b"; toneHover: "#475569"; tonePressed: "#334155"
+                        toolTipText: "Строка уходит как есть, <CR> добавляется сам. Для проверки протокола на месте"
+                        enabled: root.climate.connected === true && rawField.text.length > 0
+                        onClicked: if (root.appController) root.appController.sendClimateRaw(rawField.text)
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: {
+                            var log = root.climate.rawLog || []
+                            if (log.length === 0) return "Ответов пока нет"
+                            var last = log[0]
+                            return last.time + "  " + last.sent + "  →  " + last.answer
+                        }
+                        color: (root.climate.rawLog || []).length > 0 && !(root.climate.rawLog[0].ok) ? "#dc2626" : root.textMain
+                        font.pixelSize: 12
+                        font.family: "Consolas"
+                        elide: Text.ElideRight
+                    }
                 }
 
                 RowLayout {

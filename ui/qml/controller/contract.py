@@ -188,6 +188,7 @@ class AppControllerContract:
     _climate_last_board_s: Any
     _climate_bridge_last_s: Any
     _climate_bridge_status: Any
+    _climate_raw_log: Any
     _climate_timer: Any
     _climate_run_stage: Any
     _climate_run_nodes: Any

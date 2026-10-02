@@ -71,6 +71,7 @@ class _ClimateStub(AppControllerClimateChamberMixin, _TestStub):
         self._climate_last_board_s = 0.0
         self._climate_bridge_last_s = 0.0
         self._climate_bridge_status = ""
+        self._climate_raw_log = deque(maxlen=20)
         self._climate_run_reset()
         self.clock = [0.0]
         self.sim = SimulatedChamber(clock=lambda: self.clock[0], seed=3)

@@ -3358,6 +3358,11 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         """Цель функции в задании уставки камере, затем камера идёт к новой температуре."""
         self._climate_set_setpoint_text(str(text))
 
+    @Slot(str)
+    def sendClimateRaw(self, text):
+        """Цель функции в отправке строки камере как есть, затем её ответ виден в журнале обмена."""
+        self._climate_send_raw(str(text))
+
     @Slot(bool)
     def setClimateRunning(self, on):
         """Цель функции в пуске или остановке камеры из программы."""
