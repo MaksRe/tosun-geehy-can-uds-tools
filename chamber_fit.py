@@ -55,6 +55,15 @@ NODE_TOLERANCE_X10 = 30
 # Сколько разных ёмкостей нужно в точке, чтобы разделить сдвиг и растяжение.
 MIN_REFERENCES_PER_NODE = 2
 
+# Как считать таблицу платы, если в каждом узле снята только одна ёмкость, -
+# своя ёмкость платы без эталонов. По одной ёмкости сдвиг и растяжение не
+# разделить, поэтому весь уход приписывается одному из них:
+#   растяжение - уход пропорционален показанию (резисторы, пороги генератора);
+#   сдвиг      - уход постоянен в отсчётах (плавает сама ёмкость на плате).
+SINGLE_GAIN = "растяжение"
+SINGLE_OFFSET = "сдвиг"
+SINGLE_MODELS = (SINGLE_GAIN, SINGLE_OFFSET)
+
 # Наименьший размах между сухой и погружённой трубкой, который примет прибор.
 # То же число задано в прошивке как FUEL_TUBE_MIN_SPAN.
 TUBE_MIN_SPAN = 100
@@ -177,13 +186,23 @@ def group_stage1(records, channel: str = "main") -> dict:
     }
 
 
-def build_board_table(stage1: dict, report: list[str], title: str = "основной контур"):
-    """Строит таблицу ступени платы одного канала: на каждый узел сдвиг и растяжение."""
+def build_board_table(stage1: dict, report: list[str], title: str = "основной контур",
+                      single_model=None):
+    """Строит таблицу ступени платы одного канала: на каждый узел сдвиг и растяжение.
+
+    single_model - SINGLE_GAIN или SINGLE_OFFSET: разрешает считать таблицу по
+    одной ёмкости в узле, см. build_board_table_single. Без него одна ёмкость
+    в узле - это недостаток данных.
+    """
     fits: dict[int, tuple[float, float]] = {}
+    singles: dict[int, tuple[float, float]] = {}
 
     for node in sorted(stage1):
         points = sorted(stage1[node].items())
         if len(points) < MIN_REFERENCES_PER_NODE:
+            if single_model in SINGLE_MODELS and len(points) == 1:
+                singles[node] = points[0]
+                continue
             report.append(
                 f"{title}, узел {node_text(node)}: только {len(points)} {capacity_word(len(points))}, "
                 f"нужно минимум {MIN_REFERENCES_PER_NODE}. Разделить сдвиг и растяжение нельзя"
@@ -207,6 +226,15 @@ def build_board_table(stage1: dict, report: list[str], title: str = "основ�
                 f"наибольшее отклонение {residual:.1f} отсчёта"
             )
 
+    if singles and not fits:
+        return build_board_table_single(singles, report, title, single_model)
+    for node in sorted(singles):
+        # Узлы с двумя ёмкостями считаются честно, одиночный узел к ним не подмешивается.
+        report.append(
+            f"{title}, узел {node_text(node)}: одна ёмкость, а в других узлах их по две. "
+            "Снимите вторую ёмкость и в этом узле"
+        )
+
     if REFERENCE_X10 not in fits:
         report.append(
             f"{title}: нет данных в опорной точке {node_text(REFERENCE_X10)}. "
@@ -228,6 +256,54 @@ def build_board_table(stage1: dict, report: list[str], title: str = "основ�
         table.append((offset, gain_ppm))
 
     return table, fits
+
+
+def build_board_table_single(singles: dict, report: list[str], title: str, single_model):
+    """Таблица платы по одной ёмкости в каждом узле: своя ёмкость платы без эталонов.
+
+    В каждом узле показание при этой ёмкости возвращается ровно к показанию в
+    опорной точке. Весь уход приписывается растяжению или сдвигу (single_model):
+    при этой ёмкости оба способа дают одно и то же, а при другой ёмкости
+    (подключённая трубка) поправка становится допущением. Ёмкость должна быть
+    одна и та же во всех узлах, иначе сравнивать нечего.
+    """
+    if REFERENCE_X10 not in singles:
+        report.append(
+            f"{title}: нет данных в опорной точке {node_text(REFERENCE_X10)}. "
+            "Без неё не от чего отсчитывать поправку"
+        )
+        return None, {}
+
+    cap_ref, value_ref = singles[REFERENCE_X10]
+    used: dict[int, tuple[float, float]] = {}
+    missing = []
+    table = []
+    for node in NODES_X10:
+        item = singles.get(node)
+        if item is None:
+            missing.append(node)
+            table.append((0, 0))
+            continue
+        cap, value = item
+        if cap != cap_ref or value <= 0:
+            report.append(
+                f"{title}, узел {node_text(node)}: ёмкость {cap:g} пФ, а в опорной точке {cap_ref:g} пФ. "
+                "По одной ёмкости поправка считается, только если она одна и та же во всех узлах"
+            )
+            table.append((0, 0))
+            continue
+        used[node] = item
+        if single_model == SINGLE_GAIN:
+            table.append((0, int(round((value / value_ref - 1.0) * 1_000_000))))
+        else:
+            table.append((int(round(value_ref - value)), 0))
+
+    if missing:
+        report.append(
+            f"{title}: нет точки в узлах " + ", ".join(node_text(node) for node in missing)
+            + ". Без них поправка между соседними узлами будет неверной"
+        )
+    return table, used
 
 
 def interpolate_pair(table, temperature_x10):
@@ -415,7 +491,8 @@ def clamp_i16(value: int) -> int:
 
 
 def compute_tables(records, air_note: str = AIR_NOTE, liquid_note: str = LIQUID_NOTE,
-                   extend_liquid: bool = False, span_main=None, span_media=None) -> dict:
+                   extend_liquid: bool = False, span_main=None, span_media=None,
+                   single_model=None, board_only: bool = False) -> dict:
     """Считает обе ступени по списку точек прогона.
 
     Возвращает словарь того же вида, что и файл скрипта прошивки, поэтому окно
@@ -428,6 +505,10 @@ def compute_tables(records, air_note: str = AIR_NOTE, liquid_note: str = LIQUID_
     Таблица платы основного контура лежит под ключом «ступень_платы», контура
     вида топлива - под «ступень_платы_вида». Пустой список - таблица не
     посчитана, и окно профиля оставит прежнюю.
+
+    single_model разрешает считать таблицу платы по одной ёмкости в узле (см.
+    build_board_table_single). board_only - прогон одной платы без трубки:
+    отсутствие точек «воздух» и «жидкость» тогда не считается недостатком.
     """
     report: list[str] = []
     boards: dict[str, list | None] = {}
@@ -450,11 +531,15 @@ def compute_tables(records, air_note: str = AIR_NOTE, liquid_note: str = LIQUID_
             boards[channel] = None
             nodes[channel] = []
             continue
-        board, fits = build_board_table(stage1, report, title)
+        board, fits = build_board_table(stage1, report, title, single_model=single_model)
         boards[channel] = board
         nodes[channel] = sorted(fits)
 
-    tube = build_tube_tables(records, boards, air_note, liquid_note, report)
+    # Прогон одной платы: трубки нет, и её отсутствие - не недостаток данных.
+    tube_report: list[str] = []
+    tube = build_tube_tables(records, boards, air_note, liquid_note, tube_report)
+    if not board_only:
+        report.extend(tube_report)
     if extend_liquid:
         tube = extend_liquid_rows(tube, report, span_main=span_main, span_media=span_media)
 
@@ -476,4 +561,6 @@ def compute_tables(records, air_note: str = AIR_NOTE, liquid_note: str = LIQUID_
         "замечания": report,
         "узлы_ступени_платы": nodes["main"],
         "узлы_ступени_платы_вида": nodes["media"],
+        "одна_ёмкость": single_model if single_model in SINGLE_MODELS else "",
+        "только_плата": bool(board_only),
     }

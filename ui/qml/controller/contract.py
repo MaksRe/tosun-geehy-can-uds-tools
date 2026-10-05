@@ -111,6 +111,8 @@ class AppControllerContract:
     _chamber_extend_liquid: Any
     _chamber_span_main: Any
     _chamber_span_media: Any
+    _chamber_board_only: Any
+    _chamber_single_model: Any
     _chamber_queue: Any
     _chamber_pending: Any
     _chamber_sample: Any

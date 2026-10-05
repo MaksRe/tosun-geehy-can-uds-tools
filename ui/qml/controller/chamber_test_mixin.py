@@ -193,6 +193,9 @@ class AppControllerChamberTestMixin(AppControllerContract):
         if not self._chamber_test_drift_active():
             self._chamber_test_check_text = ""
             return
+        if result.get("одна_ёмкость"):
+            self._chamber_test_check_single(result)
+            return
         expected = self._chamber_test_expected_tables()
         parts = []
         failed = False
@@ -224,6 +227,41 @@ class AppControllerChamberTestMixin(AppControllerContract):
                 "Сверка с имитацией пройдена: таблицы платы восстановили заложенный уход ("
                 + "; ".join(parts) + tail + ").")
             self._chamber_test_check_color = "#16a34a" if not missing else "#d97706"
+
+    def _chamber_test_check_single(self, result: dict):
+        """Сверка для одной ёмкости: после поправки показание в каждом узле равно опорному.
+
+        Заложенный уход по одной ёмкости на сдвиг и растяжение не разделить, поэтому
+        сравнивать таблицу с ним бессмысленно. Проверяется то, что такая таблица
+        обязана давать: при этой ёмкости прибор показывает одно и то же при любой
+        температуре.
+        """
+        parts = []
+        failed = False
+        for channel, key, title in (("main", "ступень_платы", "основной"),
+                                    ("media", "ступень_платы_вида", "вид топлива")):
+            table = result.get(key) or []
+            by_node: dict[int, list[int]] = {}
+            for point in self._chamber_points:
+                node = chamber_fit.nearest_node(point["board_temp_x10"])
+                if node is not None and point.get(channel) is not None:
+                    by_node.setdefault(node, []).append(point[channel])
+            if len(table) != len(chamber_fit.NODES_X10) or chamber_fit.REFERENCE_X10 not in by_node:
+                continue
+            reference = sum(by_node[chamber_fit.REFERENCE_X10]) / len(by_node[chamber_fit.REFERENCE_X10])
+            worst = max(abs(chamber_fit.apply_board_table(sum(values) / len(values), table, node) - reference)
+                        for node, values in by_node.items())
+            parts.append(f"{title}: после поправки отличие от опорного {worst:.1f} отсч.".replace(".", ","))
+            failed = failed or worst > self.CHAMBER_TEST_CHECK_OFFSET
+        if not parts:
+            self._chamber_test_check_text = "Сверка с имитацией: таблицы платы ещё не посчитаны."
+            self._chamber_test_check_color = "#64748b"
+            return
+        verdict = "НЕ ПРОЙДЕНА" if failed else "пройдена"
+        self._chamber_test_check_text = (
+            f"Сверка с имитацией (одна ёмкость) {verdict}: " + "; ".join(parts)
+            + ". Разделить уход на сдвиг и растяжение по одной ёмкости нельзя, это проверяется только вторым эталоном.")
+        self._chamber_test_check_color = "#dc2626" if failed else "#16a34a"
 
     # ------------------------------------------------------------------ смена температуры
 

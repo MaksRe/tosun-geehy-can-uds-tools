@@ -119,6 +119,12 @@ class AppControllerChamberMixin(AppControllerContract):
         self._chamber_span_main: int | None = None
         self._chamber_span_media: int | None = None
 
+        # Прогон одной платы без эталонов и без трубки: в каждом узле снимается
+        # только своя ёмкость платы («0/0»). Таблица платы тогда считается по одной
+        # ёмкости, а весь уход приписывается растяжению или сдвигу.
+        self._chamber_board_only = False
+        self._chamber_single_model = chamber_fit.SINGLE_GAIN
+
         self._chamber_queue: list[tuple[str, object, bool]] = []
         self._chamber_pending = None
         self._chamber_sample: dict[str, int] = {}
@@ -646,7 +652,8 @@ class AppControllerChamberMixin(AppControllerContract):
                 self._chamber_points,
                 extend_liquid=bool(self._chamber_extend_liquid),
                 span_main=self._chamber_span_main,
-                span_media=self._chamber_span_media)
+                span_media=self._chamber_span_media,
+                **self._chamber_fit_mode())
         except Exception as error:
             self._chamber_set_tables_state(f"Расчёт не выполнен: {error}", "#dc2626")
             report_status(f"Расчёт не выполнен: {error}", "#dc2626")
@@ -679,7 +686,11 @@ class AppControllerChamberMixin(AppControllerContract):
                 "Смотрите список ниже.", "#dc2626")
             return False
 
-        self._profile_apply_chamber_format(result)
+        profile_part = dict(result)
+        if result.get("только_плата"):
+            # Трубку не снимали: её ряды в профиле остаются такими, какие есть.
+            profile_part.pop("ступень_трубки", None)
+        self._profile_apply_chamber_format(profile_part)
         crc = self._profile_calc_crc()
         self._profile_set_status(
             f"Таблицы посчитаны по прогону, сумма 0x{crc:04X}. "
@@ -714,7 +725,8 @@ class AppControllerChamberMixin(AppControllerContract):
                 self._chamber_points,
                 extend_liquid=bool(self._chamber_extend_liquid),
                 span_main=self._chamber_span_main,
-                span_media=self._chamber_span_media)
+                span_media=self._chamber_span_media,
+                **self._chamber_fit_mode())
             result["контрольная_сумма"] = 0
             pathlib.Path(str(path)).write_text(
                 json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -726,6 +738,35 @@ class AppControllerChamberMixin(AppControllerContract):
         return True
 
     # ------------------------------------------------------------------ показ
+
+    def _chamber_fit_mode(self) -> dict:
+        """Параметры расчёта для прогона одной платы, если он включён."""
+        if not getattr(self, "_chamber_board_only", False):
+            return {}
+        return {"single_model": self._chamber_single_model, "board_only": True}
+
+    def _chamber_set_board_only(self, enabled: bool):
+        """Включает прогон одной платы: одна своя ёмкость, без эталонов и трубки."""
+        value = bool(enabled)
+        if value == self._chamber_board_only:
+            return
+        self._chamber_board_only = value
+        if value and not str(self._chamber_label).strip():
+            # Своя ёмкость платы - это пометка «0/0»: к входам ничего не подключено.
+            self._chamber_label = "0/0"
+        self._chamber_auto_compute()
+        self.chamberChanged.emit()
+
+    def _chamber_set_single_model(self, model: str) -> bool:
+        """Чему приписать уход при одной ёмкости: растяжению или сдвигу."""
+        if model not in chamber_fit.SINGLE_MODELS:
+            return False
+        if model != self._chamber_single_model:
+            self._chamber_single_model = model
+            if self._chamber_board_only:
+                self._chamber_auto_compute()
+            self.chamberChanged.emit()
+        return True
 
     def _chamber_set_span(self, which: str, text: str) -> bool:
         """Разбирает введённый размах. Пустая строка означает «взять из измерения»."""
@@ -797,15 +838,18 @@ class AppControllerChamberMixin(AppControllerContract):
             bucket = counts.get(node, {"main": set(), "media": set(), "air": 0, "liquid": 0})
             main_caps = len(bucket["main"])
             media_caps = len(bucket["media"])
+            board_only = bool(getattr(self, "_chamber_board_only", False))
             # Таблица платы нужна обоим контурам: у каждого свои эталоны.
-            board_ok = min(main_caps, media_caps) >= chamber_fit.MIN_REFERENCES_PER_NODE
-            tube_ok = bucket["air"] > 0 and bucket["liquid"] > 0
+            need = 1 if board_only else chamber_fit.MIN_REFERENCES_PER_NODE
+            board_ok = min(main_caps, media_caps) >= need
+            tube_ok = board_only or (bucket["air"] > 0 and bucket["liquid"] > 0)
             rows.append({
                 "node": chamber_fit.node_text(node),
                 # Сколько разных эталонов снято у основного контура и у контура вида топлива.
-                "caps": f"эталоны {main_caps} · {media_caps}",
+                "caps": (("плата снята" if board_ok else "нет точки") if board_only
+                         else f"эталоны {main_caps} · {media_caps}"),
                 "capsOk": board_ok,
-                "tube": ("есть" if tube_ok else
+                "tube": ("не нужна" if board_only else "есть" if tube_ok else
                          ("нет обеих" if (bucket["air"] == 0 and bucket["liquid"] == 0) else
                           ("нет погружённой" if bucket["liquid"] == 0 else "нет сухой"))),
                 "tubeOk": tube_ok,

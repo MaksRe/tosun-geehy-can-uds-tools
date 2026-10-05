@@ -33,6 +33,7 @@ Card {
     signal exportTablesRequested()
 
     readonly property bool busy: root.appController ? root.appController.chamberBusy : false
+    readonly property bool boardOnly: root.appController ? root.appController.chamberBoardOnly : false
     readonly property bool waiting: root.appController ? root.appController.chamberWaiting : false
     readonly property var live: root.appController ? root.appController.chamberLive : ({})
     readonly property var chain: root.appController ? root.appController.chamberChain : ({})
@@ -613,7 +614,9 @@ Card {
                     spacing: 6
 
                     Text {
-                        text: "Чего ещё не хватает  ·  эталоны: основной · вид топлива, нужно по 2"
+                        text: root.boardOnly
+                              ? "Чего ещё не хватает  ·  одна плата: в каждом узле точка «0/0»"
+                              : "Чего ещё не хватает  ·  эталоны: основной · вид топлива, нужно по 2"
                         color: root.textMain
                         font.pixelSize: 13
                         font.bold: true
@@ -682,8 +685,88 @@ Card {
                 }
             }
 
+            // --- Прогон одной платы: только своя ёмкость, без эталонов и трубки ---
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: boardOnlyLayout.implicitHeight + 12
+                radius: 12
+                color: root.boardOnly ? "#eff6ff" : "#f8fafc"
+                border.width: 1
+                border.color: root.boardOnly ? "#93c5fd" : "#e2e8f0"
+
+                ColumnLayout {
+                    id: boardOnlyLayout
+                    anchors.fill: parent
+                    anchors.margins: 6
+                    spacing: 6
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        FancySwitch {
+                            checked: root.boardOnly
+                            enabled: root.appController !== null && !root.busy
+                            onToggled: if (root.appController) root.appController.setChamberBoardOnly(checked)
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: "Только плата, своя ёмкость: без эталонов и без трубки"
+                            color: root.textMain
+                            font.pixelSize: 13
+                            font.bold: true
+                            font.family: "Bahnschrift"
+                            elide: Text.ElideRight
+                        }
+
+                        Text {
+                            visible: root.boardOnly
+                            text: "Уход считать как"
+                            color: root.textSoft
+                            font.pixelSize: 11
+                            font.family: "Bahnschrift"
+                            Layout.alignment: Qt.AlignVCenter
+                        }
+
+                        Repeater {
+                            model: root.boardOnly ? [
+                                { "key": "растяжение", "tip": "Ёмкости на плате C0G: уходят резисторы и пороги генератора, уход пропорционален показанию" },
+                                { "key": "сдвиг", "tip": "Ёмкости на плате X7R: плавает сама ёмкость, уход постоянен в отсчётах" }
+                            ] : []
+
+                            FancyButton {
+                                required property var modelData
+                                Layout.preferredWidth: 110
+                                Layout.preferredHeight: 28
+                                fontPixelSize: 12
+                                text: modelData.key
+                                toolTipText: modelData.tip
+                                tone: root.appController && root.appController.chamberSingleModel === modelData.key ? "#0284c7" : "#94a3b8"
+                                toneHover: "#0369a1"
+                                tonePressed: "#075985"
+                                onClicked: if (root.appController) root.appController.setChamberSingleModel(modelData.key)
+                            }
+                        }
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        visible: root.boardOnly
+                        text: "В каждом узле снимается одна точка «0/0»: к входам ничего не подключено. Поправка возвращает показание "
+                              + "при своей ёмкости платы к показанию при +25 °C. При подключённой трубке это допущение: сдвиг и "
+                              + "растяжение по одной ёмкости не разделить. Ряды трубки в профиле не меняются."
+                        color: root.textSoft
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                        wrapMode: Text.WordWrap
+                    }
+                }
+            }
+
             // --- Достройка строк «в жидкости» ---
             Rectangle {
+                visible: !root.boardOnly
                 Layout.fillWidth: true
                 Layout.preferredHeight: extendLayout.implicitHeight + 12
                 radius: 12

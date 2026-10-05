@@ -3452,6 +3452,16 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._chamber_auto_compute()
         self.chamberChanged.emit()
 
+    @Slot(bool)
+    def setChamberBoardOnly(self, enabled):
+        """Цель функции в прогоне одной платы, затем таблица платы считается по её собственной ёмкости."""
+        self._chamber_set_board_only(bool(enabled))
+
+    @Slot(str)
+    def setChamberSingleModel(self, model):
+        """Цель функции в выборе, чему приписать уход при одной ёмкости: растяжению или сдвигу."""
+        self._chamber_set_single_model(str(model))
+
     @Slot(str)
     def setChamberSpanMain(self, text):
         """Цель функции в задании размаха основного контура, затем он подставляется вместо измеренного."""

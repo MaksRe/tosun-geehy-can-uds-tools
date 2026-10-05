@@ -1030,6 +1030,16 @@ class AppControllerPropertiesMixin(AppControllerContract):
         """Цель функции в показе заданного размаха контура вида топлива, затем пустая строка означает «из измерения»."""
         return "" if self._chamber_span_media is None else str(int(self._chamber_span_media))
 
+    @Property(bool, notify=chamberChanged)
+    def chamberBoardOnly(self):
+        """Цель функции в признаке прогона одной платы, затем окно показывает, что эталоны и трубка не нужны."""
+        return bool(self._chamber_board_only)
+
+    @Property(str, notify=chamberChanged)
+    def chamberSingleModel(self):
+        """Цель функции в способе расчёта по одной ёмкости, затем видно, растяжение это или сдвиг."""
+        return str(self._chamber_single_model)
+
     @Property(str, notify=chamberChanged)
     def chamberFilePath(self):
         """Цель функции в показе пути журнала прогона, затем оператор видит, куда он сохранён."""
