@@ -38,12 +38,25 @@ DRIVER_SIMULATOR = "simulator"
 DRIVER_MODBUS_TCP = "modbus_tcp"
 DRIVER_MODBUS_RTU = "modbus_rtu"
 DRIVER_SIMCON = "simcon_ascii2"
+DRIVER_ESPEC = "espec"
 
 VALUE_TYPES = ("int16", "uint16", "int32", "uint32", "float32")
 
 
 class ChamberError(Exception):
     """Камера не ответила или ответила ошибкой: текст годится для оператора."""
+
+
+def serial_open_error(port: str, error: Exception) -> "ChamberError":
+    """Понятная причина, по которой COM-порт не открылся."""
+    text = str(error)
+    busy = "Access" in text or "PermissionError" in text or "Отказано" in text
+    if "FileNotFound" in text or ("could not open port" in text and not busy):
+        return ChamberError(f"порт {port} не найден: подключите переходник и проверьте номер порта "
+                            "в диспетчере устройств Windows")
+    if busy:
+        return ChamberError(f"порт {port} занят другой программой: закройте её и подключитесь снова")
+    return ChamberError(f"порт {port} не открылся: {text}")
 
 
 @dataclass
@@ -297,7 +310,7 @@ class ModbusRtuClient(ModbusClient):
             self._serial = factory(port=self.port, baudrate=self.baudrate, parity=self.parity,
                                    stopbits=self.stopbits, bytesize=8, timeout=self.timeout_s)
         except Exception as error:  # noqa: BLE001 - у pyserial свои классы ошибок
-            raise ChamberError(f"порт {self.port} не открылся: {error}") from None
+            raise serial_open_error(self.port, error) from None
 
     def _read_exact(self, size: int) -> bytes:
         data = self._serial.read(size)
@@ -612,7 +625,7 @@ class SimconAscii2Chamber(ChamberDriver):
         self._clock = clock
         self._last_send = -1e9
         self.last_state: SimconState | None = None
-        self.title = f"SIMCON/32 на {self.port}"
+        self.title = f"Weiss на {self.port}"
 
     def _connect(self):
         if self._serial is not None:
@@ -628,7 +641,7 @@ class SimconAscii2Chamber(ChamberDriver):
             self._serial = factory(port=self.port, baudrate=self.baudrate, parity="N", stopbits=1,
                                    bytesize=8, timeout=self.timeout_s)
         except Exception as error:  # noqa: BLE001 - у pyserial свои классы ошибок
-            raise ChamberError(f"порт {self.port} не открылся: {error}") from None
+            raise serial_open_error(self.port, error) from None
 
     def _exchange(self, line: str) -> str:
         """Отправляет строку и читает ответ до <CR>, соблюдая паузу 5 с между строками."""
@@ -695,6 +708,172 @@ class SimconAscii2Chamber(ChamberDriver):
         self._serial = None
 
 
+# ====================================================================== ESPEC (MC-811P и родственные)
+
+ESPEC_DELIMITERS = {"CRLF": "\r\n", "CR": "\r", "LF": "\n"}
+
+# Режимы из ответов MON? и MODE?, при которых камера держит температуру.
+ESPEC_RUNNING_MODES = ("CONSTANT", "RUN")
+
+
+def parse_espec_temp(answer: str) -> tuple[float, float]:
+    """Ответ на TEMP?: факт, уставка, верхний и нижний предел аварии. Возвращает (факт, уставка)."""
+    parts = [part.strip() for part in str(answer).split(",")]
+    try:
+        return float(parts[0]), float(parts[1])
+    except (IndexError, ValueError):
+        raise ChamberError(f"камера ответила непонятно на TEMP?: {str(answer).strip()[:60]}") from None
+
+
+def parse_espec_mon(answer: str) -> tuple[float, str, int]:
+    """Ответ на MON?: факт температуры, [влажность], режим, число аварий.
+
+    Влажности у температурных камер в ответе нет, поэтому режим ищется как
+    первое нечисловое поле, а число аварий - последнее поле.
+    """
+    parts = [part.strip() for part in str(answer).split(",") if part.strip()]
+    try:
+        actual = float(parts[0])
+        alarms = int(float(parts[-1]))
+        mode = next(part for part in parts[1:-1] if not part.replace(".", "", 1).lstrip("-").isdigit())
+    except (IndexError, ValueError, StopIteration):
+        raise ChamberError(f"камера ответила непонятно на MON?: {str(answer).strip()[:60]}") from None
+    return actual, " ".join(mode.split()).upper(), alarms
+
+
+class EspecChamber(ChamberDriver):
+    """Камера ESPEC (MC-811P и другие с тем же протоколом) по RS-485.
+
+    По руководству ESPEC «Network Guide RS-485, RS-232C, GPIB»:
+    - строка команды: «адрес,команда[,параметры]» и разделитель (по умолчанию CR LF);
+    - TEMP? - факт, уставка и пределы аварии; MON? - факт, режим, число аварий;
+    - «TEMP, S-40.0» задаёт уставку, «MODE, CONSTANT» и «MODE, STANDBY» - пуск и стоп;
+    - ответ на настройку - «OK:...» или «NA:причина»;
+    - после запроса пауза не меньше 0,3 с, после настройки - не меньше 0,5 с.
+    Интерфейс камеры четырёхпроводный: со стороны компьютера это обычный COM-порт
+    переходника USB-RS-422/485 с раздельными парами передачи и приёма.
+    """
+
+    can_set = True
+    can_run = True
+    MONITOR_PAUSE_S = 0.3
+    SETTING_PAUSE_S = 0.5
+
+    def __init__(self, port: str, baudrate: int, address: int, delimiter: str = "CRLF", timeout_s: float = 2.0,
+                 serial_factory=None, sleep=time.sleep, clock=time.monotonic):
+        self.port = str(port)
+        self.baudrate = int(baudrate)
+        self.address = int(address)
+        self.delimiter = ESPEC_DELIMITERS.get(str(delimiter).upper(), "\r\n")
+        self.timeout_s = float(timeout_s)
+        self._serial_factory = serial_factory
+        self._serial = None
+        self._sleep = sleep
+        self._clock = clock
+        self._ready_at = -1e9
+        self.title = f"ESPEC на {self.port}, адрес {self.address}"
+
+    def _connect(self):
+        if self._serial is not None:
+            return
+        factory = self._serial_factory
+        if factory is None:
+            try:
+                import serial  # pyserial
+            except ImportError:
+                raise ChamberError("для RS-485 нужен пакет pyserial: pip install pyserial") from None
+            factory = serial.Serial
+        try:
+            self._serial = factory(port=self.port, baudrate=self.baudrate, parity="N", stopbits=1,
+                                   bytesize=8, timeout=self.timeout_s)
+        except Exception as error:  # noqa: BLE001 - у pyserial свои классы ошибок
+            raise serial_open_error(self.port, error) from None
+
+    def _read_line(self) -> str:
+        end = self.delimiter[-1].encode("ascii")
+        data = self._serial.read_until(end)
+        if not data or not data.endswith(end):
+            raise ChamberError("камера не ответила по RS-485: проверьте адрес, скорость, разделитель и "
+                               "4-проводное подключение (TX± переходника на RD± камеры, RX± на SD±)")
+        return data.decode("ascii", errors="replace").strip()
+
+    def _exchange(self, command: str, setting: bool = False) -> str:
+        """Отправляет команду с адресом и возвращает ответ, соблюдая паузы руководства."""
+        self._connect()
+        wait = self._ready_at - self._clock()
+        if wait > 0:
+            self._sleep(wait)
+        line = f"{self.address},{command}{self.delimiter}"
+        try:
+            self._serial.reset_input_buffer()
+            self._serial.write(line.encode("ascii"))
+            answer = self._read_line()
+            # Протокол OLD с эхом: сначала приходит «OK:команда», данные - следующей строкой.
+            if not setting and answer.upper().startswith("OK:"):
+                answer = self._read_line()
+        except ChamberError:
+            raise
+        except Exception as error:  # noqa: BLE001
+            self.close()
+            raise ChamberError(f"обмен по RS-485 прервался: {error}") from None
+        finally:
+            self._ready_at = self._clock() + (self.SETTING_PAUSE_S if setting else self.MONITOR_PAUSE_S)
+        if answer.upper().startswith("NA:"):
+            raise ChamberError(self._refusal_text(answer[3:].strip()))
+        return answer
+
+    @staticmethod
+    def _refusal_text(reason: str) -> str:
+        """Отказ камеры словами: что именно мешает и что сделать."""
+        hints = {
+            "PROTECT ON": "на пульте включена защита от удалённого управления, выключите её",
+            "DATA OUT OF RANGE": "значение вне пределов аварии камеры, поправьте пределы на пульте",
+            "CMD_ERR": "камера не поняла команду",
+            "COMMAND ERR": "камера не поняла команду",
+            "CHB NOT READY": "камера сейчас не может выполнить команду (выключена панель?)",
+        }
+        key = next((name for name in hints if name in reason.upper()), None)
+        return f"камера отказала ({reason})" + (f": {hints[key]}" if key else "")
+
+    def read(self) -> ChamberReading:
+        actual, mode, alarms = parse_espec_mon(self._exchange("MON?"))
+        _actual, setpoint = parse_espec_temp(self._exchange("TEMP?"))
+        alarm_code = alarms
+        if alarms:
+            # Номер первой аварии полезнее их числа: по нему авария ищется в инструкции камеры.
+            try:
+                numbers = [part.strip() for part in self._exchange("ALARM?").split(",")]
+                alarm_code = int(numbers[1]) if len(numbers) > 1 else alarms
+            except (ChamberError, ValueError):
+                alarm_code = alarms
+        running = any(mode.startswith(name) for name in ESPEC_RUNNING_MODES)
+        return ChamberReading(actual_c=actual, setpoint_c=setpoint, running=running, alarm=alarm_code)
+
+    def set_setpoint(self, value_c: float):
+        self._exchange(f"TEMP, S{float(value_c):.1f}", setting=True)
+
+    def set_running(self, on: bool):
+        self._exchange("MODE, CONSTANT" if on else "MODE, STANDBY", setting=True)
+
+    def raw(self, text: str) -> str:
+        """Команда оператора как есть, адрес добавляется сам: «TEMP?», «MON?»."""
+        command = str(text).strip()
+        # Адрес, если оператор написал его сам, второй раз не добавляется.
+        head, _, rest = command.partition(",")
+        if rest and head.strip().isdigit():
+            command = rest.strip()
+        is_setting = not command.endswith("?")
+        return self._exchange(command, setting=is_setting)
+
+    def close(self):
+        if self._serial is not None:
+            try:
+                self._serial.close()
+            except Exception:  # noqa: BLE001
+                pass
+        self._serial = None
+
+
 def make_driver(settings: dict) -> ChamberDriver | None:
     """Драйвер по настройкам раздела. None - связь с камерой выключена."""
     kind = settings.get("driver", DRIVER_NONE)
@@ -705,8 +884,11 @@ def make_driver(settings: dict) -> ChamberDriver | None:
     if kind == DRIVER_MODBUS_TCP:
         client = ModbusTcpClient(settings.get("tcp_host", ""), int(settings.get("tcp_port", 502)), unit)
         return ModbusChamber(client, register_map, f"Modbus TCP {settings.get('tcp_host', '')}")
+    if kind == DRIVER_ESPEC:
+        return EspecChamber(settings.get("espec_port", ""), int(settings.get("espec_baud", 9600)),
+                            int(settings.get("espec_address", 1)), str(settings.get("espec_delimiter", "CRLF")))
     if kind == DRIVER_SIMCON:
-        return SimconAscii2Chamber(settings.get("rtu_port", ""), int(settings.get("rtu_baud", 9600)),
+        return SimconAscii2Chamber(settings.get("weiss_port", ""), int(settings.get("weiss_baud", 9600)),
                                    int(settings.get("simcon_address", 0)))
     if kind == DRIVER_MODBUS_RTU:
         client = ModbusRtuClient(settings.get("rtu_port", ""), int(settings.get("rtu_baud", 9600)),

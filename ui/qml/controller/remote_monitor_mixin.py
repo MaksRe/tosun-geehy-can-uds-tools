@@ -550,7 +550,7 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             return {}
         climate = view()
         return {key: climate.get(key) for key in (
-            "connected", "ok", "status", "actualText", "setpointText", "runningText", "alarmText", "alarm",
+            "connected", "ok", "status", "chamber", "actualText", "setpointText", "runningText", "alarmText", "alarm",
             "run", "history")}
 
     def _remote_view(self) -> dict:

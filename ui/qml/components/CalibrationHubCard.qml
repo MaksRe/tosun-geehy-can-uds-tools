@@ -81,9 +81,12 @@ Card {
             var climate = root.appController.climate
             if (climate.run && climate.run.active)
                 return "Автопрогон: " + climate.run.stage
+            var name = (climate.chamber || {}).name || ""
+            if (climate.driver === "none")
+                return "Камера не выбрана"
             if (!climate.connected)
-                return "Не подключена"
-            return climate.ok ? "В камере " + climate.actualText : "Нет связи"
+                return name + ": не подключена"
+            return name + (climate.ok ? ": " + climate.actualText : ": нет связи")
         }
 
         if (index === 5) {

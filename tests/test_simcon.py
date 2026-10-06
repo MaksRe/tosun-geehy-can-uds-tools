@@ -180,7 +180,7 @@ def test_raw_string_is_sent_as_is():
 
 
 def test_driver_is_made_from_settings_with_its_own_address():
-    driver = make_driver({"driver": "simcon_ascii2", "rtu_port": "COM7", "rtu_baud": 19200,
+    driver = make_driver({"driver": "simcon_ascii2", "weiss_port": "COM7", "weiss_baud": 19200,
                           "simcon_address": 3, "unit": 1})
     assert isinstance(driver, SimconAscii2Chamber)
     assert driver.address == 3 and driver.baudrate == 19200 and driver.port == "COM7"

@@ -35,6 +35,7 @@ from collections import deque
 from PySide6.QtCore import QTimer
 
 from ui.qml.climate_chamber import (
+    DRIVER_ESPEC,
     DRIVER_MODBUS_RTU,
     DRIVER_MODBUS_TCP,
     DRIVER_NONE,
@@ -48,14 +49,48 @@ from ui.qml.climate_chamber import (
 from .contract import AppControllerContract
 from .stability import is_stable, rate_and_spread
 
-DRIVERS = (DRIVER_NONE, DRIVER_SIMULATOR, DRIVER_SIMCON, DRIVER_MODBUS_TCP, DRIVER_MODBUS_RTU)
-DRIVER_TITLES = {
-    DRIVER_NONE: "без связи",
-    DRIVER_SIMULATOR: "имитатор",
-    DRIVER_SIMCON: "Weiss SIMCON/32",
-    DRIVER_MODBUS_TCP: "Modbus TCP",
-    DRIVER_MODBUS_RTU: "Modbus RTU (RS-485)",
+DRIVERS = (DRIVER_NONE, DRIVER_ESPEC, DRIVER_SIMCON, DRIVER_SIMULATOR, DRIVER_MODBUS_TCP, DRIVER_MODBUS_RTU)
+
+# Камеры, с которыми работает программа: у каждой своё назначение, чтобы их не путать.
+# board_only - какой режим раздела «Прогон в камере» подходит этой камере.
+CHAMBERS = {
+    DRIVER_ESPEC: {
+        "name": "ESPEC MC-811P",
+        "purpose": "Испытания платы",
+        "link": "RS-485, 4 провода",
+        "accent": "#0f766e",
+        "board_only": True,
+    },
+    DRIVER_SIMCON: {
+        "name": "Weiss WK1-600/70",
+        "purpose": "Изделие в сборе: плата с трубками в корпусе",
+        "link": "RS-232",
+        "accent": "#1d4ed8",
+        "board_only": False,
+    },
+    DRIVER_SIMULATOR: {
+        "name": "Имитатор камеры",
+        "purpose": "Отладка порядка работы на столе",
+        "link": "без камеры",
+        "accent": "#9a3412",
+        "board_only": None,
+    },
+    DRIVER_MODBUS_TCP: {
+        "name": "Другая камера, Modbus TCP",
+        "purpose": "Камера с картой регистров",
+        "link": "Ethernet",
+        "accent": "#64748b",
+        "board_only": None,
+    },
+    DRIVER_MODBUS_RTU: {
+        "name": "Другая камера, Modbus RTU",
+        "purpose": "Камера с картой регистров",
+        "link": "RS-485, 2 провода",
+        "accent": "#64748b",
+        "board_only": None,
+    },
 }
+DRIVER_TITLES = {DRIVER_NONE: "не выбрана", **{key: value["name"] for key, value in CHAMBERS.items()}}
 
 
 def _c(value) -> str:
@@ -163,6 +198,14 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             "rtu_baud": 9600,
             "rtu_parity": "N",
             "rtu_stopbits": 1,
+            # ESPEC MC-811P: адрес 1...16, разделитель строк как в меню пульта камеры.
+            "espec_port": "COM5",
+            "espec_baud": 9600,
+            "espec_address": 1,
+            "espec_delimiter": "CRLF",
+            # Weiss WK1-600/70: свой COM-порт, чтобы настройки двух камер не путались.
+            "weiss_port": "COM3",
+            "weiss_baud": 9600,
             # Адрес камеры Weiss из меню пульта «Address», по умолчанию там 0.
             "simcon_address": 0,
             "sim_speed": 1.0,
@@ -248,11 +291,21 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 return False
             if key == "driver" and value not in DRIVERS:
                 return False
+            if key == "espec_delimiter":
+                value = str(value).upper()
+                if value not in ("CRLF", "CR", "LF"):
+                    return False
+            if key == "espec_address" and not (1 <= int(value) <= 16):
+                self._climate_command_status = "Адрес камеры ESPEC - от 1 до 16, как в меню её пульта."
+                self.climateChanged.emit()
+                return False
             if settings[key] == value:
                 return True
             settings[key] = value
             reconnect = key in ("driver", "poll_s", "unit", "tcp_host", "tcp_port", "rtu_port", "rtu_baud",
-                                "rtu_parity", "rtu_stopbits", "sim_speed", "simcon_address")
+                                "rtu_parity", "rtu_stopbits", "sim_speed", "simcon_address",
+                                "espec_port", "espec_baud", "espec_address", "espec_delimiter",
+                                "weiss_port", "weiss_baud")
         self._climate_save_settings()
         if reconnect and self._climate_link is not None:
             self._climate_connect()
@@ -713,9 +766,10 @@ class AppControllerClimateChamberMixin(AppControllerContract):
     def _climate_view(self) -> dict:
         now = time.monotonic()
         settings = self._climate_settings
-        reading = self._climate_reading if self._climate_fresh(now) else None
-        register_map = ModbusMap.from_dict(settings["map"]).to_dict()
         link = self._climate_link
+        # Без связи показания не показываются: старое число легко принять за текущее.
+        reading = self._climate_reading if (link is not None and self._climate_fresh(now)) else None
+        register_map = ModbusMap.from_dict(settings["map"]).to_dict()
 
         nodes = []
         try:
@@ -739,6 +793,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         return {
             "driver": settings["driver"],
             "drivers": [{"key": key, "title": DRIVER_TITLES[key]} for key in DRIVERS],
+            "chamber": self._climate_chamber_card(),
+            "modeHint": self._climate_mode_hint(),
             "connected": link is not None,
             "ok": bool(self._climate_ok) and reading is not None,
             "status": self._climate_status,
@@ -774,6 +830,38 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 "setpoint": [None if sp is None else round(float(sp), 2) for _stamp, _actual, sp in self._climate_history],
             },
         }
+
+    def _climate_chamber_card(self) -> dict:
+        """Выбранная камера для шапки раздела: имя, назначение и как подключена."""
+        settings = self._climate_settings
+        driver = settings["driver"]
+        info = CHAMBERS.get(driver)
+        if info is None:
+            return {"name": "Камера не выбрана", "purpose": "Выберите камеру ниже", "link": "",
+                    "accent": "#94a3b8", "summary": ""}
+        if driver == DRIVER_ESPEC:
+            summary = (f"{settings['espec_port']} · {settings['espec_baud']} бод · адрес {settings['espec_address']}"
+                       f" · разделитель {settings['espec_delimiter']}")
+        elif driver == DRIVER_SIMCON:
+            summary = f"{settings['weiss_port']} · {settings['weiss_baud']} бод · адрес {settings['simcon_address']}"
+        elif driver == DRIVER_SIMULATOR:
+            summary = f"ускорение ×{float(settings['sim_speed']):g}"
+        elif driver == DRIVER_MODBUS_TCP:
+            summary = f"{settings['tcp_host']}:{settings['tcp_port']} · устройство {settings['unit']}"
+        else:
+            summary = f"{settings['rtu_port']} · {settings['rtu_baud']} бод · устройство {settings['unit']}"
+        return {**{key: info[key] for key in ("name", "purpose", "link", "accent")}, "summary": summary}
+
+    def _climate_mode_hint(self) -> str:
+        """Подсказка, если режим раздела «Прогон в камере» не подходит выбранной камере."""
+        info = CHAMBERS.get(self._climate_settings["driver"])
+        want = None if info is None else info["board_only"]
+        board_only = bool(getattr(self, "_chamber_board_only", False))
+        if want is True and not board_only:
+            return ("В ESPEC испытывается одна плата: включите «Только плата» в разделе «Прогон в камере».")
+        if want is False and board_only:
+            return ("В Weiss испытывается изделие в сборе: выключите «Только плата» в разделе «Прогон в камере».")
+        return ""
 
     def _climate_shutdown(self):
         """Закрывает связь с камерой вместе с программой."""

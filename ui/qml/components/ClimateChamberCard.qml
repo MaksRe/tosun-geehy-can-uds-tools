@@ -6,7 +6,8 @@ import "."
 /*
   Раздел «Климатическая камера».
   Назначение:
-  - связь с камерой: Modbus TCP, Modbus RTU (RS-485) или имитатор;
+  - выбор камеры: ESPEC MC-811P (испытания платы), Weiss WK1-600/70 (изделие в сборе),
+    имитатор (отладка на столе) или другая камера с Modbus;
   - карта регистров камеры: адреса вписываются из её документации;
   - температура, уставка, пуск и авария камеры, ручная уставка;
   - автоматический прогон по списку температур: уставка, выход на неё,
@@ -163,9 +164,7 @@ Card {
 
                 Text {
                     Layout.fillWidth: true
-                    text: "Программа задаёт камере температуру, ждёт, пока устоится плата, и сама снимает точки прогона. "
-                          + "Камера Weiss WK1-600/70 подключается кнопкой «Weiss SIMCON/32» по RS-232. Весь порядок можно сначала "
-                          + "пройти на имитаторе вместе с тестовым режимом прибора."
+                    text: "Выберите камеру, подключитесь и запустите прогон: программа сама задаёт температуру, ждёт, пока устоится плата, и снимает точки."
                     color: root.textSoft
                     font.pixelSize: 12
                     font.family: "Bahnschrift"
@@ -173,222 +172,412 @@ Card {
                 }
             }
 
-            // --- Подключение ---
-            Block {
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 6
+            // --- Выбор камеры: у каждой своё назначение ---
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
 
-                    BlockTitle { text: "Подключение" }
-
-                    Repeater {
-                        model: root.climate.drivers || []
-
-                        FancyButton {
-                            required property var modelData
-                            Layout.preferredWidth: 140
-                            Layout.preferredHeight: 28
-                            fontPixelSize: 12
-                            text: modelData.title
-                            tone: root.climate.driver === modelData.key ? "#0284c7" : "#94a3b8"
-                            toneHover: "#0369a1"
-                            tonePressed: "#075985"
-                            onClicked: if (root.appController) root.appController.setClimateSetting("driver", modelData.key)
-                        }
-                    }
-
-                    Item { Layout.fillWidth: true }
-
-                    FancyButton {
-                        Layout.preferredWidth: 130
-                        Layout.preferredHeight: 30
-                        fontPixelSize: 12
-                        text: root.climate.connected ? "Отключить" : "Подключить"
-                        tone: root.climate.connected ? "#ef4444" : "#16a34a"
-                        toneHover: root.climate.connected ? "#dc2626" : "#15803d"
-                        tonePressed: root.climate.connected ? "#b91c1c" : "#166534"
-                        enabled: root.climate.driver !== "none" && !root.run.active
-                        onClicked: {
-                            if (!root.appController) return
-                            if (root.climate.connected) root.appController.disconnectClimate()
-                            else root.appController.connectClimate()
-                        }
-                    }
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    visible: root.climate.driver === "modbus_tcp"
-                    spacing: 8
-                    Caption { text: "Адрес камеры" }
-                    SettingField { key: "tcp_host"; Layout.preferredWidth: 160 }
-                    Caption { text: "Порт" }
-                    SettingField { key: "tcp_port"; Layout.preferredWidth: 70 }
-                    Caption { text: "Номер устройства" }
-                    SettingField { key: "unit"; Layout.preferredWidth: 60 }
-                    Item { Layout.fillWidth: true }
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    visible: root.climate.driver === "modbus_rtu"
-                    spacing: 8
-                    Caption { text: "Порт" }
-                    SettingField { key: "rtu_port"; Layout.preferredWidth: 90 }
-                    Caption { text: "Скорость" }
-                    SettingField { key: "rtu_baud"; Layout.preferredWidth: 80 }
-                    Caption { text: "Чётность N/E/O" }
-                    SettingField { key: "rtu_parity"; Layout.preferredWidth: 50 }
-                    Caption { text: "Стоп-биты" }
-                    SettingField { key: "rtu_stopbits"; Layout.preferredWidth: 50 }
-                    Caption { text: "Номер устройства" }
-                    SettingField { key: "unit"; Layout.preferredWidth: 60 }
-                    Item { Layout.fillWidth: true }
-                }
-
-                // Камера Weiss WK1-600/70: контроллер SIMCON/32, протокол ASCII-2 по RS-232.
-                RowLayout {
-                    Layout.fillWidth: true
-                    visible: root.climate.driver === "simcon_ascii2"
-                    spacing: 8
-                    Caption { text: "COM-порт" }
-                    SettingField { key: "rtu_port"; Layout.preferredWidth: 90 }
-                    Caption { text: "Скорость" }
-                    SettingField { key: "rtu_baud"; Layout.preferredWidth: 80 }
-                    Caption { text: "Адрес (меню пульта «Address»)" }
-                    SettingField { key: "simcon_address"; Layout.preferredWidth: 60 }
-                    Item { Layout.fillWidth: true }
-                }
-
-                Text {
-                    Layout.fillWidth: true
-                    visible: root.climate.driver === "simcon_ascii2"
-                    text: "На пульте камеры: «Специальные функции» - протокол ASCII-2, та же скорость и адрес, режим EXTERN "
-                          + "(иначе уставку можно только читать). Кабель RS-232 - нуль-модем: 2↔3 крест, 5 - земля. "
-                          + "Камера принимает не больше одной строки в 5 секунд, поэтому показания обновляются раз в 5 с."
-                    color: root.textSoft
-                    font.pixelSize: 11
-                    font.family: "Bahnschrift"
-                    wrapMode: Text.WordWrap
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    visible: root.climate.driver === "simcon_ascii2"
-                    spacing: 8
-                    Caption { text: "Команда камере" }
-
-                    FancyTextField {
-                        id: rawField
-                        Layout.preferredWidth: 260
-                        Layout.preferredHeight: 30
-                        placeholderText: "например $00I"
-                        textColor: root.textMain
-                        bgColor: root.inputBg
-                        borderColor: root.inputBorder
-                        focusBorderColor: root.inputFocus
-                        onAccepted: if (root.appController) root.appController.sendClimateRaw(text)
-                    }
-
-                    FancyButton {
-                        Layout.preferredWidth: 110
-                        Layout.preferredHeight: 30
-                        fontPixelSize: 12
-                        text: "Отправить"
-                        tone: "#64748b"; toneHover: "#475569"; tonePressed: "#334155"
-                        toolTipText: "Строка уходит как есть, <CR> добавляется сам. Для проверки протокола на месте"
-                        enabled: root.climate.connected === true && rawField.text.length > 0
-                        onClicked: if (root.appController) root.appController.sendClimateRaw(rawField.text)
-                    }
-
-                    Text {
-                        Layout.fillWidth: true
-                        text: {
-                            var log = root.climate.rawLog || []
-                            if (log.length === 0) return "Ответов пока нет"
-                            var last = log[0]
-                            return last.time + "  " + last.sent + "  →  " + last.answer
-                        }
-                        color: (root.climate.rawLog || []).length > 0 && !(root.climate.rawLog[0].ok) ? "#dc2626" : root.textMain
-                        font.pixelSize: 12
-                        font.family: "Consolas"
-                        elide: Text.ElideRight
-                    }
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    visible: root.climate.driver === "simulator"
-                    spacing: 8
-                    Caption { text: "Ускорение времени" }
-
-                    Repeater {
-                        model: ["1", "10", "60"]
-
-                        FancyButton {
-                            required property string modelData
-                            Layout.preferredWidth: 60
-                            Layout.preferredHeight: 28
-                            fontPixelSize: 12
-                            text: "×" + modelData
-                            tone: root.settings.sim_speed === modelData ? "#0284c7" : "#94a3b8"
-                            toneHover: "#0369a1"
-                            tonePressed: "#075985"
-                            onClicked: if (root.appController) root.appController.setClimateSetting("sim_speed", modelData)
-                        }
-                    }
-
-                    FancySwitch {
-                        checked: root.settings.sim_bridge === true
-                        onToggled: if (root.appController) root.appController.setClimateFlag("sim_bridge", checked)
-                    }
-
-                    Caption {
-                        Layout.fillWidth: true
-                        text: "Задавать прибору температуру изделия из имитатора (нужен тестовый режим в разделе «Прогон в камере»)"
-                        elide: Text.ElideRight
-                    }
-                }
-
-                Text {
-                    Layout.fillWidth: true
-                    visible: (root.climate.bridgeStatus || "").length > 0
-                    text: root.climate.bridgeStatus || ""
-                    color: "#9a3412"
-                    font.pixelSize: 12
-                    font.family: "Bahnschrift"
-                    wrapMode: Text.WordWrap
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
+                Repeater {
+                    model: [
+                        { "key": "espec", "name": "ESPEC MC-811P", "purpose": "Испытания платы", "link": "RS-485, 4 провода", "accent": "#0f766e", "fill": "#ecfdf5" },
+                        { "key": "simcon_ascii2", "name": "Weiss WK1-600/70", "purpose": "Изделие в сборе: с трубками, в корпусе", "link": "RS-232", "accent": "#1d4ed8", "fill": "#eff6ff" },
+                        { "key": "simulator", "name": "Имитатор", "purpose": "Отладка на столе, без камеры", "link": "", "accent": "#9a3412", "fill": "#fff7ed" }
+                    ]
 
                     Rectangle {
-                        Layout.alignment: Qt.AlignVCenter
-                        Layout.preferredWidth: 10
-                        Layout.preferredHeight: 10
-                        radius: 5
-                        color: root.climate.ok ? "#16a34a" : (root.climate.connected ? "#dc2626" : "#94a3b8")
+                        id: chamberTile
+                        required property var modelData
+                        readonly property bool selected: root.climate.driver === modelData.key
+
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: modelData.key === "simulator" ? 1 : 2
+                        Layout.preferredHeight: 64
+                        radius: 12
+                        color: selected ? modelData.fill : "#f8fafc"
+                        border.width: selected ? 2 : 1
+                        border.color: selected ? modelData.accent : "#e2e8f0"
+                        opacity: (root.run.active && !selected) ? 0.5 : 1.0
+
+                        ColumnLayout {
+                            anchors.fill: parent
+                            anchors.margins: 10
+                            spacing: 2
+
+                            RowLayout {
+                                spacing: 8
+                                Rectangle {
+                                    Layout.preferredWidth: 12
+                                    Layout.preferredHeight: 12
+                                    radius: 6
+                                    color: chamberTile.selected ? chamberTile.modelData.accent : "transparent"
+                                    border.width: 2
+                                    border.color: chamberTile.modelData.accent
+                                }
+                                Text {
+                                    text: chamberTile.modelData.name
+                                    color: chamberTile.selected ? chamberTile.modelData.accent : root.textMain
+                                    font.pixelSize: 15
+                                    font.bold: true
+                                    font.family: "Bahnschrift"
+                                }
+                                Text {
+                                    visible: chamberTile.modelData.link.length > 0
+                                    text: "· " + chamberTile.modelData.link
+                                    color: root.textSoft
+                                    font.pixelSize: 11
+                                    font.family: "Bahnschrift"
+                                }
+                            }
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: chamberTile.modelData.purpose
+                                color: root.textSoft
+                                font.pixelSize: 12
+                                font.family: "Bahnschrift"
+                                elide: Text.ElideRight
+                            }
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            enabled: !root.run.active
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: if (root.appController) root.appController.setClimateSetting("driver", chamberTile.modelData.key)
+                        }
+                    }
+                }
+            }
+
+            Text {
+                Layout.fillWidth: true
+                visible: (root.climate.modeHint || "").length > 0
+                text: "⚠ " + (root.climate.modeHint || "")
+                color: "#b45309"
+                font.pixelSize: 12
+                font.bold: true
+                font.family: "Bahnschrift"
+                wrapMode: Text.WordWrap
+            }
+
+            // --- Подключение выбранной камеры ---
+            Rectangle {
+                Layout.fillWidth: true
+                visible: root.climate.driver !== "none"
+                Layout.preferredHeight: connectLayout.implicitHeight + 20
+                radius: 12
+                color: "#ffffff"
+                border.width: 1
+                border.color: "#d6e2ef"
+
+                // Цветная полоса слева: сразу видно, с какой камерой идёт работа.
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    width: 6
+                    radius: 3
+                    color: (root.climate.chamber || {}).accent || "#94a3b8"
+                }
+
+                ColumnLayout {
+                    id: connectLayout
+                    anchors.fill: parent
+                    anchors.leftMargin: 16
+                    anchors.rightMargin: 10
+                    anchors.topMargin: 10
+                    anchors.bottomMargin: 10
+                    spacing: 8
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+
+                        Rectangle {
+                            Layout.alignment: Qt.AlignVCenter
+                            Layout.preferredWidth: 12
+                            Layout.preferredHeight: 12
+                            radius: 6
+                            color: root.climate.ok ? "#16a34a" : (root.climate.connected ? "#dc2626" : "#94a3b8")
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 0
+
+                            Text {
+                                text: ((root.climate.chamber || {}).name || "") + "  ·  "
+                                      + (root.climate.ok ? "на связи" : (root.climate.connected ? "нет ответа" : "не подключена"))
+                                color: root.textMain
+                                font.pixelSize: 14
+                                font.bold: true
+                                font.family: "Bahnschrift"
+                            }
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: root.climate.status || ""
+                                color: root.textSoft
+                                font.pixelSize: 11
+                                font.family: "Bahnschrift"
+                                elide: Text.ElideRight
+                            }
+                        }
+
+                        FancyButton {
+                            Layout.preferredWidth: 140
+                            Layout.preferredHeight: 34
+                            text: root.climate.connected ? "Отключить" : "Подключить"
+                            tone: root.climate.connected ? "#ef4444" : "#16a34a"
+                            toneHover: root.climate.connected ? "#dc2626" : "#15803d"
+                            tonePressed: root.climate.connected ? "#b91c1c" : "#166534"
+                            enabled: !root.run.active
+                            onClicked: {
+                                if (!root.appController) return
+                                if (root.climate.connected) root.appController.disconnectClimate()
+                                else root.appController.connectClimate()
+                            }
+                        }
+                    }
+
+                    // ESPEC MC-811P: RS-485, текстовые команды.
+                    RowLayout {
+                        Layout.fillWidth: true
+                        visible: root.climate.driver === "espec"
+                        spacing: 8
+                        Caption { text: "COM-порт" }
+                        SettingField { key: "espec_port"; Layout.preferredWidth: 90 }
+                        Caption { text: "Скорость" }
+                        SettingField { key: "espec_baud"; Layout.preferredWidth: 80 }
+                        Caption { text: "Адрес" }
+                        SettingField { key: "espec_address"; Layout.preferredWidth: 50 }
+                        Caption { text: "Конец строки" }
+
+                        Repeater {
+                            model: ["CRLF", "CR", "LF"]
+
+                            FancyButton {
+                                required property string modelData
+                                Layout.preferredWidth: 56
+                                Layout.preferredHeight: 28
+                                fontPixelSize: 11
+                                text: modelData
+                                tone: root.settings.espec_delimiter === modelData ? "#0f766e" : "#94a3b8"
+                                toneHover: "#115e59"
+                                tonePressed: "#134e4a"
+                                onClicked: if (root.appController) root.appController.setClimateSetting("espec_delimiter", modelData)
+                            }
+                        }
+                        Item { Layout.fillWidth: true }
                     }
 
                     Text {
                         Layout.fillWidth: true
-                        text: root.climate.status || ""
-                        color: root.textMain
-                        font.pixelSize: 12
+                        visible: root.climate.driver === "espec"
+                        text: "Переходник USB-RS-422/485 на 4 провода: TX± к контактам 3-4 камеры (RD±), RX± к 1-2 (SD±), земля к 5. "
+                              + "На пульте камеры: те же адрес, скорость и конец строки, 8 бит, без чётности, защита от удалённого управления выключена."
+                        color: root.textSoft
+                        font.pixelSize: 11
                         font.family: "Bahnschrift"
-                        elide: Text.ElideRight
+                        wrapMode: Text.WordWrap
                     }
 
-                    FancySwitch {
-                        checked: root.settings.autoconnect === true
-                        onToggled: if (root.appController) root.appController.setClimateFlag("autoconnect", checked)
+                    // Weiss WK1-600/70: контроллер SIMCON/32, протокол ASCII-2 по RS-232.
+                    RowLayout {
+                        Layout.fillWidth: true
+                        visible: root.climate.driver === "simcon_ascii2"
+                        spacing: 8
+                        Caption { text: "COM-порт" }
+                        SettingField { key: "weiss_port"; Layout.preferredWidth: 90 }
+                        Caption { text: "Скорость" }
+                        SettingField { key: "weiss_baud"; Layout.preferredWidth: 80 }
+                        Caption { text: "Адрес" }
+                        SettingField { key: "simcon_address"; Layout.preferredWidth: 50 }
+                        Item { Layout.fillWidth: true }
                     }
-                    Caption { text: "подключаться при запуске" }
-                    Caption { text: "Опрос, с" }
-                    SettingField { key: "poll_s"; Layout.preferredWidth: 60 }
+
+                    Text {
+                        Layout.fillWidth: true
+                        visible: root.climate.driver === "simcon_ascii2"
+                        text: "Нуль-модемный кабель RS-232: 2↔3 крест, 5 - земля. На пульте: протокол ASCII-2, те же скорость и адрес, режим EXTERN. "
+                              + "Камера принимает не больше одной строки в 5 секунд, показания обновляются раз в 5 с."
+                        color: root.textSoft
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                        wrapMode: Text.WordWrap
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        visible: root.climate.driver === "modbus_tcp"
+                        spacing: 8
+                        Caption { text: "Адрес камеры" }
+                        SettingField { key: "tcp_host"; Layout.preferredWidth: 160 }
+                        Caption { text: "Порт" }
+                        SettingField { key: "tcp_port"; Layout.preferredWidth: 70 }
+                        Caption { text: "Номер устройства" }
+                        SettingField { key: "unit"; Layout.preferredWidth: 60 }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        visible: root.climate.driver === "modbus_rtu"
+                        spacing: 8
+                        Caption { text: "Порт" }
+                        SettingField { key: "rtu_port"; Layout.preferredWidth: 90 }
+                        Caption { text: "Скорость" }
+                        SettingField { key: "rtu_baud"; Layout.preferredWidth: 80 }
+                        Caption { text: "Чётность N/E/O" }
+                        SettingField { key: "rtu_parity"; Layout.preferredWidth: 50 }
+                        Caption { text: "Стоп-биты" }
+                        SettingField { key: "rtu_stopbits"; Layout.preferredWidth: 50 }
+                        Caption { text: "Номер устройства" }
+                        SettingField { key: "unit"; Layout.preferredWidth: 60 }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    // Строка камере как есть: проверка связи на месте.
+                    RowLayout {
+                        Layout.fillWidth: true
+                        visible: root.climate.driver === "espec" || root.climate.driver === "simcon_ascii2"
+                        spacing: 8
+                        Caption { text: "Команда камере" }
+
+                        FancyTextField {
+                            id: rawField
+                            Layout.preferredWidth: 220
+                            Layout.preferredHeight: 30
+                            placeholderText: root.climate.driver === "espec" ? "например TEMP? или MON?" : "например $00I"
+                            textColor: root.textMain
+                            bgColor: root.inputBg
+                            borderColor: root.inputBorder
+                            focusBorderColor: root.inputFocus
+                            onAccepted: if (root.appController) root.appController.sendClimateRaw(text)
+                        }
+
+                        FancyButton {
+                            Layout.preferredWidth: 100
+                            Layout.preferredHeight: 30
+                            fontPixelSize: 12
+                            text: "Отправить"
+                            tone: "#64748b"; toneHover: "#475569"; tonePressed: "#334155"
+                            toolTipText: root.climate.driver === "espec"
+                                         ? "Адрес и конец строки добавляются сами"
+                                         : "Строка уходит как есть, <CR> добавляется сам"
+                            enabled: root.climate.connected === true && rawField.text.length > 0
+                            onClicked: if (root.appController) root.appController.sendClimateRaw(rawField.text)
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: {
+                                var log = root.climate.rawLog || []
+                                if (log.length === 0) return "Ответов пока нет"
+                                var last = log[0]
+                                return last.time + "  " + last.sent + "  →  " + last.answer
+                            }
+                            color: (root.climate.rawLog || []).length > 0 && !(root.climate.rawLog[0].ok) ? "#dc2626" : root.textMain
+                            font.pixelSize: 12
+                            font.family: "Consolas"
+                            elide: Text.ElideRight
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        visible: root.climate.driver === "simulator"
+                        spacing: 8
+                        Caption { text: "Ускорение времени" }
+
+                        Repeater {
+                            model: ["1", "10", "60"]
+
+                            FancyButton {
+                                required property string modelData
+                                Layout.preferredWidth: 60
+                                Layout.preferredHeight: 28
+                                fontPixelSize: 12
+                                text: "×" + modelData
+                                tone: root.settings.sim_speed === modelData ? "#9a3412" : "#94a3b8"
+                                toneHover: "#7c2d12"
+                                tonePressed: "#7c2d12"
+                                onClicked: if (root.appController) root.appController.setClimateSetting("sim_speed", modelData)
+                            }
+                        }
+
+                        FancySwitch {
+                            checked: root.settings.sim_bridge === true
+                            onToggled: if (root.appController) root.appController.setClimateFlag("sim_bridge", checked)
+                        }
+
+                        Caption {
+                            Layout.fillWidth: true
+                            text: "Задавать прибору температуру платы из имитатора (нужен тестовый режим в разделе «Прогон в камере»)"
+                            elide: Text.ElideRight
+                        }
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        visible: (root.climate.bridgeStatus || "").length > 0
+                        text: root.climate.bridgeStatus || ""
+                        color: "#9a3412"
+                        font.pixelSize: 12
+                        font.family: "Bahnschrift"
+                        wrapMode: Text.WordWrap
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        FancySwitch {
+                            checked: root.settings.autoconnect === true
+                            trackWidth: 44; trackHeight: 24
+                            onToggled: if (root.appController) root.appController.setClimateFlag("autoconnect", checked)
+                        }
+                        Caption { text: "подключаться при запуске программы" }
+                        Item { Layout.fillWidth: true }
+                        Caption { text: "Опрос, с" }
+                        SettingField { key: "poll_s"; Layout.preferredWidth: 60 }
+                    }
+
+                    // Другая камера с Modbus: редкий случай, поэтому мелко внизу.
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+                        Caption { text: "Другая камера:" }
+
+                        Repeater {
+                            model: [{ "key": "modbus_tcp", "title": "Modbus TCP" }, { "key": "modbus_rtu", "title": "Modbus RTU" }]
+
+                            FancyButton {
+                                required property var modelData
+                                Layout.preferredWidth: 100
+                                Layout.preferredHeight: 24
+                                fontPixelSize: 11
+                                text: modelData.title
+                                tone: root.climate.driver === modelData.key ? "#475569" : "#cbd5e1"
+                                toneHover: "#64748b"
+                                tonePressed: "#334155"
+                                enabled: !root.run.active
+                                onClicked: if (root.appController) root.appController.setClimateSetting("driver", modelData.key)
+                            }
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
                 }
+            }
+
+            Text {
+                Layout.fillWidth: true
+                visible: root.climate.driver === "none"
+                text: "Камера не выбрана. Нажмите на плитку нужной камеры выше. Другая камера с Modbus выбирается после этого внизу блока подключения."
+                color: root.textSoft
+                font.pixelSize: 12
+                font.family: "Bahnschrift"
+                wrapMode: Text.WordWrap
             }
 
             // --- Карта регистров ---

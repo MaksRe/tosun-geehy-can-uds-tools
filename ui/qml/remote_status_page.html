@@ -298,9 +298,11 @@
 
     const climate = s.climate || {};
     const climateRun = climate.run || {};
+    const chamberName = (climate.chamber || {}).name || "";
     $("climate").innerHTML = !climate.connected
       ? `<span class="soft">Связь с камерой не включена.</span>`
-      : `<div class="pair"><div><small>В камере</small><span class="big">${esc(climate.actualText)}</span></div>` +
+      : `<div><b>${esc(chamberName)}</b> <span class="soft">${esc((climate.chamber || {}).purpose || "")}</span></div>` +
+        `<div class="pair"><div><small>В камере</small><span class="big">${esc(climate.actualText)}</span></div>` +
         `<div><small>Уставка</small><span class="big avg">${esc(climate.setpointText)}</span></div></div>` +
         `<div>${esc(climate.runningText)} · авария: <span class="${climate.alarm ? "bad" : ""}">${esc(climate.alarmText)}</span></div>` +
         `<div class="${climate.ok ? "soft" : "bad"}">${esc(climate.status)}</div>` +
