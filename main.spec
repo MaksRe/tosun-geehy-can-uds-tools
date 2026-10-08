@@ -190,6 +190,11 @@ hiddenimports = [
     "uds.data_identifiers",
     "uds.options_catalog",
     "uds.uds_identifiers",
+    # Климатические камеры по COM-порту (ESPEC через Moxa UPort, Weiss): pyserial
+    # подключается внутри драйвера, поэтому сборке он указан явно.
+    "serial",
+    "serial.tools.list_ports",
+    "serial.tools.list_ports_windows",
 ]
 hiddenimports += collect_submodules("libTSCANAPI")
 hiddenimports += collect_submodules("ui.qml.controller")

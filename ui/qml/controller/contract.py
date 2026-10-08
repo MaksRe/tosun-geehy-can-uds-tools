@@ -191,6 +191,12 @@ class AppControllerContract:
     _climate_bridge_last_s: Any
     _climate_bridge_status: Any
     _climate_raw_log: Any
+    _climate_ports: Any
+    _climate_scan_active: Any
+    _climate_scan_status: Any
+    _climate_diag: Any
+    _climate_selftest: Any
+    _climate_moxa: Any
     _climate_timer: Any
     _climate_run_stage: Any
     _climate_run_nodes: Any

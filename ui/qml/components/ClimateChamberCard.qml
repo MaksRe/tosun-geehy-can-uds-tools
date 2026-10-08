@@ -10,6 +10,9 @@ import "."
     имитатор (отладка на столе) или другая камера с Modbus;
   - карта регистров камеры: адреса вписываются из её документации;
   - температура, уставка, пуск и авария камеры, ручная уставка;
+  - ESPEC: порт переходника Moxa UPort (auto), поиск адреса и скорости камеры,
+    ручное управление (режим, пределы аварии, холодильник, пульт, плавный
+    переход), список всех команд руководства с параметрами и журнал обмена;
   - автоматический прогон по списку температур: уставка, выход на неё,
     устоявшаяся плата, точки, следующий узел.
 
@@ -32,6 +35,38 @@ Card {
     readonly property var settings: root.climate.settings || ({})
     readonly property var run: root.climate.run || ({})
     readonly property bool modbus: root.climate.driver === "modbus_tcp" || root.climate.driver === "modbus_rtu"
+    readonly property bool espec: root.climate.driver === "espec"
+    readonly property var especState: root.climate.espec || ({})
+    // Во время автоматического прогона камерой управляет программа: ручные настройки только на паузе.
+    readonly property bool manualAllowed: !root.run.active || root.run.paused === true
+    // Выбранная команда в списке команд ESPEC и значения её параметров.
+    property var selectedCommand: null
+    property var commandValues: ({})
+    property int commandValuesRevision: 0
+
+    // Строка, которая уйдёт камере: шаблон команды с подставленными параметрами и адресом.
+    function commandPreview() {
+        var item = root.selectedCommand
+        if (!item) return ""
+        var revision = root.commandValuesRevision
+        var line = item.command
+        for (var i = 0; i < item.params.length; ++i) {
+            var name = item.params[i].name
+            var value = root.commandValues[name] !== undefined ? root.commandValues[name] : item.params[i].default
+            line = line.replace("{" + name + "}", value)
+        }
+        return (root.settings.espec_address || "1") + "," + line
+    }
+
+    // Выбор команды в списке: параметры заполняются значениями по умолчанию.
+    function selectCommand(item) {
+        var values = {}
+        for (var i = 0; i < item.params.length; ++i)
+            values[item.params[i].name] = item.params[i].default
+        root.commandValues = values
+        root.selectedCommand = item
+        root.commandValuesRevision += 1
+    }
 
     cardColor: "#ffffff"
     cardBorder: "#d6e2ef"
@@ -96,6 +131,58 @@ Card {
             var next = cycleButton.options[(index + 1) % cycleButton.options.length]
             root.appController.setClimateSetting("map." + cycleButton.entry + "." + cycleButton.field, next)
         }
+    }
+
+    // Кнопка команды ESPEC из каталога. Опасная команда (выключить панель) уходит
+    // только после второго нажатия за 4 с, чтобы камеру не погасить случайно.
+    component CmdButton: FancyButton {
+        id: cmdButton
+        property string key: ""
+        property var values: ({})
+        property bool danger: false
+        property bool setting: true
+        property bool armed: false
+        property string label: ""
+        Layout.preferredHeight: 30
+        Layout.preferredWidth: Math.max(90, cmdButton.implicitWidth)
+        fontPixelSize: 12
+        text: cmdButton.armed ? "Точно? Ещё раз" : cmdButton.label
+        tone: cmdButton.armed ? "#dc2626" : (cmdButton.danger ? "#b45309" : "#0f766e")
+        toneHover: cmdButton.armed ? "#b91c1c" : (cmdButton.danger ? "#92400e" : "#115e59")
+        tonePressed: cmdButton.armed ? "#991b1b" : (cmdButton.danger ? "#78350f" : "#134e4a")
+        enabled: root.climate.connected === true && (!cmdButton.setting || root.manualAllowed)
+        onClicked: {
+            if (!root.appController) return
+            if (cmdButton.danger && !cmdButton.armed) {
+                cmdButton.armed = true
+                armTimer.restart()
+                return
+            }
+            cmdButton.armed = false
+            root.appController.sendClimateCommand(cmdButton.key, JSON.stringify(cmdButton.values))
+        }
+        Timer { id: armTimer; interval: 4000; onTriggered: cmdButton.armed = false }
+    }
+
+    // Пара «подпись - значение» в блоке состояния ESPEC.
+    component Fact: ColumnLayout {
+        property string title: ""
+        property string value: "—"
+        property color valueColor: root.textMain
+        spacing: 0
+        Text { text: parent.title; color: root.textSoft; font.pixelSize: 11; font.family: "Bahnschrift" }
+        Text { text: parent.value; color: parent.valueColor; font.pixelSize: 14; font.bold: true; font.family: "Bahnschrift" }
+    }
+
+    // Поле ручного ввода в блоке управления: значение живёт только в окне до отправки.
+    component Input: FancyTextField {
+        Layout.preferredHeight: 30
+        Layout.preferredWidth: 70
+        horizontalAlignment: TextInput.AlignHCenter
+        textColor: root.textMain
+        bgColor: root.inputBg
+        borderColor: root.inputBorder
+        focusBorderColor: root.inputFocus
     }
 
     component Caption: Text {
@@ -314,13 +401,14 @@ Card {
                                 font.family: "Bahnschrift"
                             }
 
+                            // Перенос, а не обрезка: в причине нет связи подсказано, какую пару кабеля проверить.
                             Text {
                                 Layout.fillWidth: true
                                 text: root.climate.status || ""
-                                color: root.textSoft
+                                color: root.climate.connected && !root.climate.ok ? "#b45309" : root.textSoft
                                 font.pixelSize: 11
                                 font.family: "Bahnschrift"
-                                elide: Text.ElideRight
+                                wrapMode: Text.WordWrap
                             }
                         }
 
@@ -346,7 +434,12 @@ Card {
                         visible: root.climate.driver === "espec"
                         spacing: 8
                         Caption { text: "COM-порт" }
-                        SettingField { key: "espec_port"; Layout.preferredWidth: 90 }
+                        SettingField {
+                            key: "espec_port"
+                            Layout.preferredWidth: 90
+                            ToolTip.visible: hovered
+                            ToolTip.text: "auto - программа сама находит переходник Moxa UPort"
+                        }
                         Caption { text: "Скорость" }
                         SettingField { key: "espec_baud"; Layout.preferredWidth: 80 }
                         Caption { text: "Адрес" }
@@ -371,11 +464,86 @@ Card {
                         Item { Layout.fillWidth: true }
                     }
 
+                    // Порты компьютера: переходник Moxa UPort первым и подсвечен.
+                    RowLayout {
+                        Layout.fillWidth: true
+                        visible: root.espec
+                        spacing: 6
+                        Caption { text: "Порты:" }
+
+                        FancyButton {
+                            Layout.preferredWidth: 120
+                            Layout.preferredHeight: 26
+                            fontPixelSize: 11
+                            text: "auto (Moxa сам)"
+                            tone: root.settings.espec_port === "auto" ? "#0f766e" : "#94a3b8"
+                            toneHover: "#115e59"; tonePressed: "#134e4a"
+                            enabled: !root.run.active
+                            onClicked: if (root.appController) root.appController.setClimateSetting("espec_port", "auto")
+                        }
+
+                        Repeater {
+                            model: root.climate.ports || []
+
+                            FancyButton {
+                                required property var modelData
+                                Layout.preferredHeight: 26
+                                Layout.preferredWidth: Math.min(260, 24 + 6.5 * (modelData.device.length + 3 + modelData.description.length))
+                                fontPixelSize: 11
+                                text: (modelData.moxa ? "★ " : "") + modelData.device + " · " + modelData.description
+                                toolTipText: modelData.moxa ? "Переходник Moxa UPort" : modelData.description
+                                tone: root.settings.espec_port === modelData.device ? "#0f766e" : (modelData.moxa ? "#0e7490" : "#94a3b8")
+                                toneHover: "#115e59"; tonePressed: "#134e4a"
+                                enabled: !root.run.active
+                                onClicked: if (root.appController) root.appController.setClimateSetting("espec_port", modelData.device)
+                            }
+                        }
+
+                        FancyButton {
+                            Layout.preferredWidth: 90
+                            Layout.preferredHeight: 26
+                            fontPixelSize: 11
+                            text: "Обновить"
+                            tone: "#64748b"; toneHover: "#475569"; tonePressed: "#334155"
+                            onClicked: if (root.appController) root.appController.refreshClimatePorts()
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    // Поиск камеры: адрес, скорость и конец строки находятся сами.
+                    RowLayout {
+                        Layout.fillWidth: true
+                        visible: root.espec
+                        spacing: 8
+
+                        FancyButton {
+                            Layout.preferredWidth: 150
+                            Layout.preferredHeight: 30
+                            fontPixelSize: 12
+                            text: (root.climate.scan || {}).active ? "Ищу камеру..." : "Найти камеру"
+                            toolTipText: "Перебирает адреса 1...16 и скорости 9600, 19200, 4800 и узнаёт конец строки по ответу"
+                            tone: "#0e7490"; toneHover: "#155e75"; tonePressed: "#164e63"
+                            enabled: !root.run.active && !((root.climate.scan || {}).active)
+                            onClicked: if (root.appController) root.appController.scanClimateChamber()
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: (root.climate.scan || {}).status || "Если адрес и скорость на пульте неизвестны, нажмите «Найти камеру»."
+                            color: (root.climate.scan || {}).active ? "#0e7490" : root.textSoft
+                            font.pixelSize: 12
+                            font.family: "Bahnschrift"
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+
                     Text {
                         Layout.fillWidth: true
                         visible: root.climate.driver === "espec"
-                        text: "Переходник USB-RS-422/485 на 4 провода: TX± к контактам 3-4 камеры (RD±), RX± к 1-2 (SD±), земля к 5. "
-                              + "На пульте камеры: те же адрес, скорость и конец строки, 8 бит, без чётности, защита от удалённого управления выключена."
+                        text: "Moxa UPort 1150: в диспетчере устройств у порта выберите Interface = RS-422 (или RS-485 4W), из коробки там RS-232. "
+                              + "Кабель от клеммника переходника Moxa (TB) к DB9 камеры: клемма 1 TxD+ → 3 RD+, 2 TxD− → 4 RD−, "
+                              + "3 RxD+ → 1 SD+, 4 RxD− → 2 SD−, 5 GND → 5. Соединять по знаку «+»/«−», буквы A/B у Moxa и ESPEC противоположны. "
+                              + "На пульте камеры: 8 бит, без чётности, защита от удалённого управления выключена."
                         color: root.textSoft
                         font.pixelSize: 11
                         font.family: "Bahnschrift"
@@ -437,10 +605,10 @@ Card {
                         Item { Layout.fillWidth: true }
                     }
 
-                    // Строка камере как есть: проверка связи на месте.
+                    // Строка камере Weiss как есть: проверка связи на месте. У ESPEC она в блоке «Команды камеры».
                     RowLayout {
                         Layout.fillWidth: true
-                        visible: root.climate.driver === "espec" || root.climate.driver === "simcon_ascii2"
+                        visible: root.climate.driver === "simcon_ascii2"
                         spacing: 8
                         Caption { text: "Команда камере" }
 
@@ -735,6 +903,556 @@ Card {
                         color: root.textSoft
                         font.pixelSize: 12
                         font.family: "Bahnschrift"
+                        elide: Text.ElideRight
+                    }
+                }
+            }
+
+            // --- Ручное управление камерой ESPEC ---
+            Block {
+                visible: root.espec
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    BlockTitle { text: "Управление камерой ESPEC" }
+                    Item { Layout.fillWidth: true }
+                    Text {
+                        visible: !root.manualAllowed
+                        text: "Идёт автопрогон: настройки камеры меняются только на паузе"
+                        color: "#b45309"
+                        font.pixelSize: 12
+                        font.bold: true
+                        font.family: "Bahnschrift"
+                    }
+                }
+
+                // Состояние камеры из автоопроса: режим, пределы, нагреватель, холодильник, пульт.
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 24
+                    Fact { title: "Режим"; value: root.especState.modeText || "—"
+                        valueColor: root.especState.powerOff ? "#64748b" : (root.especState.program ? "#7c3aed" : "#0f766e") }
+                    Fact { title: "Верхний предел аварии"; value: root.especState.highText || "—" }
+                    Fact { title: "Нижний предел аварии"; value: root.especState.lowText || "—" }
+                    Fact { title: "Нагреватель"; value: root.especState.heaterText || "—" }
+                    Fact { title: "Холодильник"; value: root.especState.refText || "—" }
+                    Fact { title: "Пульт"; value: root.especState.keyText || "—"
+                        valueColor: root.especState.keyProtect ? "#b45309" : root.textMain }
+                    Item { Layout.fillWidth: true }
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    visible: (root.especState.programText || "").length > 0 || (root.especState.alarmsText || "").length > 0
+                    text: ((root.especState.programText || "").length > 0 ? "Программа: " + root.especState.programText + ".  " : "")
+                          + ((root.especState.alarmsText || "").length > 0 ? "Номера аварий: " + root.especState.alarmsText + "." : "")
+                    color: (root.especState.alarmsText || "").length > 0 ? "#dc2626" : "#7c3aed"
+                    font.pixelSize: 12
+                    font.family: "Bahnschrift"
+                    wrapMode: Text.WordWrap
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: "Контроллер: " + (root.especState.identity || "—")
+                    color: root.textSoft
+                    font.pixelSize: 11
+                    font.family: "Bahnschrift"
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Caption { text: "Режим"; Layout.preferredWidth: 130 }
+                    CmdButton { key: "mode_constant"; label: "Пуск" }
+                    CmdButton { key: "mode_standby"; label: "Стоп" }
+                    CmdButton { key: "power_on"; label: "Включить панель"; Layout.preferredWidth: 140 }
+                    CmdButton { key: "power_off"; label: "Выключить панель"; danger: true; Layout.preferredWidth: 150 }
+                    Item { Layout.fillWidth: true }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Caption { text: "Пределы аварии, °C"; Layout.preferredWidth: 130 }
+                    Caption { text: "верх" }
+                    Input { id: highInput; placeholderText: "100,0" }
+                    CmdButton { key: "set_high"; label: "Задать"; values: ({ "high": highInput.text })
+                        enabled: root.climate.connected === true && root.manualAllowed && highInput.text.length > 0 }
+                    Caption { text: "низ" }
+                    Input { id: lowInput; placeholderText: "-50,0" }
+                    CmdButton { key: "set_low"; label: "Задать"; values: ({ "low": lowInput.text })
+                        enabled: root.climate.connected === true && root.manualAllowed && lowInput.text.length > 0 }
+                    Item { Layout.fillWidth: true }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Caption { text: "Холодильник"; Layout.preferredWidth: 130 }
+                    CmdButton { key: "set_ref"; label: "Авто"; values: ({ "ref": "9" }) }
+                    CmdButton { key: "set_ref"; label: "Выключить"; values: ({ "ref": "0" }) }
+                    CmdButton { key: "set_ref"; label: "Включить"; values: ({ "ref": "1" }) }
+                    Caption { text: "Пульт"; Layout.leftMargin: 20 }
+                    CmdButton { key: "key_on"; label: "Заблокировать"; Layout.preferredWidth: 130 }
+                    CmdButton { key: "key_off"; label: "Разблокировать"; Layout.preferredWidth: 130 }
+                    Item { Layout.fillWidth: true }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Caption { text: "Плавный переход"; Layout.preferredWidth: 130 }
+                    Caption { text: "от, °C" }
+                    Input { id: rampStart; text: "25" }
+                    Caption { text: "до, °C" }
+                    Input { id: rampEnd; text: "-40" }
+                    Caption { text: "за, ч:мм" }
+                    Input { id: rampTime; text: "1:00" }
+                    CmdButton { key: "run_prgm"; label: "Запустить"
+                        values: ({ "start": rampStart.text, "end": rampEnd.text, "time": rampTime.text }) }
+                    Item { Layout.fillWidth: true }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Caption { text: "Программа"; Layout.preferredWidth: 130 }
+                    CmdButton { key: root.especState.paused ? "prgm_continue" : "prgm_pause"
+                        label: root.especState.paused ? "Продолжить" : "Пауза"
+                        enabled: root.climate.connected === true && root.manualAllowed && root.especState.program === true }
+                    CmdButton { key: "prgm_end_hold"; label: "Закончить, держать уставку"; Layout.preferredWidth: 210
+                        enabled: root.climate.connected === true && root.manualAllowed && root.especState.program === true }
+                    CmdButton { key: "prgm_end_standby"; label: "Закончить и остановить"; Layout.preferredWidth: 190
+                        enabled: root.climate.connected === true && root.manualAllowed && root.especState.program === true }
+                    Item { Layout.fillWidth: true }
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: "Плавный переход - удалённая программа камеры: температура меняется от начальной к конечной за заданное время, "
+                          + "потом конечная держится. Все команды и ответы камеры видны в журнале обмена ниже."
+                    color: root.textSoft
+                    font.pixelSize: 11
+                    font.family: "Bahnschrift"
+                    wrapMode: Text.WordWrap
+                }
+            }
+
+            // --- Список всех команд ESPEC и журнал обмена ---
+            Block {
+                visible: root.espec
+
+                BlockTitle { text: "Команды камеры ESPEC" }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 12
+
+                    // Список команд по разделам руководства.
+                    Rectangle {
+                        Layout.preferredWidth: 330
+                        Layout.preferredHeight: 340
+                        radius: 8
+                        color: "#ffffff"
+                        border.width: 1
+                        border.color: "#d6e2ef"
+                        clip: true
+
+                        ListView {
+                            id: commandList
+                            anchors.fill: parent
+                            anchors.margins: 4
+                            model: root.climate.commands || []
+                            boundsBehavior: Flickable.StopAtBounds
+                            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                            // Строка команды; над первой командой раздела - его заголовок.
+                            delegate: Column {
+                                id: commandRow
+                                required property var modelData
+                                required property int index
+                                readonly property bool current: root.selectedCommand !== null && root.selectedCommand.key === modelData.key
+                                readonly property bool firstInGroup: commandRow.index === 0
+                                    || (root.climate.commands || [])[commandRow.index - 1].group !== commandRow.modelData.group
+                                width: commandList.width - 10
+
+                                Text {
+                                    visible: commandRow.firstInGroup
+                                    width: commandRow.width
+                                    topPadding: 6
+                                    bottomPadding: 2
+                                    leftPadding: 6
+                                    text: commandRow.modelData.group
+                                    color: commandRow.modelData.newOnly ? "#94a3b8" : "#0f766e"
+                                    font.pixelSize: 12
+                                    font.bold: true
+                                    font.family: "Bahnschrift"
+                                }
+
+                                Rectangle {
+                                    width: commandRow.width
+                                    height: 26
+                                    radius: 6
+                                    color: commandRow.current ? "#ccfbf1" : (rowMouse.containsMouse ? "#f1f5f9" : "transparent")
+
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 10
+                                        anchors.rightMargin: 6
+                                        spacing: 6
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: commandRow.modelData.title
+                                            color: commandRow.modelData.newOnly ? "#94a3b8" : (commandRow.modelData.danger ? "#b45309" : root.textMain)
+                                            font.pixelSize: 12
+                                            font.family: "Bahnschrift"
+                                            elide: Text.ElideRight
+                                        }
+                                        Text {
+                                            text: commandRow.modelData.command.split(",")[0]
+                                            color: root.textSoft
+                                            font.pixelSize: 11
+                                            font.family: "Consolas"
+                                        }
+                                    }
+
+                                    MouseArea {
+                                        id: rowMouse
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: root.selectCommand(commandRow.modelData)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Выбранная команда: что делает, параметры, итоговая строка и отправка.
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.alignment: Qt.AlignTop
+                        spacing: 8
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: root.selectedCommand ? root.selectedCommand.title : "Выберите команду в списке слева"
+                            color: root.textMain
+                            font.pixelSize: 15
+                            font.bold: true
+                            font.family: "Bahnschrift"
+                            wrapMode: Text.WordWrap
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            visible: root.selectedCommand !== null
+                            text: root.selectedCommand ? root.selectedCommand.hint : ""
+                            color: root.textSoft
+                            font.pixelSize: 12
+                            font.family: "Bahnschrift"
+                            wrapMode: Text.WordWrap
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            visible: root.selectedCommand !== null && root.selectedCommand.newOnly === true
+                            text: "Эта команда есть только у новой серии контроллера (модели на «2»). MC-811P ответит «камера не знает такой команды»."
+                            color: "#b45309"
+                            font.pixelSize: 12
+                            font.family: "Bahnschrift"
+                            wrapMode: Text.WordWrap
+                        }
+
+                        Repeater {
+                            model: root.selectedCommand ? root.selectedCommand.params : []
+
+                            RowLayout {
+                                required property var modelData
+                                spacing: 8
+                                Caption { text: modelData.label; Layout.preferredWidth: 150 }
+                                FancyTextField {
+                                    Layout.preferredWidth: 120
+                                    Layout.preferredHeight: 30
+                                    horizontalAlignment: TextInput.AlignHCenter
+                                    textColor: root.textMain
+                                    bgColor: root.inputBg
+                                    borderColor: root.inputBorder
+                                    focusBorderColor: root.inputFocus
+                                    Component.onCompleted: text = root.commandValues[modelData.name] !== undefined
+                                                                  ? root.commandValues[modelData.name] : modelData.default
+                                    onTextChanged: {
+                                        root.commandValues[modelData.name] = text
+                                        root.commandValuesRevision += 1
+                                    }
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: root.selectedCommand !== null
+                            spacing: 8
+                            Caption { text: "Уйдёт камере:" }
+                            Text {
+                                Layout.fillWidth: true
+                                text: root.commandPreview()
+                                color: "#0f766e"
+                                font.pixelSize: 13
+                                font.family: "Consolas"
+                                elide: Text.ElideRight
+                            }
+                        }
+
+                        CmdButton {
+                            visible: root.selectedCommand !== null
+                            Layout.preferredWidth: 160
+                            key: root.selectedCommand ? root.selectedCommand.key : ""
+                            label: "Отправить"
+                            danger: root.selectedCommand ? root.selectedCommand.danger === true : false
+                            setting: root.selectedCommand ? root.selectedCommand.setting === true : false
+                            values: {
+                                var revision = root.commandValuesRevision
+                                var copy = {}
+                                for (var name in root.commandValues) copy[name] = root.commandValues[name]
+                                return copy
+                            }
+                        }
+
+                        Item { Layout.preferredHeight: 6 }
+
+                        // Любая строка вручную: для команд, которых нет в списке.
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+                            Caption { text: "Своя строка" }
+
+                            FancyTextField {
+                                id: especRawField
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 30
+                                placeholderText: "например TEMP? - адрес и конец строки добавятся сами"
+                                textColor: root.textMain
+                                bgColor: root.inputBg
+                                borderColor: root.inputBorder
+                                focusBorderColor: root.inputFocus
+                                onAccepted: if (root.appController) root.appController.sendClimateRaw(text)
+                            }
+
+                            FancyButton {
+                                Layout.preferredWidth: 100
+                                Layout.preferredHeight: 30
+                                fontPixelSize: 12
+                                text: "Отправить"
+                                tone: "#64748b"; toneHover: "#475569"; tonePressed: "#334155"
+                                enabled: root.climate.connected === true && especRawField.text.length > 0
+                                onClicked: if (root.appController) root.appController.sendClimateRaw(especRawField.text)
+                            }
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: root.climate.commandStatus || ""
+                            color: root.textSoft
+                            font.pixelSize: 12
+                            font.family: "Bahnschrift"
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+                }
+
+                // Журнал обмена: что ушло, что ответила камера и что это значит.
+                Text {
+                    text: "Журнал обмена (последние 50 команд, новые сверху)"
+                    color: root.textMain
+                    font.pixelSize: 12
+                    font.bold: true
+                    font.family: "Bahnschrift"
+                }
+
+                Text {
+                    visible: (root.climate.rawLog || []).length === 0
+                    text: "Команд пока не было. Автоопрос камеры в журнал не пишется, только команды из окна."
+                    color: root.textSoft
+                    font.pixelSize: 11
+                    font.family: "Bahnschrift"
+                }
+
+                Repeater {
+                    model: root.climate.rawLog || []
+
+                    RowLayout {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        spacing: 10
+                        Text { text: modelData.time; color: root.textSoft; font.pixelSize: 12; font.family: "Consolas" }
+                        Text { text: modelData.sent; color: root.textMain; font.pixelSize: 12; font.family: "Consolas"; Layout.preferredWidth: 260; elide: Text.ElideRight }
+                        // Без пояснения (отказ, неизвестный ответ) ответ занимает всю оставшуюся ширину.
+                        Text { text: "→ " + modelData.answer; color: modelData.ok ? "#0f766e" : "#dc2626"; font.pixelSize: 12; font.family: "Consolas"
+                            Layout.preferredWidth: (modelData.explain || "").length > 0 ? 300 : -1
+                            Layout.fillWidth: (modelData.explain || "").length === 0
+                            // Причину отказа видно целиком: в ней подсказка, что проверить.
+                            elide: modelData.ok ? Text.ElideRight : Text.ElideNone
+                            wrapMode: modelData.ok ? Text.NoWrap : Text.WordWrap }
+                        Text { Layout.fillWidth: true; visible: (modelData.explain || "").length > 0; text: modelData.explain || ""
+                            color: root.textSoft; font.pixelSize: 12; font.family: "Bahnschrift"; elide: Text.ElideRight }
+                    }
+                }
+            }
+
+            // --- Диагностика связи: журнал, проверка, отчёт для разбора ---
+            Block {
+                id: diagBlock
+                visible: root.climate.driver !== "none"
+                readonly property var diag: root.climate.diag || ({})
+                readonly property var selftest: root.climate.selftest || ({})
+                readonly property var moxaCheck: root.climate.moxaCheck || ({})
+
+                BlockTitle { text: "Диагностика связи" }
+
+                Text {
+                    Layout.fillWidth: true
+                    visible: (diagBlock.moxaCheck.text || "").length > 0
+                    text: (diagBlock.moxaCheck.ok ? "✓ " : "⚠ ") + (diagBlock.moxaCheck.text || "")
+                    color: diagBlock.moxaCheck.ok ? "#15803d" : "#dc2626"
+                    font.pixelSize: 12
+                    font.bold: !diagBlock.moxaCheck.ok
+                    font.family: "Bahnschrift"
+                    wrapMode: Text.WordWrap
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: "Счётчики сеанса: " + (diagBlock.diag.stats || "—")
+                          + ".  Последний ответ: " + (diagBlock.diag.lastOk || "—")
+                    color: root.textMain
+                    font.pixelSize: 12
+                    font.family: "Bahnschrift"
+                    wrapMode: Text.WordWrap
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    visible: (diagBlock.diag.lastError || "").length > 0
+                    text: "Последняя ошибка (" + (diagBlock.diag.lastErrorTime || "") + "): " + (diagBlock.diag.lastError || "")
+                    color: "#b45309"
+                    font.pixelSize: 12
+                    font.family: "Bahnschrift"
+                    wrapMode: Text.WordWrap
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    FancyButton {
+                        Layout.preferredWidth: 160
+                        Layout.preferredHeight: 30
+                        fontPixelSize: 12
+                        text: diagBlock.selftest.active ? "Проверяю..." : "Проверить связь"
+                        toolTipText: "Отправляет камере набор запросов и показывает ответ, задержку и итог каждого"
+                        tone: "#0e7490"; toneHover: "#155e75"; tonePressed: "#164e63"
+                        enabled: root.climate.connected === true && !diagBlock.selftest.active
+                        onClicked: if (root.appController) root.appController.runClimateSelftest()
+                    }
+
+                    FancyButton {
+                        Layout.preferredWidth: 230
+                        Layout.preferredHeight: 30
+                        fontPixelSize: 12
+                        text: "Сохранить отчёт для разбора"
+                        toolTipText: "Один файл: окружение, настройки, порты, режим Moxa, состояние, журнал и последние обмены"
+                        tone: "#7c3aed"; toneHover: "#6d28d9"; tonePressed: "#5b21b6"
+                        onClicked: if (root.appController) root.appController.saveClimateReport()
+                    }
+
+                    FancyButton {
+                        Layout.preferredWidth: 190
+                        Layout.preferredHeight: 30
+                        fontPixelSize: 12
+                        text: "Открыть папку журналов"
+                        tone: "#64748b"; toneHover: "#475569"; tonePressed: "#334155"
+                        onClicked: if (root.appController) root.appController.openClimateLogs()
+                    }
+
+                    FancySwitch {
+                        checked: root.settings.diag_verbose === true
+                        trackWidth: 44; trackHeight: 24
+                        onToggled: if (root.appController) root.appController.setClimateFlag("diag_verbose", checked)
+                    }
+                    Caption {
+                        Layout.fillWidth: true
+                        text: "каждый обмен в файл (иначе - первые обмены сеанса и всё вокруг ошибок)"
+                        elide: Text.ElideRight
+                    }
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: "Журнал: " + (diagBlock.diag.path || "—")
+                          + ((diagBlock.diag.report || "").length > 0 ? "\nПоследний отчёт: " + diagBlock.diag.report : "")
+                    color: root.textSoft
+                    font.pixelSize: 11
+                    font.family: "Consolas"
+                    wrapMode: Text.WrapAnywhere
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    visible: (diagBlock.diag.writeError || "").length > 0
+                    text: "⚠ " + (diagBlock.diag.writeError || "")
+                    color: "#dc2626"
+                    font.pixelSize: 12
+                    font.family: "Bahnschrift"
+                    wrapMode: Text.WordWrap
+                }
+
+                // Итог проверки связи: по каждому запросу ответ, задержка и смысл словами.
+                Text {
+                    Layout.fillWidth: true
+                    visible: (diagBlock.selftest.text || "").length > 0
+                    text: "Проверка связи: " + (diagBlock.selftest.text || "")
+                    color: root.textMain
+                    font.pixelSize: 12
+                    font.bold: true
+                    font.family: "Bahnschrift"
+                }
+
+                Repeater {
+                    model: diagBlock.selftest.results || []
+
+                    RowLayout {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        spacing: 10
+                        Text { text: modelData.ok ? "✓" : "✗"; color: modelData.ok ? "#15803d" : "#dc2626"; font.pixelSize: 13; font.bold: true }
+                        Text { text: modelData.query; color: root.textMain; font.pixelSize: 12; font.family: "Consolas"; Layout.preferredWidth: 110 }
+                        Text { text: modelData.ms + " мс"; color: root.textSoft; font.pixelSize: 12; font.family: "Consolas"; Layout.preferredWidth: 70 }
+                        Text { Layout.fillWidth: true; color: modelData.ok ? "#0f766e" : "#dc2626"; font.pixelSize: 12; font.family: "Consolas"
+                            text: modelData.answer + ((modelData.explain || "").length > 0 ? "   (" + modelData.explain + ")" : "")
+                            wrapMode: Text.WordWrap }
+                    }
+                }
+
+                Text {
+                    text: "Последние события журнала (новые сверху)"
+                    color: root.textMain
+                    font.pixelSize: 12
+                    font.bold: true
+                    font.family: "Bahnschrift"
+                }
+
+                Repeater {
+                    model: (diagBlock.diag.events || []).slice(0, 15)
+
+                    Text {
+                        required property string modelData
+                        Layout.fillWidth: true
+                        text: modelData
+                        color: modelData.indexOf("[ERROR]") >= 0 ? "#dc2626" : (modelData.indexOf("[WARN") >= 0 ? "#b45309" : root.textSoft)
+                        font.pixelSize: 11
+                        font.family: "Consolas"
                         elide: Text.ElideRight
                     }
                 }

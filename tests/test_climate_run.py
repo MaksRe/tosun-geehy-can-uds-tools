@@ -72,6 +72,11 @@ class _ClimateStub(AppControllerClimateChamberMixin, _TestStub):
         self._climate_bridge_last_s = 0.0
         self._climate_bridge_status = ""
         self._climate_raw_log = deque(maxlen=20)
+        self._climate_ports = []
+        self._climate_scan_active = False
+        self._climate_scan_status = ""
+        # Журнал диагностики только в памяти: проверки не пишут файлов.
+        self._climate_diag_reset(None)
         self._climate_run_reset()
         self.clock = [0.0]
         self.sim = SimulatedChamber(clock=lambda: self.clock[0], seed=3)

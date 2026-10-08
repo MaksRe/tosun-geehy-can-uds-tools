@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import sys
 import threading
 import time
 from collections import deque
@@ -41,10 +42,22 @@ from ui.qml.climate_chamber import (
     DRIVER_NONE,
     DRIVER_SIMCON,
     DRIVER_SIMULATOR,
+    ESPEC_COMMANDS,
+    ESPEC_COMMANDS_BY_KEY,
+    PORT_AUTO,
+    ChamberError,
     ChamberLink,
     ModbusMap,
+    build_espec_command,
+    describe_espec_answer,
+    espec_is_setting,
+    espec_mode_text,
+    list_serial_ports,
     make_driver,
+    reading_text,
+    resolve_port,
 )
+from ui.qml.climate_diag import ChamberDiagLog, environment_info, moxa_registry_info
 
 from .contract import AppControllerContract
 from .stability import is_stable, rate_and_spread
@@ -91,6 +104,23 @@ CHAMBERS = {
     },
 }
 DRIVER_TITLES = {DRIVER_NONE: "не выбрана", **{key: value["name"] for key, value in CHAMBERS.items()}}
+
+# Список команд ESPEC для окна: каталог драйвера в виде, удобном QML.
+ESPEC_COMMAND_LIST = [
+    {
+        "key": item["key"],
+        "group": item["group"],
+        "title": item["title"],
+        "hint": item.get("hint", ""),
+        "command": item["command"],
+        "params": [{"name": param["name"], "label": param["label"], "default": str(param.get("default", ""))}
+                   for param in item.get("params", [])],
+        "setting": espec_is_setting(item["command"]),
+        "danger": bool(item.get("danger")),
+        "newOnly": bool(item.get("new_only")),
+    }
+    for item in ESPEC_COMMANDS
+]
 
 
 def _c(value) -> str:
@@ -154,7 +184,9 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         self._climate_bridge_last_s = 0.0
         self._climate_bridge_status = ""
         # Строки оператора камере и её ответы: для проверки связи на месте.
-        self._climate_raw_log: deque = deque(maxlen=20)
+        self._climate_raw_log: deque = deque(maxlen=50)
+        self._climate_ports_reset()
+        self._climate_diag_reset(self._climate_logs_directory())
 
         self._climate_run_reset()
 
@@ -165,6 +197,43 @@ class AppControllerClimateChamberMixin(AppControllerContract):
 
         if self._climate_settings["autoconnect"] and self._climate_settings["driver"] != DRIVER_NONE:
             self._climate_connect()
+
+    def _climate_ports_reset(self):
+        """COM-порты компьютера и поиск камеры ESPEC: исходное состояние и первый список портов."""
+        self._climate_ports: list[dict] = []
+        self._climate_scan_active = False
+        self._climate_scan_status = ""
+        try:
+            self._climate_ports = list_serial_ports()
+        except Exception:  # noqa: BLE001 - без списка портов программа работает, порт вписывается руками
+            self._climate_ports = []
+
+    def _climate_logs_directory(self) -> pathlib.Path:
+        """Папка журналов камеры: logs/chamber рядом с программой.
+
+        У собранной программы - рядом с exe, а не во внутренней папке _internal:
+        там журналы не видно и они пропадают при замене версии.
+        """
+        if getattr(sys, "frozen", False):
+            return pathlib.Path(sys.executable).resolve().parent / "logs" / "chamber"
+        root = getattr(self, "_project_root_directory", None) or pathlib.Path.cwd()
+        return pathlib.Path(root) / "logs" / "chamber"
+
+    def _climate_diag_reset(self, directory: pathlib.Path | None):
+        """Журнал диагностики связи, режим портов Moxa из реестра и итог проверки связи."""
+        self._climate_diag = ChamberDiagLog(directory)
+        self._climate_diag.verbose = bool(self._climate_settings.get("diag_verbose", False))
+        self._climate_selftest = {"active": False, "text": "", "results": []}
+        self._climate_moxa: list[dict] = []
+        try:
+            self._climate_moxa = moxa_registry_info()
+        except Exception:  # noqa: BLE001 - реестр нужен только для подсказки
+            self._climate_moxa = []
+
+    def _climate_diag_event(self, kind: str, text: str, level: str = "INFO"):
+        diag = getattr(self, "_climate_diag", None)
+        if diag is not None:
+            diag.event(kind, text, level)
 
     def _climate_run_reset(self):
         """Прогон не идёт: всё, что относится к нему, в исходном виде."""
@@ -199,7 +268,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             "rtu_parity": "N",
             "rtu_stopbits": 1,
             # ESPEC MC-811P: адрес 1...16, разделитель строк как в меню пульта камеры.
-            "espec_port": "COM5",
+            # Порт «auto» - программа сама находит переходник Moxa UPort 1150.
+            "espec_port": PORT_AUTO,
             "espec_baud": 9600,
             "espec_address": 1,
             "espec_delimiter": "CRLF",
@@ -222,6 +292,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             "settle_timeout_min": 180.0,
             "finish_setpoint": 25.0,
             "finish_stop": False,
+            # Журнал диагностики: каждый обмен байтами в файл (иначе - только вокруг ошибок).
+            "diag_verbose": False,
         }
 
     def _climate_settings_path(self) -> pathlib.Path:
@@ -301,7 +373,10 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 return False
             if settings[key] == value:
                 return True
+            self._climate_diag_event("SET", f"{key}: {settings[key]} → {value}")
             settings[key] = value
+            if key == "diag_verbose" and getattr(self, "_climate_diag", None) is not None:
+                self._climate_diag.verbose = bool(value)
             reconnect = key in ("driver", "poll_s", "unit", "tcp_host", "tcp_port", "rtu_port", "rtu_baud",
                                 "rtu_parity", "rtu_stopbits", "sim_speed", "simcon_address",
                                 "espec_port", "espec_baud", "espec_address", "espec_delimiter",
@@ -323,7 +398,11 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             self._climate_ok = False
             self.climateChanged.emit()
             return False
-        self._climate_link = ChamberLink(driver, float(self._climate_settings["poll_s"]), self._climate_queue_state)
+        diag = getattr(self, "_climate_diag", None)
+        if diag is not None:
+            diag.session_start(driver.title, self._climate_session_info())
+        self._climate_link = ChamberLink(driver, float(self._climate_settings["poll_s"]), self._climate_queue_state,
+                                         diag=diag)
         self._climate_apply_live()
         self._climate_status = f"Подключаюсь: {driver.title}..."
         self._climate_ok = False
@@ -336,6 +415,13 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         self._climate_link = None
         if link is not None:
             link.close()
+        if self._climate_scan_active:
+            self._climate_scan_active = False
+            self._climate_scan_status = "Поиск камеры прерван."
+        if getattr(self, "_climate_selftest", {}).get("active"):
+            self._climate_selftest = {"active": False, "text": "Проверка связи прервана.", "results": []}
+        if link is not None and not quiet:
+            self._climate_diag_event("LINK", "отключено оператором")
         self._climate_reading = None
         self._climate_apply_live()
         if not quiet:
@@ -373,12 +459,21 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                     self._climate_event("связь с камерой восстановлена.", "ok")
                 self._climate_watch_alarm()
             elif state.get("kind") == "raw":
+                sent, answer = str(state.get("sent", "")), str(state.get("text", ""))
+                explain = ""
+                if state.get("ok") and self._climate_settings["driver"] == DRIVER_ESPEC:
+                    explain = describe_espec_answer(sent, answer)
                 self._climate_raw_log.appendleft({
                     "time": time.strftime("%H:%M:%S"),
-                    "sent": str(state.get("sent", "")),
-                    "answer": str(state.get("text", "")),
+                    "sent": sent,
+                    "answer": answer,
+                    "explain": explain,
                     "ok": bool(state.get("ok")),
                 })
+            elif state.get("kind") == "scan":
+                self._climate_take_scan(state)
+            elif state.get("kind") == "selftest":
+                self._climate_take_selftest(state)
             elif state.get("kind") == "reading":
                 self._climate_status = f"Нет связи с камерой: {state.get('text')}. Повторяю..."
                 self._climate_ok = False
@@ -388,6 +483,25 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 if not state.get("ok"):
                     self._climate_event(f"камера не выполнила команду: {state.get('text')}.", "bad")
         return bool(incoming)
+
+    def _climate_take_scan(self, state: dict):
+        """Ход и итог поиска камеры. Найденные настройки сохраняются без переподключения: связь уже на них."""
+        self._climate_scan_status = str(state.get("text", ""))
+        if not state.get("done"):
+            return
+        self._climate_scan_active = False
+        found = state.get("found")
+        if state.get("ok") and found:
+            settings = self._climate_settings
+            settings["espec_baud"] = int(found["baud"])
+            settings["espec_address"] = int(found["address"])
+            settings["espec_delimiter"] = str(found["delimiter"])
+            self._climate_save_settings()
+            self._climate_scan_status = (f"Камера найдена: адрес {found['address']}, {found['baud']} бод, конец строки "
+                                         f"{found['delimiter']}. Настройки сохранены. Прошивка: {found.get('rom', '')}")
+            self._climate_event(f"камера ESPEC найдена: адрес {found['address']}, {found['baud']} бод.", "ok")
+        elif not state.get("ok"):
+            self._climate_scan_status = f"Камера не найдена: {state.get('text')}."
 
     def _climate_fresh(self, now: float | None = None) -> bool:
         now = time.monotonic() if now is None else now
@@ -443,8 +557,212 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             self._climate_command_status = "Камера не подключена."
             self.climateChanged.emit()
             return False
-        self._climate_link.command("raw", line)
-        self._climate_command_status = f"Отправляю «{line}»: ответ придёт не раньше чем через 5 с после прошлой строки."
+        if self._climate_settings["driver"] == DRIVER_ESPEC:
+            head, _, rest = line.partition(",")
+            command = rest.strip() if rest and head.strip().isdigit() else line
+            if espec_is_setting(command) and not self._climate_manual_allowed():
+                return False
+            self._climate_link.command("raw", line)
+            self._climate_command_status = f"Отправляю «{line}»..."
+        else:
+            self._climate_link.command("raw", line)
+            self._climate_command_status = f"Отправляю «{line}»: ответ придёт не раньше чем через 5 с после прошлой строки."
+        self.climateChanged.emit()
+        return True
+
+    def _climate_manual_allowed(self) -> bool:
+        """Можно ли оператору менять настройки камеры: во время прогона камерой управляет программа."""
+        if self._climate_run_stage and not self._climate_run_paused:
+            self._climate_command_status = ("Идёт автоматический прогон: камерой управляет программа. "
+                                            "Поставьте прогон на паузу или остановите его.")
+            self._climate_diag_event("CMD", "ручная команда не отправлена: идёт автоматический прогон", "WARN")
+            self.climateChanged.emit()
+            return False
+        return True
+
+    def _climate_send_espec(self, key: str, values_json: str = "") -> bool:
+        """Команда камере ESPEC из каталога: кнопки ручного управления и список команд окна.
+
+        Параметры приходят из окна строкой JSON. Строку команды собирает и
+        проверяет драйвер, уставки дополнительно сверяются с пределами из настроек.
+        """
+        if self._climate_settings["driver"] != DRIVER_ESPEC or self._climate_link is None:
+            self._climate_command_status = "Сначала подключите камеру ESPEC."
+            self.climateChanged.emit()
+            return False
+        try:
+            values = json.loads(values_json) if str(values_json).strip() else {}
+        except ValueError:
+            values = {}
+        if not isinstance(values, dict):
+            values = {}
+        try:
+            command = build_espec_command(str(key), values)
+        except ChamberError as error:
+            self._climate_command_status = f"Команда не отправлена: {error}."
+            self._climate_diag_event("CMD", f"«{key}» не отправлена: {error}; параметры {values}", "WARN")
+            self.climateChanged.emit()
+            return False
+        if espec_is_setting(command):
+            if not self._climate_manual_allowed():
+                return False
+            item = ESPEC_COMMANDS_BY_KEY[str(key)]
+            low, high = float(self._climate_settings["min_c"]), float(self._climate_settings["max_c"])
+            for param in item.get("params", []):
+                if param["name"] not in ("temp", "start", "end"):
+                    continue
+                value = float(str(values.get(param["name"], param.get("default"))).replace(",", "."))
+                if not (low <= value <= high):
+                    self._climate_command_status = (f"«{param['label']}» вне допустимых пределов "
+                                                    f"{low:+.0f}...{high:+.0f} °C (пределы уставки в настройках).")
+                    self._climate_diag_event("CMD", f"«{command}» не отправлена: {self._climate_command_status}", "WARN")
+                    self.climateChanged.emit()
+                    return False
+        self._climate_link.command("raw", command)
+        self._climate_command_status = f"Отправляю «{command}»..."
+        self.climateChanged.emit()
+        return True
+
+    def _climate_refresh_ports(self):
+        """Обновляет список COM-портов и режим портов Moxa из реестра: переходник Moxa UPort первым."""
+        try:
+            self._climate_ports = list_serial_ports()
+        except Exception:  # noqa: BLE001
+            self._climate_ports = []
+        try:
+            self._climate_moxa = moxa_registry_info()
+        except Exception:  # noqa: BLE001
+            self._climate_moxa = []
+        self._climate_diag_event("PORTS", f"порты: {self._climate_ports}; Moxa в реестре: "
+                                          f"{[(item['port'], item['interface']) for item in self._climate_moxa]}")
+        self.climateChanged.emit()
+
+    # ------------------------------------------------------------------ диагностика
+
+    def _climate_session_info(self) -> dict:
+        """Всё об окружении и настройках для начала сеанса в журнале и для отчёта."""
+        root = getattr(self, "_project_root_directory", None)
+        return {
+            "окружение": environment_info(pathlib.Path(root) if root else None),
+            "настройки": {key: value for key, value in self._climate_settings.items() if key != "map"},
+            "COM-порты": self._climate_ports,
+            "Moxa в реестре": [{key: item[key] for key in ("port", "interface", "interface_code", "values")}
+                               for item in self._climate_moxa],
+        }
+
+    def _climate_moxa_check(self) -> dict:
+        """Режим порта Moxa, который выбран для ESPEC: годится ли он для четырёх проводов."""
+        if self._climate_settings["driver"] != DRIVER_ESPEC or not self._climate_moxa:
+            return {"text": "", "ok": True}
+        link = self._climate_link
+        port = str(getattr(link.driver, "port", "")) if link is not None else ""
+        if not port or port.lower() == PORT_AUTO:
+            try:
+                port = resolve_port(self._climate_settings["espec_port"], lambda: [])
+            except ChamberError:
+                port = ""
+            if not port or port.lower() == PORT_AUTO:
+                moxa = [item["device"] for item in self._climate_ports if item.get("moxa")]
+                port = moxa[0] if moxa else ""
+        if not port:
+            # Переходник есть только в реестре: Windows его помнит, но сейчас он не вставлен.
+            known = ", ".join(f"{entry['port']} ({entry['interface']})" for entry in self._climate_moxa)
+            return {"text": f"Moxa UPort сейчас не подключён к USB. Windows помнит его как {known}.", "ok": False}
+        item = next((entry for entry in self._climate_moxa if entry["port"].upper() == port.upper()), None)
+        if item is None:
+            return {"text": "", "ok": True}
+        if item["espec_ok"]:
+            return {"text": f"Moxa {item['port']}: режим {item['interface']} (код {item['interface_code']}) - подходит "
+                            f"для камеры ESPEC.", "ok": True}
+        return {"text": f"Moxa {item['port']}: режим {item['interface']} (код {item['interface_code']}) - камере ESPEC "
+                        f"нужен RS-422 или RS-485 4W. Переключите в диспетчере устройств: свойства порта Moxa.",
+                "ok": False}
+
+    def _climate_selftest_start(self) -> bool:
+        """Проверка связи: набор запросов к камере с ответом, задержкой и итогом по каждому."""
+        if self._climate_link is None:
+            self._climate_selftest = {"active": False, "text": "Сначала подключите камеру.", "results": []}
+            self.climateChanged.emit()
+            return False
+        self._climate_link.command("selftest")
+        self._climate_selftest = {"active": True, "text": "Проверяю связь: запросы идут по очереди...", "results": []}
+        self.climateChanged.emit()
+        return True
+
+    def _climate_take_selftest(self, state: dict):
+        """Итог проверки связи для окна: по каждому запросу ответ и его смысл словами."""
+        results = []
+        for item in state.get("results") or []:
+            explain = ""
+            if item.get("ok") and self._climate_settings["driver"] == DRIVER_ESPEC:
+                explain = describe_espec_answer(item["query"], item["answer"])
+            results.append({**item, "explain": explain})
+        text = str(state.get("text", ""))
+        if not state.get("results") and not state.get("ok"):
+            text = f"проверка не выполнена: {text}"
+        self._climate_selftest = {"active": False, "text": text[:1].upper() + text[1:] + ".", "results": results}
+
+    def _climate_report_sections(self) -> dict:
+        """Разделы отчёта диагностики: всё, что нужно, чтобы разобрать проблему без доступа к компьютеру."""
+        link = self._climate_link
+        reading = self._climate_reading
+        info = self._climate_session_info()
+        return {
+            "Программа и окружение": info["окружение"],
+            "Настройки камеры": info["настройки"],
+            "Выбранная камера": self._climate_chamber_card(),
+            "Состояние связи": {
+                "подключена": link is not None,
+                "связь есть": bool(self._climate_ok),
+                "драйвер": getattr(link.driver, "title", "") if link is not None else "",
+                "порт": getattr(link.driver, "port", "") if link is not None else "",
+                "состояние": self._climate_status,
+                "последняя команда": self._climate_command_status,
+                "поиск камеры": self._climate_scan_status,
+                "проверка режима Moxa": self._climate_moxa_check().get("text", ""),
+            },
+            "Последнее показание камеры": {
+                "текстом": reading_text(reading),
+                "подробности": getattr(reading, "details", None),
+            },
+            "COM-порты": info["COM-порты"],
+            "Moxa в реестре Windows": info["Moxa в реестре"],
+            "Проверка связи (последняя)": self._climate_selftest,
+            "Команды из окна и ответы камеры": [f"{item['time']} {item['sent']} → {item['answer']}"
+                                                f"{'  (' + item.get('explain', '') + ')' if item.get('explain') else ''}"
+                                                f"{'' if item['ok'] else '  [ОШИБКА]'}"
+                                                for item in list(self._climate_raw_log)],
+            "Автоматический прогон": {"этап": self._climate_run_stage, "состояние": self._climate_run_status},
+        }
+
+    def _climate_save_report(self) -> str:
+        """Сохраняет отчёт диагностики в logs/chamber и возвращает путь к нему."""
+        diag = getattr(self, "_climate_diag", None)
+        if diag is None:
+            return ""
+        try:
+            path = diag.save_report(self._climate_report_sections())
+        except OSError as error:
+            self._climate_command_status = f"Отчёт не сохранился: {error}"
+            self.climateChanged.emit()
+            return ""
+        self._climate_command_status = f"Отчёт диагностики сохранён: {path}"
+        self.climateChanged.emit()
+        return "" if path is None else str(path)
+
+    def _climate_espec_scan(self) -> bool:
+        """Поиск адреса, скорости и конца строки камеры ESPEC: настройки пульта угадывать не нужно."""
+        if self._climate_settings["driver"] != DRIVER_ESPEC:
+            return False
+        if self._climate_run_stage:
+            self._climate_scan_status = "Во время автоматического прогона камеру не ищут."
+            self.climateChanged.emit()
+            return False
+        if self._climate_link is None and not self._climate_connect():
+            return False
+        self._climate_link.command("scan")
+        self._climate_scan_active = True
+        self._climate_scan_status = "Ищу камеру: адреса 1...16, скорости 9600, 19200 и 4800. Это до минуты."
         self.climateChanged.emit()
         return True
 
@@ -810,6 +1128,13 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             "alarm": bool(getattr(reading, "alarm", 0)),
             "productText": _c(getattr(reading, "product_c", None)),
             "rawLog": list(self._climate_raw_log),
+            "ports": list(self._climate_ports),
+            "scan": {"active": bool(self._climate_scan_active), "status": self._climate_scan_status},
+            "diag": self._climate_diag.view() if getattr(self, "_climate_diag", None) is not None else {},
+            "moxaCheck": self._climate_moxa_check(),
+            "selftest": dict(getattr(self, "_climate_selftest", {"active": False, "text": "", "results": []})),
+            "espec": self._climate_espec_view(reading),
+            "commands": ESPEC_COMMAND_LIST if settings["driver"] == DRIVER_ESPEC else [],
             "bridgeStatus": self._climate_bridge_status,
             "settings": {key: (value if not isinstance(value, float) else f"{value:g}".replace(".", ","))
                          for key, value in settings.items() if key != "map"},
@@ -840,8 +1165,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             return {"name": "Камера не выбрана", "purpose": "Выберите камеру ниже", "link": "",
                     "accent": "#94a3b8", "summary": ""}
         if driver == DRIVER_ESPEC:
-            summary = (f"{settings['espec_port']} · {settings['espec_baud']} бод · адрес {settings['espec_address']}"
-                       f" · разделитель {settings['espec_delimiter']}")
+            summary = (f"{self._climate_espec_port_text()} · {settings['espec_baud']} бод · "
+                       f"адрес {settings['espec_address']} · разделитель {settings['espec_delimiter']}")
         elif driver == DRIVER_SIMCON:
             summary = f"{settings['weiss_port']} · {settings['weiss_baud']} бод · адрес {settings['simcon_address']}"
         elif driver == DRIVER_SIMULATOR:
@@ -851,6 +1176,55 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         else:
             summary = f"{settings['rtu_port']} · {settings['rtu_baud']} бод · устройство {settings['unit']}"
         return {**{key: info[key] for key in ("name", "purpose", "link", "accent")}, "summary": summary}
+
+    def _climate_espec_port_text(self) -> str:
+        """Порт ESPEC для шапки: при «auto» - какой переходник Moxa найден."""
+        port = str(self._climate_settings["espec_port"])
+        if port.strip().lower() != PORT_AUTO:
+            return port
+        link = self._climate_link
+        if link is not None and str(getattr(link.driver, "port", PORT_AUTO)).lower() != PORT_AUTO:
+            return f"Moxa UPort на {link.driver.port}"
+        moxa = [item["device"] for item in self._climate_ports if item.get("moxa")]
+        return f"Moxa UPort на {moxa[0]}" if moxa else "Moxa UPort (не найден)"
+
+    def _climate_espec_view(self, reading) -> dict:
+        """Подробное состояние камеры ESPEC для блока ручного управления."""
+        details = dict(getattr(reading, "details", None) or {}) if reading is not None else {}
+        mode = str(details.get("mode") or "")
+        high, low = details.get("high_c"), details.get("low_c")
+        heater = details.get("heater_pct")
+        ref_running = details.get("ref_running")
+        ref_setting = str(details.get("ref_setting") or "")
+        if ref_setting == "REF0":
+            ref_mode = "вручную выключен"
+        elif ref_setting == "REF1":
+            ref_mode = "вручную включён"
+        elif ref_setting.startswith("REF"):
+            ref_mode = "авто"
+        else:
+            ref_mode = ""
+        ref_parts = [] if ref_running is None else ["работает" if ref_running else "стоит"]
+        if ref_mode:
+            ref_parts.append(ref_mode)
+        key_protect = details.get("key_protect")
+        return {
+            "mode": mode,
+            "modeText": espec_mode_text(mode) if mode else "—",
+            "highText": "—" if high is None else _c(high),
+            "lowText": "—" if low is None else _c(low),
+            "heaterText": "—" if heater is None else f"{float(heater):.1f} %".replace(".", ","),
+            "refText": ", ".join(ref_parts) if ref_parts else "—",
+            "refSetting": ref_setting,
+            "keyText": "—" if key_protect is None else ("заблокирован" if key_protect else "не заблокирован"),
+            "keyProtect": bool(key_protect),
+            "identity": " · ".join(str(part) for part in (details.get("rom"), details.get("type")) if part) or "—",
+            "alarmsText": ", ".join(str(code) for code in (details.get("alarms") or [])),
+            "programText": str(details.get("program") or ""),
+            "program": "RUN" in mode,
+            "paused": "PAUSE" in mode,
+            "powerOff": mode == "OFF",
+        }
 
     def _climate_mode_hint(self) -> str:
         """Подсказка, если режим раздела «Прогон в камере» не подходит выбранной камере."""

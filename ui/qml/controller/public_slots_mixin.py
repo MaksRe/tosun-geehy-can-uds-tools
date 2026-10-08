@@ -3368,6 +3368,41 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         """Цель функции в пуске или остановке камеры из программы."""
         self._climate_send_run(bool(on))
 
+    @Slot(str, str)
+    def sendClimateCommand(self, key, values_json):
+        """Цель функции в отправке команды ESPEC из каталога, затем её ответ словами виден в журнале обмена."""
+        self._climate_send_espec(str(key), str(values_json))
+
+    @Slot()
+    def refreshClimatePorts(self):
+        """Цель функции в обновлении списка COM-портов, затем переходник Moxa UPort виден первым."""
+        self._climate_refresh_ports()
+
+    @Slot()
+    def scanClimateChamber(self):
+        """Цель функции в поиске адреса, скорости и конца строки камеры ESPEC, затем они сохраняются сами."""
+        self._climate_espec_scan()
+
+    @Slot()
+    def runClimateSelftest(self):
+        """Цель функции в проверке связи набором запросов, затем по каждому виден ответ, задержка и итог."""
+        self._climate_selftest_start()
+
+    @Slot()
+    def saveClimateReport(self):
+        """Цель функции в сохранении отчёта диагностики камеры одним файлом, затем его можно переслать для разбора."""
+        self._climate_save_report()
+
+    @Slot()
+    def openClimateLogs(self):
+        """Цель функции в открытии папки журналов камеры в проводнике Windows."""
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        directory = self._climate_logs_directory()
+        directory.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory)))
+
     @Slot()
     def startClimateRun(self):
         """Цель функции в запуске автоматического прогона, затем узлы проходятся сами."""
