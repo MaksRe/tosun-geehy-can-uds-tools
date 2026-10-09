@@ -517,76 +517,90 @@ Card {
                     }
                 }
 
-                // --- Отладочные данные по группам ---
-                GridLayout {
+                // --- Подробности по группам: для наладки, свёрнуты ---
+                SpoilerSection {
                     Layout.fillWidth: true
-                    columns: width >= 900 ? 2 : 1
-                    columnSpacing: 10
-                    rowSpacing: 10
+                    title: "Подробности: калибровка в приборе, компенсация, качество измерения"
+                    hintText: "значения из прибора по группам: отметки, профиль и ступени, размах серий, программа и память"
+                    cardColor: "#f8fafc"
+                    cardBorder: "#e2e8f0"
+                    textMain: root.textMain
+                    textSoft: root.textSoft
+                    accentColor: "#0f766e"
+                    headerHeight: 36
+                    contentPadding: 10
+                    expanded: false
 
-                    Repeater {
-                        model: root.groups
+                    GridLayout {
+                        Layout.fillWidth: true
+                        columns: width >= 900 ? 2 : 1
+                        columnSpacing: 10
+                        rowSpacing: 10
 
-                        Rectangle {
-                            id: groupCard
-                            required property var modelData
+                        Repeater {
+                            model: root.groups
 
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            Layout.alignment: Qt.AlignTop
-                            implicitHeight: groupLayout.implicitHeight + 20
-                            radius: 12
-                            color: "#fbfdff"
-                            border.width: 1
-                            border.color: "#e2ebf5"
+                            Rectangle {
+                                id: groupCard
+                                required property var modelData
 
-                            ColumnLayout {
-                                id: groupLayout
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.top: parent.top
-                                anchors.margins: 10
-                                spacing: 5
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                Layout.alignment: Qt.AlignTop
+                                implicitHeight: groupLayout.implicitHeight + 20
+                                radius: 12
+                                color: "#fbfdff"
+                                border.width: 1
+                                border.color: "#e2ebf5"
 
-                                Text {
-                                    text: groupCard.modelData.title
-                                    color: root.textMain
-                                    font.pixelSize: 14
-                                    font.bold: true
-                                    font.family: "Bahnschrift"
-                                }
+                                ColumnLayout {
+                                    id: groupLayout
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.top: parent.top
+                                    anchors.margins: 10
+                                    spacing: 5
 
-                                Repeater {
-                                    model: groupCard.modelData.items
+                                    Text {
+                                        text: groupCard.modelData.title
+                                        color: root.textMain
+                                        font.pixelSize: 14
+                                        font.bold: true
+                                        font.family: "Bahnschrift"
+                                    }
 
-                                    RowLayout {
-                                        id: rowItem
-                                        required property var modelData
-                                        readonly property var row: root.rows[rowItem.modelData.key] || ({})
+                                    Repeater {
+                                        model: groupCard.modelData.items
 
-                                        Layout.fillWidth: true
-                                        spacing: 8
+                                        RowLayout {
+                                            id: rowItem
+                                            required property var modelData
+                                            readonly property var row: root.rows[rowItem.modelData.key] || ({})
 
-                                        Text {
-                                            Layout.preferredWidth: 190
-                                            Layout.alignment: Qt.AlignTop
-                                            text: rowItem.modelData.label
-                                            color: root.textSoft
-                                            font.pixelSize: 12
-                                            font.family: "Bahnschrift"
-                                            elide: Text.ElideRight
-                                        }
-
-                                        Text {
                                             Layout.fillWidth: true
-                                            text: rowItem.row.value || "—"
-                                            color: root.toneColor(rowItem.row.tone, rowItem.row.fresh === true)
-                                            font.pixelSize: 12
-                                            font.bold: rowItem.row.tone === "bad" || rowItem.row.tone === "warn"
-                                            font.family: "Bahnschrift"
-                                            wrapMode: Text.WordWrap
-                                            maximumLineCount: 3
-                                            elide: Text.ElideRight
+                                            spacing: 8
+
+                                            Text {
+                                                Layout.preferredWidth: 190
+                                                Layout.alignment: Qt.AlignTop
+                                                text: rowItem.modelData.label
+                                                color: root.textSoft
+                                                font.pixelSize: 12
+                                                font.family: "Bahnschrift"
+                                                elide: Text.ElideRight
+                                            }
+
+                                            Text {
+                                                Layout.fillWidth: true
+                                                text: rowItem.row.value || "—"
+                                                color: root.toneColor(rowItem.row.tone, rowItem.row.fresh === true)
+                                                font.pixelSize: 12
+                                                font.bold: rowItem.row.tone === "bad" || rowItem.row.tone === "warn"
+                                                font.family: "Bahnschrift"
+                                                wrapMode: Text.WordWrap
+                                                maximumLineCount: 3
+                                                elide: Text.ElideRight
+                                            }
                                         }
                                     }
                                 }

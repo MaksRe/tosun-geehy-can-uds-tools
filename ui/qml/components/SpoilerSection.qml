@@ -18,6 +18,10 @@ ColumnLayout {
     property color textSoft: "#607084"
     property color accentColor: "#2563eb"
     property bool contentFillAvailableHeight: false
+    // Высота заголовка и отступ содержимого: компактные спойлеры внутри карточек
+    // калибровки задают их сами, у остальных всё как было.
+    property int headerHeight: 44
+    property int contentPadding: 0
 
     default property alias contentData: contentLayout.data
 
@@ -27,7 +31,7 @@ ColumnLayout {
                        ? (
                            root.contentFillAvailableHeight
                            ? 0
-                           : (root.spacing + contentLayout.implicitHeight)
+                           : (root.spacing + contentLayout.implicitHeight + 2 * root.contentPadding)
                          )
                        : 0)
     spacing: 6
@@ -35,7 +39,7 @@ ColumnLayout {
     Rectangle {
         id: headerRect
         Layout.fillWidth: true
-        implicitHeight: 44
+        implicitHeight: root.headerHeight
         radius: 10
         color: root.cardColor
         border.color: root.cardBorder
@@ -101,6 +105,10 @@ ColumnLayout {
     ColumnLayout {
         id: contentLayout
         Layout.fillWidth: true
+        Layout.leftMargin: root.contentPadding
+        Layout.rightMargin: root.contentPadding
+        Layout.topMargin: root.expanded ? root.contentPadding : 0
+        Layout.bottomMargin: root.expanded ? root.contentPadding : 0
         Layout.fillHeight: root.expanded && root.contentFillAvailableHeight
         Layout.minimumHeight: 0
         Layout.preferredHeight: root.expanded

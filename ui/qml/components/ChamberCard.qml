@@ -13,6 +13,11 @@ import "."
   - пишет профиль в прибор, сверяет и сохраняет в файл: по кнопке или сам при полных данных;
   - в тестовом режиме задаёт прибору температуру эмуляцией и проходит все узлы на столе.
 
+  Оператору на виду только то, что нужно на каждой точке: показания, запись
+  точки, ход работы, полнота узлов, запись профиля и журнал. Режим расчёта,
+  файлы и тестовый режим убраны в спойлеры внизу; включённый нестандартный
+  режим всё равно виден значком в шапке.
+
   Публичные свойства:
   - appController: контроллер приложения;
   - cardColor/cardBorder/textMain/textSoft: общая палитра окна;
@@ -50,6 +55,54 @@ Card {
     cardColor: "#ffffff"
     cardBorder: "#d6e2ef"
 
+    // Спойлер для редко нужного: компактный заголовок, содержимое с отступом.
+    component Spoiler: SpoilerSection {
+        headerHeight: 36
+        contentPadding: 10
+        cardColor: "#f8fafc"
+        cardBorder: "#e2e8f0"
+        textMain: root.textMain
+        textSoft: root.textSoft
+        accentColor: "#0f766e"
+    }
+
+    component Caption: Text {
+        color: root.textSoft
+        font.pixelSize: 12
+        font.family: "Bahnschrift"
+        Layout.alignment: Qt.AlignVCenter
+    }
+
+    component SmallButton: FancyButton {
+        Layout.preferredHeight: 28
+        fontPixelSize: 12
+        tone: "#64748b"
+        toneHover: "#475569"
+        tonePressed: "#334155"
+    }
+
+    // Значок включённого режима в шапке: виден, даже когда его настройки свёрнуты.
+    component Badge: Rectangle {
+        property string text: ""
+        property color tint: "#0284c7"
+        Layout.alignment: Qt.AlignVCenter
+        Layout.preferredHeight: 22
+        Layout.preferredWidth: badgeText.implicitWidth + 16
+        radius: 11
+        color: Qt.lighter(tint, 1.9)
+        border.width: 1
+        border.color: tint
+        Text {
+            id: badgeText
+            anchors.centerIn: parent
+            text: parent.text
+            color: parent.tint
+            font.pixelSize: 11
+            font.bold: true
+            font.family: "Bahnschrift"
+        }
+    }
+
     ScrollView {
         id: pageScroll
         anchors.fill: parent
@@ -64,32 +117,31 @@ Card {
             height: Math.max(pageScroll.availableHeight, implicitHeight)
             spacing: 10
 
-            // --- Заголовок ---
-            ColumnLayout {
+            // --- Заголовок и включённые режимы ---
+            RowLayout {
                 Layout.fillWidth: true
-                spacing: 2
+                spacing: 8
 
                 Text {
-                    Layout.fillWidth: true
                     text: "Прогон в климатической камере"
                     color: root.textMain
                     font.pixelSize: 19
                     font.bold: true
                     font.family: "Bahnschrift"
-                    elide: Text.ElideRight
                 }
 
-                Text {
-                    Layout.fillWidth: true
-                    text: "Доведите камеру до температуры, подключите эталоны, дождитесь, пока среднее успокоится, напишите что подключено и запишите точку"
-                    color: root.textSoft
-                    font.pixelSize: 12
-                    font.family: "Bahnschrift"
-                    elide: Text.ElideRight
+                Badge { visible: root.boardOnly; text: "Только плата"; tint: "#0284c7" }
+                Badge { visible: root.test.mode === true; text: "Тестовый режим"; tint: "#ea580c" }
+                Badge {
+                    visible: !root.boardOnly && root.appController !== null && root.appController.chamberExtendLiquid
+                    text: "Достройка «в жидкости»"
+                    tint: "#a16207"
                 }
+
+                Item { Layout.fillWidth: true }
             }
 
-            // --- Живые показания: текущее и среднее рядом, как в калибровке бака ---
+            // --- Живые показания: текущее и среднее рядом ---
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: liveLayout.implicitHeight + 18
@@ -110,8 +162,8 @@ Card {
 
                         Repeater {
                             model: [
-                                { "title": "Основной контур: период", "key": "main" },
-                                { "title": "Вид топлива: период", "key": "media" }
+                                { "title": "Основной контур", "key": "main" },
+                                { "title": "Вид топлива", "key": "media" }
                             ]
 
                             ColumnLayout {
@@ -135,14 +187,7 @@ Card {
 
                                     ColumnLayout {
                                         spacing: 0
-
-                                        Text {
-                                            text: "Текущий"
-                                            color: root.textSoft
-                                            font.pixelSize: 11
-                                            font.family: "Bahnschrift"
-                                        }
-
+                                        Text { text: "Текущий"; color: root.textSoft; font.pixelSize: 11; font.family: "Bahnschrift" }
                                         Text {
                                             text: channelColumn.info.now || "—"
                                             color: root.textMain
@@ -154,14 +199,7 @@ Card {
 
                                     ColumnLayout {
                                         spacing: 0
-
-                                        Text {
-                                            text: "Среднее, пойдёт в точку"
-                                            color: root.textSoft
-                                            font.pixelSize: 11
-                                            font.family: "Bahnschrift"
-                                        }
-
+                                        Text { text: "Среднее, пойдёт в точку"; color: root.textSoft; font.pixelSize: 11; font.family: "Bahnschrift" }
                                         Text {
                                             text: channelColumn.info.avg || "—"
                                             color: "#0f766e"
@@ -195,36 +233,12 @@ Card {
                             Text { text: "Средняя"; color: root.textSoft; font.pixelSize: 11; font.family: "Bahnschrift" }
 
                             Text { text: "Плата"; color: root.textMain; font.pixelSize: 13; font.family: "Bahnschrift" }
-                            Text {
-                                text: (root.live.boardTemp || {}).now || "—"
-                                color: root.textMain
-                                font.pixelSize: 15
-                                font.bold: true
-                                font.family: "Bahnschrift"
-                            }
-                            Text {
-                                text: (root.live.boardTemp || {}).avg || "—"
-                                color: "#0f766e"
-                                font.pixelSize: 15
-                                font.bold: true
-                                font.family: "Bahnschrift"
-                            }
+                            Text { text: (root.live.boardTemp || {}).now || "—"; color: root.textMain; font.pixelSize: 15; font.bold: true; font.family: "Bahnschrift" }
+                            Text { text: (root.live.boardTemp || {}).avg || "—"; color: "#0f766e"; font.pixelSize: 15; font.bold: true; font.family: "Bahnschrift" }
 
                             Text { text: "Топливо"; color: root.textMain; font.pixelSize: 13; font.family: "Bahnschrift" }
-                            Text {
-                                text: (root.live.fuelTemp || {}).now || "—"
-                                color: root.textMain
-                                font.pixelSize: 15
-                                font.bold: true
-                                font.family: "Bahnschrift"
-                            }
-                            Text {
-                                text: (root.live.fuelTemp || {}).avg || "—"
-                                color: "#0f766e"
-                                font.pixelSize: 15
-                                font.bold: true
-                                font.family: "Bahnschrift"
-                            }
+                            Text { text: (root.live.fuelTemp || {}).now || "—"; color: root.textMain; font.pixelSize: 15; font.bold: true; font.family: "Bahnschrift" }
+                            Text { text: (root.live.fuelTemp || {}).avg || "—"; color: "#0f766e"; font.pixelSize: 15; font.bold: true; font.family: "Bahnschrift" }
                         }
                     }
 
@@ -248,14 +262,492 @@ Card {
                             font.family: "Bahnschrift"
                             elide: Text.ElideRight
                         }
+                    }
+                }
+            }
+
+            // --- Тестовый режим включён: напоминание, что точки пробные ---
+            Rectangle {
+                Layout.fillWidth: true
+                visible: root.test.mode === true
+                Layout.preferredHeight: testBannerLayout.implicitHeight + 12
+                radius: 10
+                color: "#fff7ed"
+                border.width: 1
+                border.color: "#fdba74"
+
+                RowLayout {
+                    id: testBannerLayout
+                    anchors.fill: parent
+                    anchors.margins: 6
+                    spacing: 8
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: "Тестовый режим: температуру задаёт эмуляция (" + (root.test.emulationText || "настоящая")
+                              + "), точки помечаются как пробные. " + (root.test.status || "")
+                        color: "#9a3412"
+                        font.pixelSize: 12
+                        font.family: "Bahnschrift"
+                        elide: Text.ElideRight
+                    }
+
+                    SmallButton {
+                        Layout.preferredWidth: 110
+                        text: "Выключить"
+                        tone: "#ea580c"; toneHover: "#c2410c"; tonePressed: "#9a3412"
+                        enabled: root.appController !== null && !root.busy && !root.test.walking
+                        onClicked: if (root.appController) root.appController.setChamberTestMode(false)
+                    }
+                }
+            }
+
+            // --- Снятие точки ---
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: captureLayout.implicitHeight + 20
+                radius: 12
+                color: "#f2f7ff"
+                border.width: 1
+                border.color: "#c6dcf5"
+
+                ColumnLayout {
+                    id: captureLayout
+                    anchors.fill: parent
+                    anchors.margins: 10
+                    spacing: 8
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        Caption { text: "Что подключено сейчас" }
+
+                        FancyTextField {
+                            id: labelField
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 34
+                            text: root.appController ? root.appController.chamberLabel : ""
+                            placeholderText: "например: 0/0, 68/22, 150/47 (основной/вид топлива), воздух, жидкость"
+                            textColor: root.textMain
+                            bgColor: root.inputBg
+                            borderColor: root.inputBorder
+                            focusBorderColor: root.inputFocus
+                            onAccepted: if (root.appController) root.appController.setChamberLabel(text)
+                            onEditingFinished: if (root.appController) root.appController.setChamberLabel(text)
+                        }
+
+                        Repeater {
+                            model: ["воздух", "жидкость"]
+
+                            SmallButton {
+                                required property string modelData
+                                Layout.preferredWidth: 90
+                                Layout.preferredHeight: 34
+                                text: modelData
+                                toolTipText: "«воздух» и «жидкость» идут в расчёт трубки"
+                                enabled: root.appController !== null && !root.busy
+                                onClicked: {
+                                    labelField.text = modelData
+                                    if (root.appController) root.appController.setChamberLabel(modelData)
+                                }
+                            }
+                        }
+
+                        FancyButton {
+                            Layout.preferredWidth: 164
+                            Layout.preferredHeight: 34
+                            text: root.busy ? "Идёт замер..." : (root.waiting ? "Жду среднее..." : "Записать точку")
+                            tone: "#16a34a"
+                            toneHover: "#15803d"
+                            tonePressed: "#166534"
+                            toolTipText: "Сразу кладёт в журнал средние из полей выше. Если среднего ещё нет, запишет сама, как только оно наберётся"
+                            enabled: root.appController !== null && !root.busy && !root.waiting
+                            onClicked: {
+                                if (root.appController) {
+                                    root.appController.setChamberLabel(labelField.text)
+                                    root.appController.captureChamberPoint()
+                                }
+                            }
+                        }
+                    }
+
+                    // Ход работы и отмена ошибочной точки - в одной строке под записью.
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+
+                        Rectangle {
+                            Layout.alignment: Qt.AlignVCenter
+                            Layout.preferredWidth: 10
+                            Layout.preferredHeight: 10
+                            radius: 5
+                            color: root.appController ? root.appController.chamberStatusColor : "#64748b"
+                        }
 
                         Text {
-                            text: "Окно среднего, с"
-                            color: root.textSoft
+                            Layout.fillWidth: true
+                            text: root.appController ? root.appController.chamberStatusText : "Контроллер недоступен"
+                            color: root.appController ? root.appController.chamberStatusColor : "#64748b"
+                            font.pixelSize: 13
+                            font.family: "Bahnschrift"
+                            elide: Text.ElideRight
+                        }
+
+                        SmallButton {
+                            Layout.preferredWidth: 150
+                            text: "Отменить последнюю"
+                            tone: "#b45309"; toneHover: "#92400e"; tonePressed: "#78350f"
+                            enabled: root.appController !== null && !root.busy && root.appController.chamberPointCount > 0
+                            onClicked: if (root.appController) root.appController.removeLastChamberPoint()
+                        }
+                    }
+                }
+            }
+
+            // --- Полнота прогона по узлам ---
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 6
+
+                Text {
+                    text: root.boardOnly
+                          ? "Чего ещё не хватает  ·  в каждом узле точка «0/0»"
+                          : "Чего ещё не хватает  ·  эталоны основной · вид топлива, нужно по 2"
+                    color: root.textMain
+                    font.pixelSize: 13
+                    font.bold: true
+                    font.family: "Bahnschrift"
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 6
+
+                    Repeater {
+                        model: root.appController ? root.appController.chamberCoverageRows : []
+
+                        Rectangle {
+                            required property var modelData
+                            readonly property bool allOk: modelData.capsOk && modelData.tubeOk
+
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 56
+                            radius: 9
+                            color: allOk ? "#ecfdf5" : "#fffbeb"
+                            border.width: 1
+                            border.color: allOk ? "#86efac" : "#fcd34d"
+
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: 5
+                                spacing: 1
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: modelData.node
+                                    color: root.textMain
+                                    font.pixelSize: 12
+                                    font.bold: true
+                                    font.family: "Bahnschrift"
+                                    horizontalAlignment: Text.AlignHCenter
+                                    elide: Text.ElideRight
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: modelData.caps
+                                    color: modelData.capsOk ? "#15803d" : "#b45309"
+                                    font.pixelSize: 11
+                                    font.family: "Bahnschrift"
+                                    horizontalAlignment: Text.AlignHCenter
+                                    elide: Text.ElideRight
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    visible: !root.boardOnly
+                                    text: "трубка: " + modelData.tube
+                                    color: modelData.tubeOk ? "#15803d" : "#b45309"
+                                    font.pixelSize: 11
+                                    font.family: "Bahnschrift"
+                                    horizontalAlignment: Text.AlignHCenter
+                                    elide: Text.ElideRight
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // --- Запись профиля в прибор: доступ, запись, сверка, файл ---
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: chainLayout.implicitHeight + 18
+                radius: 12
+                color: "#f0fdf4"
+                border.width: 1
+                border.color: "#bbf7d0"
+
+                RowLayout {
+                    id: chainLayout
+                    anchors.fill: parent
+                    anchors.margins: 9
+                    spacing: 6
+
+                    FancyButton {
+                        Layout.preferredWidth: 250
+                        Layout.preferredHeight: 32
+                        fontPixelSize: 12
+                        text: root.chain.busy ? "Идёт запись профиля..." : "Записать в прибор, сверить, сохранить"
+                        tone: "#16a34a"
+                        toneHover: "#15803d"
+                        tonePressed: "#166534"
+                        toolTipText: "Открывает доступ на запись, пишет таблицы, читает их обратно и сохраняет профиль в файл рядом с журналом"
+                        enabled: root.appController !== null && !root.busy && !root.chain.busy
+                                && root.appController.chamberPointCount > 0
+                        onClicked: if (root.appController) root.appController.writeChamberProfile()
+                    }
+
+                    Repeater {
+                        model: root.chain.steps || []
+
+                        Rectangle {
+                            id: stepChip
+                            required property var modelData
+                            required property int index
+                            readonly property string state_: modelData.state
+
+                            Layout.preferredHeight: 24
+                            Layout.preferredWidth: stepText.implicitWidth + 18
+                            radius: 12
+                            color: state_ === "ok" ? "#dcfce7"
+                                 : state_ === "fail" ? "#fee2e2"
+                                 : state_ === "run" ? "#dbeafe" : "#f1f5f9"
+                            border.width: 1
+                            border.color: state_ === "ok" ? "#86efac"
+                                        : state_ === "fail" ? "#fca5a5"
+                                        : state_ === "run" ? "#93c5fd" : "#e2e8f0"
+
+                            Text {
+                                id: stepText
+                                anchors.centerIn: parent
+                                text: (stepChip.index + 1) + ". " + stepChip.modelData.title
+                                      + (stepChip.state_ === "ok" ? "  ✓"
+                                         : stepChip.state_ === "fail" ? "  ✗"
+                                         : stepChip.state_ === "run" ? "  …" : "")
+                                color: stepChip.state_ === "ok" ? "#15803d"
+                                     : stepChip.state_ === "fail" ? "#b91c1c"
+                                     : stepChip.state_ === "run" ? "#1d4ed8" : root.textSoft
+                                font.pixelSize: 11
+                                font.family: "Bahnschrift"
+                            }
+                        }
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: (root.chain.status || "") + (root.chain.autoWrite === true ? "  ·  запишется сам при полных данных" : "")
+                        color: root.chain.color || root.textSoft
+                        font.pixelSize: 12
+                        font.family: "Bahnschrift"
+                        elide: Text.ElideRight
+                    }
+                }
+            }
+
+            // --- Замечания расчёта: только когда расчёту чего-то не хватило ---
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: reportLayout.implicitHeight + 16
+                visible: root.appController && root.appController.chamberReportLines.length > 0
+                radius: 10
+                color: "#fffbeb"
+                border.width: 1
+                border.color: "#fcd34d"
+
+                ColumnLayout {
+                    id: reportLayout
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    spacing: 2
+
+                    Text {
+                        text: "Чего не хватило расчёту"
+                        color: "#92400e"
+                        font.pixelSize: 12
+                        font.bold: true
+                        font.family: "Bahnschrift"
+                    }
+
+                    Repeater {
+                        model: root.appController ? root.appController.chamberReportLines : []
+
+                        Text {
+                            required property string modelData
+                            Layout.fillWidth: true
+                            text: "- " + modelData
+                            color: "#92400e"
                             font.pixelSize: 11
                             font.family: "Bahnschrift"
-                            Layout.alignment: Qt.AlignVCenter
+                            wrapMode: Text.WordWrap
                         }
+                    }
+                }
+            }
+
+            // --- Режим прогона и расчёт: задаётся один раз на прогон ---
+            Spoiler {
+                title: "Режим прогона и расчёт таблиц"
+                hintText: (root.boardOnly ? "только плата (" + (root.appController ? root.appController.chamberSingleModel : "") + ")"
+                                          : "эталоны и трубка")
+                          + "  ·  окно среднего " + (root.live.windowText || "10") + " с"
+                          + ((root.chain.autoWrite === true) ? "  ·  автозапись профиля" : "")
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        FancySwitch {
+                            checked: root.boardOnly
+                            enabled: root.appController !== null && !root.busy
+                            onToggled: if (root.appController) root.appController.setChamberBoardOnly(checked)
+                        }
+
+                        Text {
+                            text: "Только плата, своя ёмкость: без эталонов и без трубки"
+                            color: root.textMain
+                            font.pixelSize: 13
+                            font.family: "Bahnschrift"
+                        }
+
+                        Caption { visible: root.boardOnly; text: "  уход считать как" }
+
+                        Repeater {
+                            model: root.boardOnly ? [
+                                { "key": "растяжение", "tip": "Ёмкости на плате C0G: уходят резисторы и пороги генератора, уход пропорционален показанию" },
+                                { "key": "сдвиг", "tip": "Ёмкости на плате X7R: плавает сама ёмкость, уход постоянен в отсчётах" }
+                            ] : []
+
+                            SmallButton {
+                                required property var modelData
+                                Layout.preferredWidth: 110
+                                text: modelData.key
+                                toolTipText: modelData.tip
+                                tone: root.appController && root.appController.chamberSingleModel === modelData.key ? "#0284c7" : "#94a3b8"
+                                toneHover: "#0369a1"
+                                tonePressed: "#075985"
+                                onClicked: if (root.appController) root.appController.setChamberSingleModel(modelData.key)
+                            }
+                        }
+
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        visible: root.boardOnly
+                        text: "В каждом узле снимается одна точка «0/0»: к входам ничего не подключено. Поправка возвращает показание "
+                              + "при своей ёмкости платы к показанию при +25 °C. При подключённой трубке это допущение: сдвиг и "
+                              + "растяжение по одной ёмкости не разделить. Ряды трубки в профиле не меняются."
+                        color: root.textSoft
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                        wrapMode: Text.WordWrap
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        visible: !root.boardOnly
+                        spacing: 8
+
+                        FancySwitch {
+                            id: extendSwitch
+                            checked: root.appController ? root.appController.chamberExtendLiquid : false
+                            enabled: root.appController !== null
+                            onToggled: if (root.appController) root.appController.setChamberExtendLiquid(checked)
+                        }
+
+                        Text {
+                            text: "Достроить строки «в жидкости» по постоянному размаху"
+                            color: root.textMain
+                            font.pixelSize: 13
+                            font.family: "Bahnschrift"
+                        }
+
+                        Caption { text: "  основной"; visible: extendSwitch.checked }
+
+                        FancyTextField {
+                            id: spanMainField
+                            Layout.preferredWidth: 100
+                            Layout.preferredHeight: 30
+                            visible: extendSwitch.checked
+                            text: root.appController ? root.appController.chamberSpanMainText : ""
+                            placeholderText: "из замера"
+                            textColor: root.textMain
+                            bgColor: root.inputBg
+                            borderColor: root.inputBorder
+                            focusBorderColor: root.inputFocus
+                            onAccepted: if (root.appController) root.appController.setChamberSpanMain(text)
+                            onEditingFinished: if (root.appController) root.appController.setChamberSpanMain(text)
+                        }
+
+                        Caption { text: "вид топлива"; visible: extendSwitch.checked }
+
+                        FancyTextField {
+                            id: spanMediaField
+                            Layout.preferredWidth: 100
+                            Layout.preferredHeight: 30
+                            visible: extendSwitch.checked
+                            text: root.appController ? root.appController.chamberSpanMediaText : ""
+                            placeholderText: "из замера"
+                            textColor: root.textMain
+                            bgColor: root.inputBg
+                            borderColor: root.inputBorder
+                            focusBorderColor: root.inputFocus
+                            onAccepted: if (root.appController) root.appController.setChamberSpanMedia(text)
+                            onEditingFinished: if (root.appController) root.appController.setChamberSpanMedia(text)
+                        }
+
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        visible: !root.boardOnly && extendSwitch.checked
+                        text: "Нужно, когда в камеру нельзя ставить топливо. Погружение снимается один раз "
+                            + "при комнатной температуре, в остальных узлах размах считается таким же. "
+                            + "Пустое поле означает «взять размах из снятой пары состояний»."
+                        color: root.textSoft
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                        wrapMode: Text.WordWrap
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        FancySwitch {
+                            checked: root.chain.autoWrite === true
+                            enabled: root.appController !== null
+                            onToggled: if (root.appController) root.appController.setChamberAutoWrite(checked)
+                        }
+
+                        Text {
+                            text: "Сам писать профиль в прибор, когда данных хватило во всех узлах"
+                            color: root.textMain
+                            font.pixelSize: 13
+                            font.family: "Bahnschrift"
+                        }
+
+                        Item { Layout.fillWidth: true }
+
+                        Caption { text: "Окно среднего, с" }
 
                         FancyTextField {
                             id: windowField
@@ -272,23 +764,97 @@ Card {
                             onEditingFinished: if (root.appController) root.appController.setChamberWindow(text)
                         }
                     }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        SmallButton {
+                            Layout.preferredWidth: 180
+                            text: "Пересчитать таблицы"
+                            tone: "#0284c7"; toneHover: "#0369a1"; tonePressed: "#075985"
+                            toolTipText: "Таблицы и так пересчитываются после каждой точки. Кнопка нужна, чтобы увидеть подробности расчёта"
+                            enabled: root.appController !== null && !root.busy
+                                    && root.appController.chamberPointCount > 0
+                            onClicked: if (root.appController) root.appController.computeChamberTables()
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: root.appController ? root.appController.chamberTablesText : ""
+                            color: root.appController ? root.appController.chamberTablesColor : root.textSoft
+                            font.pixelSize: 12
+                            font.family: "Bahnschrift"
+                            wrapMode: Text.WordWrap
+                            maximumLineCount: 2
+                            elide: Text.ElideRight
+                        }
+                    }
                 }
             }
 
-            // --- Тестовый режим: камера на столе, температуру задаёт эмуляция в приборе ---
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: testLayout.implicitHeight + 16
-                radius: 12
-                color: root.test.mode ? "#fff7ed" : "#f8fafc"
-                border.width: 1
-                border.color: root.test.mode ? "#fdba74" : "#e2e8f0"
+            // --- Файлы журнала и таблиц: журнал и так сохраняется сам после каждой точки ---
+            Spoiler {
+                title: "Файлы журнала и таблиц"
+                hintText: {
+                    if (!root.appController)
+                        return ""
+                    var path = root.appController.chamberFilePath
+                    return path.length > 0 ? "журнал сохраняется сам: " + path : "журнал сохранится сам после первой точки"
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    SmallButton {
+                        Layout.preferredWidth: 170
+                        text: "Сохранить журнал как..."
+                        toolTipText: "Журнал и так сохраняется после каждой точки. Кнопка переносит его в другой файл, дальше автосохранение пишет туда"
+                        enabled: root.appController !== null && !root.busy
+                        onClicked: root.saveLogRequested()
+                    }
+
+                    SmallButton {
+                        Layout.preferredWidth: 150
+                        text: "Загрузить журнал"
+                        toolTipText: "Продолжить прерванный прогон: новые точки допишутся в этот же файл"
+                        enabled: root.appController !== null && !root.busy
+                        onClicked: root.loadLogRequested()
+                    }
+
+                    SmallButton {
+                        Layout.preferredWidth: 150
+                        text: "Выгрузить таблицы"
+                        toolTipText: "Сохраняет результат расчёта отдельным файлом для другого прибора"
+                        enabled: root.appController !== null && !root.busy
+                                && root.appController.chamberPointCount > 0
+                        onClicked: root.exportTablesRequested()
+                    }
+
+                    Item { Layout.fillWidth: true }
+
+                    SmallButton {
+                        Layout.preferredWidth: 150
+                        text: "Очистить журнал"
+                        tone: "#ef4444"; toneHover: "#dc2626"; tonePressed: "#b91c1c"
+                        toolTipText: "Убирает все точки из окна. Файл прежнего журнала остаётся на диске, следующая точка начнёт новый"
+                        enabled: root.appController !== null && !root.busy
+                        onClicked: if (root.appController) root.appController.clearChamberPoints()
+                    }
+                }
+            }
+
+            // --- Тестовый режим на столе: отладка без камеры ---
+            Spoiler {
+                title: "Тестовый режим на столе (отладка без камеры)"
+                hintText: root.test.mode ? "включён: " + (root.test.emulationText || "настоящая температура")
+                                         : "температура задаётся прибору эмуляцией, весь прогон проходится на столе"
+                expanded: false
 
                 ColumnLayout {
-                    id: testLayout
-                    anchors.fill: parent
-                    anchors.margins: 8
-                    spacing: 6
+                    Layout.fillWidth: true
+                    spacing: 8
 
                     RowLayout {
                         Layout.fillWidth: true
@@ -301,19 +867,10 @@ Card {
                         }
 
                         Text {
-                            text: "Тестовый режим на столе"
-                            color: root.textMain
-                            font.pixelSize: 13
-                            font.bold: true
-                            font.family: "Bahnschrift"
-                        }
-
-                        Text {
                             Layout.fillWidth: true
                             text: root.test.mode
-                                ? "Температуру задаёт эмуляция в приборе. Сейчас: " + (root.test.emulationText || "настоящая")
-                                  + ". Точки помечаются как пробные"
-                                : "Температура задаётся прибору вручную: весь прогон проходится на столе без камеры"
+                                  ? "Включён. Сейчас: " + (root.test.emulationText || "настоящая") + ". Точки помечаются как пробные"
+                                  : "Выключен: прибор работает от своих датчиков"
                             color: root.test.mode ? "#9a3412" : root.textSoft
                             font.pixelSize: 12
                             font.family: "Bahnschrift"
@@ -326,22 +883,14 @@ Card {
                         visible: root.test.mode === true
                         spacing: 6
 
-                        Text {
-                            text: "Задать:"
-                            color: root.textSoft
-                            font.pixelSize: 12
-                            font.family: "Bahnschrift"
-                            Layout.alignment: Qt.AlignVCenter
-                        }
+                        Caption { text: "Задать:" }
 
                         Repeater {
                             model: root.test.nodes || []
 
-                            FancyButton {
+                            SmallButton {
                                 required property var modelData
                                 Layout.preferredWidth: 76
-                                Layout.preferredHeight: 28
-                                fontPixelSize: 12
                                 text: modelData.text
                                 tone: modelData.current ? "#ea580c" : "#64748b"
                                 toneHover: modelData.current ? "#c2410c" : "#475569"
@@ -364,27 +913,18 @@ Card {
                             onAccepted: if (root.appController && root.testIdle) root.appController.setChamberTestTemperatureText(text)
                         }
 
-                        FancyButton {
+                        SmallButton {
                             Layout.preferredWidth: 80
-                            Layout.preferredHeight: 28
-                            fontPixelSize: 12
                             text: "Задать"
-                            tone: "#64748b"
-                            toneHover: "#475569"
-                            tonePressed: "#334155"
                             toolTipText: "Любая температура от -40 до +85 °C, например -12,5"
                             enabled: root.testIdle && testTempField.text.length > 0
                             onClicked: if (root.appController) root.appController.setChamberTestTemperatureText(testTempField.text)
                         }
 
-                        FancyButton {
+                        SmallButton {
                             Layout.preferredWidth: 100
-                            Layout.preferredHeight: 28
-                            fontPixelSize: 12
                             text: "Настоящая"
-                            tone: "#0f766e"
-                            toneHover: "#115e59"
-                            tonePressed: "#134e4a"
+                            tone: "#0f766e"; toneHover: "#115e59"; tonePressed: "#134e4a"
                             toolTipText: "Выключить эмуляцию: прибор вернётся к своим датчикам"
                             enabled: root.testIdle
                             onClicked: if (root.appController) root.appController.chamberTestEmulationOff()
@@ -438,16 +978,6 @@ Card {
 
                     Text {
                         Layout.fillWidth: true
-                        visible: root.test.mode === true
-                        text: root.test.status || ""
-                        color: root.test.color || root.textSoft
-                        font.pixelSize: 12
-                        font.family: "Bahnschrift"
-                        elide: Text.ElideRight
-                    }
-
-                    Text {
-                        Layout.fillWidth: true
                         visible: root.test.mode === true && (root.test.checkText || "").length > 0
                         text: root.test.checkText || ""
                         color: root.test.checkColor || root.textSoft
@@ -459,661 +989,15 @@ Card {
                 }
             }
 
-            // --- Снятие точки ---
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 92
-                radius: 12
-                color: "#f2f7ff"
-                border.width: 1
-                border.color: "#c6dcf5"
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 10
-                    spacing: 8
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-
-                        Text {
-                            text: "Что подключено сейчас"
-                            color: root.textSoft
-                            font.pixelSize: 12
-                            font.family: "Bahnschrift"
-                            Layout.alignment: Qt.AlignVCenter
-                        }
-
-                        FancyTextField {
-                            id: labelField
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 34
-                            text: root.appController ? root.appController.chamberLabel : ""
-                            placeholderText: "например: 0/0, 68/22, 150/47 (основной/вид топлива), воздух, жидкость"
-                            textColor: root.textMain
-                            bgColor: root.inputBg
-                            borderColor: root.inputBorder
-                            focusBorderColor: root.inputFocus
-                            onAccepted: if (root.appController) root.appController.setChamberLabel(text)
-                            onEditingFinished: if (root.appController) root.appController.setChamberLabel(text)
-                        }
-
-                        FancyButton {
-                            Layout.preferredWidth: 164
-                            Layout.preferredHeight: 34
-                            text: root.busy ? "Идёт замер..." : (root.waiting ? "Жду среднее..." : "Записать точку")
-                            tone: "#16a34a"
-                            toneHover: "#15803d"
-                            tonePressed: "#166534"
-                            toolTipText: "Сразу кладёт в журнал средние из полей выше. Если среднего ещё нет, запишет сама, как только оно наберётся"
-                            enabled: root.appController !== null && !root.busy && !root.waiting
-                            onClicked: {
-                                if (root.appController) {
-                                    root.appController.setChamberLabel(labelField.text)
-                                    root.appController.captureChamberPoint()
-                                }
-                            }
-                        }
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-
-                        Text {
-                            Layout.fillWidth: true
-                            text: "«150/47»: эталон основного и вида топлива, у каждого контура своя таблица платы. «воздух» и «жидкость» - в расчёт трубки"
-                            color: root.textSoft
-                            font.pixelSize: 11
-                            font.family: "Bahnschrift"
-                            elide: Text.ElideRight
-                        }
-
-                        Repeater {
-                            model: ["воздух", "жидкость"]
-
-                            FancyButton {
-                                required property string modelData
-                                Layout.preferredWidth: 104
-                                Layout.preferredHeight: 28
-                                fontPixelSize: 12
-                                text: modelData
-                                tone: "#64748b"
-                                toneHover: "#475569"
-                                tonePressed: "#334155"
-                                enabled: root.appController !== null && !root.busy
-                                onClicked: {
-                                    labelField.text = modelData
-                                    if (root.appController) root.appController.setChamberLabel(modelData)
-                                }
-                            }
-                        }
-
-                        FancyButton {
-                            Layout.preferredWidth: 150
-                            Layout.preferredHeight: 28
-                            fontPixelSize: 12
-                            text: "Отменить последнюю"
-                            tone: "#b45309"
-                            toneHover: "#92400e"
-                            tonePressed: "#78350f"
-                            enabled: root.appController !== null && !root.busy
-                            onClicked: if (root.appController) root.appController.removeLastChamberPoint()
-                        }
-                    }
-                }
-            }
-
-            // --- Ход работы ---
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 36
-                radius: 10
-                color: "#f8fbff"
-                border.width: 1
-                border.color: "#d6e2ef"
-
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.margins: 10
-                    spacing: 10
-
-                    Rectangle {
-                        Layout.alignment: Qt.AlignVCenter
-                        Layout.preferredWidth: 12
-                        Layout.preferredHeight: 12
-                        radius: 6
-                        color: root.appController ? root.appController.chamberStatusColor : "#64748b"
-                    }
-
-                    Text {
-                        Layout.fillWidth: true
-                        text: root.appController ? root.appController.chamberStatusText : "Контроллер недоступен"
-                        color: root.appController ? root.appController.chamberStatusColor : "#64748b"
-                        font.pixelSize: 13
-                        font.family: "Bahnschrift"
-                        elide: Text.ElideRight
-                    }
-                }
-            }
-
-            // --- Полнота прогона по узлам ---
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: coverageLayout.implicitHeight + 20
-                radius: 12
-                color: "#f8fbff"
-                border.width: 1
-                border.color: "#d6e2ef"
-
-                ColumnLayout {
-                    id: coverageLayout
-                    anchors.fill: parent
-                    anchors.margins: 10
-                    spacing: 6
-
-                    Text {
-                        text: root.boardOnly
-                              ? "Чего ещё не хватает  ·  одна плата: в каждом узле точка «0/0»"
-                              : "Чего ещё не хватает  ·  эталоны: основной · вид топлива, нужно по 2"
-                        color: root.textMain
-                        font.pixelSize: 13
-                        font.bold: true
-                        font.family: "Bahnschrift"
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 6
-
-                        Repeater {
-                            model: root.appController ? root.appController.chamberCoverageRows : []
-
-                            Rectangle {
-                                required property var modelData
-                                readonly property bool allOk: modelData.capsOk && modelData.tubeOk
-
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: 60
-                                radius: 9
-                                color: allOk ? "#ecfdf5" : "#fffbeb"
-                                border.width: 1
-                                border.color: allOk ? "#86efac" : "#fcd34d"
-
-                                ColumnLayout {
-                                    anchors.fill: parent
-                                    anchors.margins: 5
-                                    spacing: 1
-
-                                    Text {
-                                        Layout.fillWidth: true
-                                        text: modelData.node
-                                        color: root.textMain
-                                        font.pixelSize: 12
-                                        font.bold: true
-                                        font.family: "Bahnschrift"
-                                        horizontalAlignment: Text.AlignHCenter
-                                        elide: Text.ElideRight
-                                    }
-
-                                    Text {
-                                        Layout.fillWidth: true
-                                        text: modelData.caps
-                                        color: modelData.capsOk ? "#15803d" : "#b45309"
-                                        font.pixelSize: 11
-                                        font.family: "Bahnschrift"
-                                        horizontalAlignment: Text.AlignHCenter
-                                        elide: Text.ElideRight
-                                    }
-
-                                    Text {
-                                        Layout.fillWidth: true
-                                        text: "трубка: " + modelData.tube
-                                        color: modelData.tubeOk ? "#15803d" : "#b45309"
-                                        font.pixelSize: 11
-                                        font.family: "Bahnschrift"
-                                        horizontalAlignment: Text.AlignHCenter
-                                        wrapMode: Text.WordWrap
-                                        maximumLineCount: 2
-                                        elide: Text.ElideRight
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // --- Прогон одной платы: только своя ёмкость, без эталонов и трубки ---
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: boardOnlyLayout.implicitHeight + 12
-                radius: 12
-                color: root.boardOnly ? "#eff6ff" : "#f8fafc"
-                border.width: 1
-                border.color: root.boardOnly ? "#93c5fd" : "#e2e8f0"
-
-                ColumnLayout {
-                    id: boardOnlyLayout
-                    anchors.fill: parent
-                    anchors.margins: 6
-                    spacing: 6
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-
-                        FancySwitch {
-                            checked: root.boardOnly
-                            enabled: root.appController !== null && !root.busy
-                            onToggled: if (root.appController) root.appController.setChamberBoardOnly(checked)
-                        }
-
-                        Text {
-                            Layout.fillWidth: true
-                            text: "Только плата, своя ёмкость: без эталонов и без трубки"
-                            color: root.textMain
-                            font.pixelSize: 13
-                            font.bold: true
-                            font.family: "Bahnschrift"
-                            elide: Text.ElideRight
-                        }
-
-                        Text {
-                            visible: root.boardOnly
-                            text: "Уход считать как"
-                            color: root.textSoft
-                            font.pixelSize: 11
-                            font.family: "Bahnschrift"
-                            Layout.alignment: Qt.AlignVCenter
-                        }
-
-                        Repeater {
-                            model: root.boardOnly ? [
-                                { "key": "растяжение", "tip": "Ёмкости на плате C0G: уходят резисторы и пороги генератора, уход пропорционален показанию" },
-                                { "key": "сдвиг", "tip": "Ёмкости на плате X7R: плавает сама ёмкость, уход постоянен в отсчётах" }
-                            ] : []
-
-                            FancyButton {
-                                required property var modelData
-                                Layout.preferredWidth: 110
-                                Layout.preferredHeight: 28
-                                fontPixelSize: 12
-                                text: modelData.key
-                                toolTipText: modelData.tip
-                                tone: root.appController && root.appController.chamberSingleModel === modelData.key ? "#0284c7" : "#94a3b8"
-                                toneHover: "#0369a1"
-                                tonePressed: "#075985"
-                                onClicked: if (root.appController) root.appController.setChamberSingleModel(modelData.key)
-                            }
-                        }
-                    }
-
-                    Text {
-                        Layout.fillWidth: true
-                        visible: root.boardOnly
-                        text: "В каждом узле снимается одна точка «0/0»: к входам ничего не подключено. Поправка возвращает показание "
-                              + "при своей ёмкости платы к показанию при +25 °C. При подключённой трубке это допущение: сдвиг и "
-                              + "растяжение по одной ёмкости не разделить. Ряды трубки в профиле не меняются."
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                        wrapMode: Text.WordWrap
-                    }
-                }
-            }
-
-            // --- Достройка строк «в жидкости» ---
-            Rectangle {
-                visible: !root.boardOnly
-                Layout.fillWidth: true
-                Layout.preferredHeight: extendLayout.implicitHeight + 12
-                radius: 12
-                color: "#fefce8"
-                border.width: 1
-                border.color: "#fde68a"
-
-                ColumnLayout {
-                    id: extendLayout
-                    anchors.fill: parent
-                    anchors.margins: 6
-                    spacing: 6
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-
-                        FancySwitch {
-                            id: extendSwitch
-                            checked: root.appController ? root.appController.chamberExtendLiquid : false
-                            enabled: root.appController !== null
-                            onToggled: if (root.appController) root.appController.setChamberExtendLiquid(checked)
-                        }
-
-                        Text {
-                            Layout.fillWidth: true
-                            text: "Достроить строки «в жидкости» по постоянному размаху"
-                            color: root.textMain
-                            font.pixelSize: 13
-                            font.bold: true
-                            font.family: "Bahnschrift"
-                            elide: Text.ElideRight
-                        }
-
-                        Text {
-                            text: "Размах основного"
-                            color: root.textSoft
-                            font.pixelSize: 11
-                            font.family: "Bahnschrift"
-                            Layout.alignment: Qt.AlignVCenter
-                            visible: extendSwitch.checked
-                        }
-
-                        FancyTextField {
-                            id: spanMainField
-                            Layout.preferredWidth: 110
-                            Layout.preferredHeight: 30
-                            visible: extendSwitch.checked
-                            text: root.appController ? root.appController.chamberSpanMainText : ""
-                            placeholderText: "из замера"
-                            textColor: root.textMain
-                            bgColor: root.inputBg
-                            borderColor: root.inputBorder
-                            focusBorderColor: root.inputFocus
-                            onAccepted: if (root.appController) root.appController.setChamberSpanMain(text)
-                            onEditingFinished: if (root.appController) root.appController.setChamberSpanMain(text)
-                        }
-
-                        Text {
-                            text: "Размах вида топлива"
-                            color: root.textSoft
-                            font.pixelSize: 11
-                            font.family: "Bahnschrift"
-                            Layout.alignment: Qt.AlignVCenter
-                            visible: extendSwitch.checked
-                        }
-
-                        FancyTextField {
-                            id: spanMediaField
-                            Layout.preferredWidth: 110
-                            Layout.preferredHeight: 30
-                            visible: extendSwitch.checked
-                            text: root.appController ? root.appController.chamberSpanMediaText : ""
-                            placeholderText: "из замера"
-                            textColor: root.textMain
-                            bgColor: root.inputBg
-                            borderColor: root.inputBorder
-                            focusBorderColor: root.inputFocus
-                            onAccepted: if (root.appController) root.appController.setChamberSpanMedia(text)
-                            onEditingFinished: if (root.appController) root.appController.setChamberSpanMedia(text)
-                        }
-                    }
-
-                    Text {
-                        Layout.fillWidth: true
-                        visible: extendSwitch.checked
-                        text: "Нужно, когда в камеру нельзя ставить топливо. Погружение снимается один раз "
-                            + "при комнатной температуре, в остальных узлах размах считается таким же. "
-                            + "Пустое поле означает «взять размах из снятой пары состояний»."
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                        wrapMode: Text.WordWrap
-                    }
-                }
-            }
-
-            // --- Расчёт таблиц: идёт сам после каждой точки ---
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                FancyButton {
-                    Layout.preferredWidth: 190
-                    Layout.preferredHeight: 32
-                    fontPixelSize: 13
-                    text: "Пересчитать таблицы"
-                    tone: "#0284c7"
-                    toneHover: "#0369a1"
-                    tonePressed: "#075985"
-                    toolTipText: "Таблицы и так пересчитываются после каждой точки. Кнопка нужна, чтобы увидеть подробности расчёта"
-                    enabled: root.appController !== null && !root.busy
-                            && root.appController.chamberPointCount > 0
-                    onClicked: if (root.appController) root.appController.computeChamberTables()
-                }
-
-                Text {
-                    Layout.fillWidth: true
-                    text: root.appController ? root.appController.chamberTablesText : ""
-                    color: root.appController ? root.appController.chamberTablesColor : root.textSoft
-                    font.pixelSize: 12
-                    font.family: "Bahnschrift"
-                    wrapMode: Text.WordWrap
-                    maximumLineCount: 2
-                    elide: Text.ElideRight
-                }
-            }
-
-            // --- Запись профиля в прибор: доступ, запись, сверка, файл ---
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: chainLayout.implicitHeight + 18
-                radius: 12
-                color: "#f0fdf4"
-                border.width: 1
-                border.color: "#bbf7d0"
-
-                ColumnLayout {
-                    id: chainLayout
-                    anchors.fill: parent
-                    anchors.margins: 9
-                    spacing: 6
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-
-                        FancySwitch {
-                            checked: root.chain.autoWrite === true
-                            enabled: root.appController !== null
-                            onToggled: if (root.appController) root.appController.setChamberAutoWrite(checked)
-                        }
-
-                        Text {
-                            Layout.fillWidth: true
-                            text: "Сам писать профиль в прибор, когда данных хватило во всех узлах"
-                            color: root.textMain
-                            font.pixelSize: 13
-                            font.bold: true
-                            font.family: "Bahnschrift"
-                            elide: Text.ElideRight
-                        }
-
-                        FancyButton {
-                            Layout.preferredWidth: 250
-                            Layout.preferredHeight: 32
-                            fontPixelSize: 12
-                            text: root.chain.busy ? "Идёт запись профиля..." : "Записать в прибор, сверить, сохранить"
-                            tone: "#16a34a"
-                            toneHover: "#15803d"
-                            tonePressed: "#166534"
-                            toolTipText: "Открывает доступ на запись, пишет таблицы, читает их обратно и сохраняет профиль в файл рядом с журналом"
-                            enabled: root.appController !== null && !root.busy && !root.chain.busy
-                                    && root.appController.chamberPointCount > 0
-                            onClicked: if (root.appController) root.appController.writeChamberProfile()
-                        }
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 6
-
-                        Repeater {
-                            model: root.chain.steps || []
-
-                            Rectangle {
-                                id: stepChip
-                                required property var modelData
-                                required property int index
-                                readonly property string state_: modelData.state
-
-                                Layout.preferredHeight: 24
-                                Layout.preferredWidth: stepText.implicitWidth + 18
-                                radius: 12
-                                color: state_ === "ok" ? "#dcfce7"
-                                     : state_ === "fail" ? "#fee2e2"
-                                     : state_ === "run" ? "#dbeafe" : "#f1f5f9"
-                                border.width: 1
-                                border.color: state_ === "ok" ? "#86efac"
-                                            : state_ === "fail" ? "#fca5a5"
-                                            : state_ === "run" ? "#93c5fd" : "#e2e8f0"
-
-                                Text {
-                                    id: stepText
-                                    anchors.centerIn: parent
-                                    text: (stepChip.index + 1) + ". " + stepChip.modelData.title
-                                          + (stepChip.state_ === "ok" ? "  ✓"
-                                             : stepChip.state_ === "fail" ? "  ✗"
-                                             : stepChip.state_ === "run" ? "  …" : "")
-                                    color: stepChip.state_ === "ok" ? "#15803d"
-                                         : stepChip.state_ === "fail" ? "#b91c1c"
-                                         : stepChip.state_ === "run" ? "#1d4ed8" : root.textSoft
-                                    font.pixelSize: 11
-                                    font.family: "Bahnschrift"
-                                }
-                            }
-                        }
-
-                        Text {
-                            Layout.fillWidth: true
-                            text: root.chain.status || ""
-                            color: root.chain.color || root.textSoft
-                            font.pixelSize: 12
-                            font.family: "Bahnschrift"
-                            elide: Text.ElideRight
-                        }
-                    }
-                }
-            }
-
-            // --- Файлы журнала ---
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                Text {
-                    Layout.fillWidth: true
-                    text: {
-                        if (!root.appController)
-                            return "Контроллер недоступен"
-                        var count = root.appController.chamberPointCount
-                        var path = root.appController.chamberFilePath
-                        var head = "Снято точек: " + count
-                        return path.length > 0 ? head + ". Журнал сохраняется сам: " + path
-                                               : head + ". Журнал сохранится сам после первой точки"
-                    }
-                    color: root.textSoft
-                    font.pixelSize: 12
-                    font.family: "Bahnschrift"
-                    elide: Text.ElideLeft
-                }
-
-                FancyButton {
-                    Layout.preferredWidth: 160
-                    Layout.preferredHeight: 30
-                    fontPixelSize: 12
-                    text: "Сохранить журнал как..."
-                    tone: "#64748b"
-                    toneHover: "#475569"
-                    tonePressed: "#334155"
-                    toolTipText: "Журнал и так сохраняется после каждой точки. Кнопка переносит его в другой файл, дальше автосохранение пишет туда"
-                    enabled: root.appController !== null && !root.busy
-                    onClicked: root.saveLogRequested()
-                }
-
-                FancyButton {
-                    Layout.preferredWidth: 140
-                    Layout.preferredHeight: 30
-                    fontPixelSize: 12
-                    text: "Загрузить журнал"
-                    tone: "#64748b"
-                    toneHover: "#475569"
-                    tonePressed: "#334155"
-                    toolTipText: "Продолжить прерванный прогон: новые точки допишутся в этот же файл"
-                    enabled: root.appController !== null && !root.busy
-                    onClicked: root.loadLogRequested()
-                }
-
-                FancyButton {
-                    Layout.preferredWidth: 140
-                    Layout.preferredHeight: 30
-                    fontPixelSize: 12
-                    text: "Выгрузить таблицы"
-                    tone: "#64748b"
-                    toneHover: "#475569"
-                    tonePressed: "#334155"
-                    toolTipText: "Сохраняет результат расчёта отдельным файлом для другого прибора"
-                    enabled: root.appController !== null && !root.busy
-                            && root.appController.chamberPointCount > 0
-                    onClicked: root.exportTablesRequested()
-                }
-
-                FancyButton {
-                    Layout.preferredWidth: 100
-                    Layout.preferredHeight: 30
-                    fontPixelSize: 12
-                    text: "Очистить"
-                    tone: "#ef4444"
-                    toneHover: "#dc2626"
-                    tonePressed: "#b91c1c"
-                    toolTipText: "Убирает все точки из окна. Файл прежнего журнала остаётся на диске, следующая точка начнёт новый"
-                    enabled: root.appController !== null && !root.busy
-                    onClicked: if (root.appController) root.appController.clearChamberPoints()
-                }
-            }
-
-            // --- Замечания расчёта ---
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: reportLayout.implicitHeight + 16
-                visible: root.appController && root.appController.chamberReportLines.length > 0
-                radius: 10
-                color: "#fffbeb"
-                border.width: 1
-                border.color: "#fcd34d"
-
-                ColumnLayout {
-                    id: reportLayout
-                    anchors.fill: parent
-                    anchors.margins: 8
-                    spacing: 2
-
-                    Text {
-                        text: "Чего не хватило расчёту"
-                        color: "#92400e"
-                        font.pixelSize: 12
-                        font.bold: true
-                        font.family: "Bahnschrift"
-                    }
-
-                    Repeater {
-                        model: root.appController ? root.appController.chamberReportLines : []
-
-                        Text {
-                            required property string modelData
-                            Layout.fillWidth: true
-                            text: "- " + modelData
-                            color: "#92400e"
-                            font.pixelSize: 11
-                            font.family: "Bahnschrift"
-                            wrapMode: Text.WordWrap
-                        }
-                    }
-                }
-            }
-
             // --- Журнал снятых точек ---
+            Text {
+                text: "Журнал точек" + (root.appController ? "  ·  снято " + root.appController.chamberPointCount : "")
+                color: root.textMain
+                font.pixelSize: 13
+                font.bold: true
+                font.family: "Bahnschrift"
+            }
+
             ScrollView {
                 id: logScroll
                 Layout.fillWidth: true
@@ -1192,7 +1076,6 @@ Card {
                     }
                 }
             }
-
         }
     }
 

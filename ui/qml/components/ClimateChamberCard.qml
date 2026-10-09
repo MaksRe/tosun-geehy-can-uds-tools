@@ -225,6 +225,17 @@ Card {
         Text { text: parent.value; color: parent.valueColor; font.pixelSize: 24; font.bold: true; font.family: "Bahnschrift" }
     }
 
+    // Спойлер для настроек и наладки: компактный заголовок, содержимое с отступом.
+    component Spoiler: SpoilerSection {
+        headerHeight: 36
+        contentPadding: 10
+        cardColor: "#f8fafc"
+        cardBorder: "#e2e8f0"
+        textMain: root.textMain
+        textSoft: root.textSoft
+        accentColor: "#0f766e"
+    }
+
     ScrollView {
         id: pageScroll
         anchors.fill: parent
@@ -237,26 +248,12 @@ Card {
             width: pageScroll.availableWidth
             spacing: 10
 
-            ColumnLayout {
-                Layout.fillWidth: true
-                spacing: 2
-
-                Text {
-                    text: "Климатическая камера"
-                    color: root.textMain
-                    font.pixelSize: 19
-                    font.bold: true
-                    font.family: "Bahnschrift"
-                }
-
-                Text {
-                    Layout.fillWidth: true
-                    text: "Выберите камеру, подключитесь и запустите прогон: программа сама задаёт температуру, ждёт, пока устоится плата, и снимает точки."
-                    color: root.textSoft
-                    font.pixelSize: 12
-                    font.family: "Bahnschrift"
-                    wrapMode: Text.WordWrap
-                }
+            Text {
+                text: "Климатическая камера"
+                color: root.textMain
+                font.pixelSize: 19
+                font.bold: true
+                font.family: "Bahnschrift"
             }
 
             // --- Выбор камеры: у каждой своё назначение ---
@@ -278,7 +275,7 @@ Card {
 
                         Layout.fillWidth: true
                         Layout.preferredWidth: modelData.key === "simulator" ? 1 : 2
-                        Layout.preferredHeight: 64
+                        Layout.preferredHeight: 54
                         radius: 12
                         color: selected ? modelData.fill : "#f8fafc"
                         border.width: selected ? 2 : 1
@@ -427,6 +424,332 @@ Card {
                             }
                         }
                     }
+
+                    // Предупреждения, которые нельзя прятать: режим порта Moxa не тот или идёт поиск камеры.
+                    Text {
+                        Layout.fillWidth: true
+                        visible: root.espec && (root.climate.moxaCheck || {}).ok === false
+                        text: "⚠ " + ((root.climate.moxaCheck || {}).text || "")
+                        color: "#dc2626"
+                        font.pixelSize: 12
+                        font.bold: true
+                        font.family: "Bahnschrift"
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        visible: (root.climate.scan || {}).active === true
+                        text: (root.climate.scan || {}).status || ""
+                        color: "#0e7490"
+                        font.pixelSize: 12
+                        font.family: "Bahnschrift"
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        visible: (root.climate.bridgeStatus || "").length > 0
+                        text: root.climate.bridgeStatus || ""
+                        color: "#9a3412"
+                        font.pixelSize: 12
+                        font.family: "Bahnschrift"
+                        wrapMode: Text.WordWrap
+                    }
+                }
+            }
+
+            Text {
+                Layout.fillWidth: true
+                visible: root.climate.driver === "none"
+                text: "Камера не выбрана. Нажмите на плитку нужной камеры выше. Другая камера с Modbus выбирается в «Настройках связи»."
+                color: root.textSoft
+                font.pixelSize: 12
+                font.family: "Bahnschrift"
+                wrapMode: Text.WordWrap
+            }
+
+            // --- Камера сейчас ---
+            Block {
+                BlockTitle { text: "Камера сейчас" }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 28
+
+                    Big { title: "Температура в камере"; value: root.climate.actualText || "—" }
+                    Big { title: "Уставка"; value: root.climate.setpointText || "—"; valueColor: "#0f766e" }
+                    Big { title: "Состояние"; value: root.climate.runningText || "—" }
+                    Big { title: "Авария"; value: root.climate.alarmText || "—"; valueColor: root.climate.alarm ? "#dc2626" : root.textMain }
+                    Big { visible: root.climate.driver === "simulator"; title: "Изделие (имитатор)"; value: root.climate.productText || "—"; valueColor: "#9a3412" }
+                    Item { Layout.fillWidth: true }
+                }
+
+                // Состояние ESPEC из автоопроса одной строкой: режим, пределы, нагреватель, холодильник, пульт.
+                Text {
+                    Layout.fillWidth: true
+                    visible: root.espec && root.climate.ok === true
+                    text: "Режим: " + (root.especState.modeText || "—")
+                          + "   ·   пределы аварии " + (root.especState.lowText || "—") + " ... " + (root.especState.highText || "—")
+                          + "   ·   нагреватель " + (root.especState.heaterText || "—")
+                          + "   ·   холодильник " + (root.especState.refText || "—")
+                          + "   ·   пульт " + (root.especState.keyText || "—")
+                    color: root.textSoft
+                    font.pixelSize: 12
+                    font.family: "Bahnschrift"
+                    wrapMode: Text.WordWrap
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    visible: (root.especState.programText || "").length > 0 || (root.especState.alarmsText || "").length > 0
+                    text: ((root.especState.programText || "").length > 0 ? "Программа: " + root.especState.programText + ".  " : "")
+                          + ((root.especState.alarmsText || "").length > 0 ? "Номера аварий: " + root.especState.alarmsText + "." : "")
+                    color: (root.especState.alarmsText || "").length > 0 ? "#dc2626" : "#7c3aed"
+                    font.pixelSize: 12
+                    font.family: "Bahnschrift"
+                    wrapMode: Text.WordWrap
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    Caption { text: "Уставка, °C" }
+
+                    FancyTextField {
+                        id: setpointField
+                        Layout.preferredWidth: 90
+                        Layout.preferredHeight: 30
+                        horizontalAlignment: TextInput.AlignHCenter
+                        textColor: root.textMain
+                        bgColor: root.inputBg
+                        borderColor: root.inputBorder
+                        focusBorderColor: root.inputFocus
+                        onAccepted: if (root.appController) root.appController.setClimateSetpoint(text)
+                    }
+
+                    FancyButton {
+                        Layout.preferredWidth: 90
+                        Layout.preferredHeight: 30
+                        fontPixelSize: 12
+                        text: "Задать"
+                        tone: "#0284c7"; toneHover: "#0369a1"; tonePressed: "#075985"
+                        enabled: root.climate.canSet === true && !root.run.active && setpointField.text.length > 0
+                        onClicked: if (root.appController) root.appController.setClimateSetpoint(setpointField.text)
+                    }
+
+                    FancyButton {
+                        Layout.preferredWidth: 80
+                        Layout.preferredHeight: 30
+                        fontPixelSize: 12
+                        text: "Пуск"
+                        tone: "#16a34a"; toneHover: "#15803d"; tonePressed: "#166534"
+                        enabled: root.climate.canRun === true
+                        onClicked: if (root.appController) root.appController.setClimateRunning(true)
+                    }
+
+                    FancyButton {
+                        Layout.preferredWidth: 80
+                        Layout.preferredHeight: 30
+                        fontPixelSize: 12
+                        text: "Стоп"
+                        tone: "#ef4444"; toneHover: "#dc2626"; tonePressed: "#b91c1c"
+                        enabled: root.climate.canRun === true
+                        onClicked: if (root.appController) root.appController.setClimateRunning(false)
+                    }
+
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: root.climate.commandStatus || ""
+                        color: root.textSoft
+                        font.pixelSize: 12
+                        font.family: "Bahnschrift"
+                        elide: Text.ElideRight
+                    }
+                }
+            }
+
+            // --- Автоматический прогон ---
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: runLayout.implicitHeight + 20
+                radius: 12
+                color: root.run.active ? "#f0fdf4" : "#f8fbff"
+                border.width: 1
+                border.color: root.run.active ? "#86efac" : "#d6e2ef"
+
+                ColumnLayout {
+                    id: runLayout
+                    anchors.fill: parent
+                    anchors.margins: 10
+                    spacing: 8
+
+                    BlockTitle { text: "Автоматический прогон" }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+
+                        Repeater {
+                            model: root.run.nodes || []
+
+                            Rectangle {
+                                required property var modelData
+                                Layout.preferredHeight: 26
+                                Layout.preferredWidth: nodeText.implicitWidth + 20
+                                radius: 13
+                                color: modelData.state === "done" ? "#dcfce7" : modelData.state === "run" ? "#dbeafe" : "#f1f5f9"
+                                border.width: 1
+                                border.color: modelData.state === "done" ? "#86efac" : modelData.state === "run" ? "#93c5fd" : "#e2e8f0"
+
+                                Text {
+                                    id: nodeText
+                                    anchors.centerIn: parent
+                                    text: parent.modelData.text + (parent.modelData.state === "done" ? "  ✓" : "")
+                                    color: parent.modelData.state === "run" ? "#1d4ed8" : root.textMain
+                                    font.pixelSize: 12
+                                    font.family: "Bahnschrift"
+                                }
+                            }
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: root.run.active ? "Этап: " + (root.run.stage || "") + (root.run.paused ? " (пауза)" : "") : ""
+                            color: "#1d4ed8"
+                            font.pixelSize: 12
+                            font.family: "Bahnschrift"
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        FancyButton {
+                            Layout.preferredWidth: 200
+                            Layout.preferredHeight: 34
+                            text: root.run.active ? "Остановить прогон" : "Начать прогон"
+                            tone: root.run.active ? "#ef4444" : "#16a34a"
+                            toneHover: root.run.active ? "#dc2626" : "#15803d"
+                            tonePressed: root.run.active ? "#b91c1c" : "#166534"
+                            enabled: root.run.active || (root.climate.ok === true && root.climate.canSet === true)
+                            onClicked: {
+                                if (!root.appController) return
+                                if (root.run.active) root.appController.stopClimateRun()
+                                else root.appController.startClimateRun()
+                            }
+                        }
+
+                        FancyButton {
+                            Layout.preferredWidth: 170
+                            Layout.preferredHeight: 34
+                            fontPixelSize: 13
+                            visible: root.run.active === true
+                            text: root.run.paused ? "Продолжить прогон" : "Пауза"
+                            tone: "#64748b"; toneHover: "#475569"; tonePressed: "#334155"
+                            onClicked: if (root.appController) root.appController.pauseClimateRun(!root.run.paused)
+                        }
+
+                        FancyButton {
+                            Layout.preferredWidth: 200
+                            Layout.preferredHeight: 34
+                            fontPixelSize: 13
+                            visible: root.run.operator === true
+                            text: "Эталоны переключены"
+                            tone: "#ea580c"; toneHover: "#c2410c"; tonePressed: "#9a3412"
+                            onClicked: if (root.appController) root.appController.continueClimateRun()
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: root.run.status || ""
+                            color: root.run.color || root.textSoft
+                            font.pixelSize: 13
+                            font.family: "Bahnschrift"
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+                }
+            }
+
+            // --- Настройки прогона и пределы уставки ---
+            Spoiler {
+                visible: root.climate.driver !== "none"
+                title: "Настройки прогона и пределы уставки"
+                hintText: "узлы " + (root.settings.run_nodes || "") + "  ·  пределы уставки " + (root.settings.min_c || "") + " ... " + (root.settings.max_c || "") + " °C"
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+                        Caption { text: "Температуры, °C" }
+                        SettingField { key: "run_nodes"; Layout.preferredWidth: 260 }
+                        Caption { text: "Пометки через «;»" }
+                        SettingField { key: "run_labels"; Layout.fillWidth: true
+                            placeholderText: "например 0/0; 68/22; 150/47. Пусто - текущая пометка из «Прогона в камере»" }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+                        Caption { text: "Выход на уставку ±, °C" }
+                        SettingField { key: "reach_tolerance_c"; Layout.preferredWidth: 50 }
+                        Caption { text: "Плата устоялась: за, мин" }
+                        SettingField { key: "settle_min"; Layout.preferredWidth: 50 }
+                        Caption { text: "медленнее, °C/мин" }
+                        SettingField { key: "settle_rate"; Layout.preferredWidth: 60 }
+                        Caption { text: "Предупредить через, мин:" }
+                        SettingField { key: "reach_timeout_min"; Layout.preferredWidth: 55 }
+                        SettingField { key: "settle_timeout_min"; Layout.preferredWidth: 55 }
+                        Caption { text: "В конце, °C" }
+                        SettingField { key: "finish_setpoint"; Layout.preferredWidth: 55 }
+                        FancySwitch {
+                            checked: root.settings.finish_stop === true
+                            trackWidth: 44; trackHeight: 24
+                            onToggled: if (root.appController) root.appController.setClimateFlag("finish_stop", checked)
+                        }
+                        Caption { text: "и остановить" }
+                        Item { Layout.fillWidth: true }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                    Caption { text: "Пределы уставки, °C" }
+                    SettingField { key: "min_c"; Layout.preferredWidth: 60 }
+                    SettingField { key: "max_c"; Layout.preferredWidth: 60 }
+                        Caption { text: "- ручная уставка и прогон не выйдут за эти пределы" }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: "В каждом узле: уставка - выход камеры на неё - плата устоялась - точки со всеми пометками - следующий узел. "
+                              + "Если пометок несколько, программа просит переключить эталоны и ждёт «Эталоны переключены», "
+                              + "а порядок чередует, чтобы переключать реже. Журнал, таблицы и запись профиля идут как обычно."
+                        color: root.textSoft
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                        wrapMode: Text.WordWrap
+                    }
+                }
+            }
+
+            // --- Настройки связи: порт, скорость, адрес, поиск камеры, кабель, Modbus ---
+            Spoiler {
+                visible: root.climate.driver !== "none"
+                title: "Настройки связи"
+                hintText: (root.climate.chamber || {}).summary || ""
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
 
                     // ESPEC MC-811P: RS-485, текстовые команды.
                     RowLayout {
@@ -735,18 +1058,6 @@ Card {
                         }
                         Item { Layout.fillWidth: true }
                     }
-                }
-            }
-
-            Text {
-                Layout.fillWidth: true
-                visible: root.climate.driver === "none"
-                text: "Камера не выбрана. Нажмите на плитку нужной камеры выше. Другая камера с Modbus выбирается после этого внизу блока подключения."
-                color: root.textSoft
-                font.pixelSize: 12
-                font.family: "Bahnschrift"
-                wrapMode: Text.WordWrap
-            }
 
             // --- Карта регистров ---
             Block {
@@ -828,129 +1139,19 @@ Card {
                     Item { width: 1 }
                 }
             }
-
-            // --- Камера сейчас ---
-            Block {
-                BlockTitle { text: "Камера сейчас" }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 28
-
-                    Big { title: "Температура в камере"; value: root.climate.actualText || "—" }
-                    Big { title: "Уставка"; value: root.climate.setpointText || "—"; valueColor: "#0f766e" }
-                    Big { title: "Состояние"; value: root.climate.runningText || "—" }
-                    Big { title: "Авария"; value: root.climate.alarmText || "—"; valueColor: root.climate.alarm ? "#dc2626" : root.textMain }
-                    Big { visible: root.climate.driver === "simulator"; title: "Изделие (имитатор)"; value: root.climate.productText || "—"; valueColor: "#9a3412" }
-                    Item { Layout.fillWidth: true }
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-
-                    Caption { text: "Уставка, °C" }
-
-                    FancyTextField {
-                        id: setpointField
-                        Layout.preferredWidth: 90
-                        Layout.preferredHeight: 30
-                        horizontalAlignment: TextInput.AlignHCenter
-                        textColor: root.textMain
-                        bgColor: root.inputBg
-                        borderColor: root.inputBorder
-                        focusBorderColor: root.inputFocus
-                        onAccepted: if (root.appController) root.appController.setClimateSetpoint(text)
-                    }
-
-                    FancyButton {
-                        Layout.preferredWidth: 90
-                        Layout.preferredHeight: 30
-                        fontPixelSize: 12
-                        text: "Задать"
-                        tone: "#0284c7"; toneHover: "#0369a1"; tonePressed: "#075985"
-                        enabled: root.climate.canSet === true && !root.run.active && setpointField.text.length > 0
-                        onClicked: if (root.appController) root.appController.setClimateSetpoint(setpointField.text)
-                    }
-
-                    FancyButton {
-                        Layout.preferredWidth: 80
-                        Layout.preferredHeight: 30
-                        fontPixelSize: 12
-                        text: "Пуск"
-                        tone: "#16a34a"; toneHover: "#15803d"; tonePressed: "#166534"
-                        enabled: root.climate.canRun === true
-                        onClicked: if (root.appController) root.appController.setClimateRunning(true)
-                    }
-
-                    FancyButton {
-                        Layout.preferredWidth: 80
-                        Layout.preferredHeight: 30
-                        fontPixelSize: 12
-                        text: "Стоп"
-                        tone: "#ef4444"; toneHover: "#dc2626"; tonePressed: "#b91c1c"
-                        enabled: root.climate.canRun === true
-                        onClicked: if (root.appController) root.appController.setClimateRunning(false)
-                    }
-
-                    Caption { text: "Пределы уставки, °C" }
-                    SettingField { key: "min_c"; Layout.preferredWidth: 60 }
-                    SettingField { key: "max_c"; Layout.preferredWidth: 60 }
-
-                    Text {
-                        Layout.fillWidth: true
-                        text: root.climate.commandStatus || ""
-                        color: root.textSoft
-                        font.pixelSize: 12
-                        font.family: "Bahnschrift"
-                        elide: Text.ElideRight
-                    }
                 }
             }
 
-            // --- Ручное управление камерой ESPEC ---
-            Block {
+            // --- Ручное управление ESPEC: режим, пределы аварии, холодильник, пульт, плавный переход ---
+            Spoiler {
                 visible: root.espec
+                title: "Ручное управление ESPEC"
+                hintText: !root.manualAllowed ? "идёт автопрогон: настройки камеры меняются только на паузе"
+                                              : "пуск, панель, пределы аварии, холодильник, пульт, плавный переход"
 
-                RowLayout {
+                ColumnLayout {
                     Layout.fillWidth: true
-                    BlockTitle { text: "Управление камерой ESPEC" }
-                    Item { Layout.fillWidth: true }
-                    Text {
-                        visible: !root.manualAllowed
-                        text: "Идёт автопрогон: настройки камеры меняются только на паузе"
-                        color: "#b45309"
-                        font.pixelSize: 12
-                        font.bold: true
-                        font.family: "Bahnschrift"
-                    }
-                }
-
-                // Состояние камеры из автоопроса: режим, пределы, нагреватель, холодильник, пульт.
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 24
-                    Fact { title: "Режим"; value: root.especState.modeText || "—"
-                        valueColor: root.especState.powerOff ? "#64748b" : (root.especState.program ? "#7c3aed" : "#0f766e") }
-                    Fact { title: "Верхний предел аварии"; value: root.especState.highText || "—" }
-                    Fact { title: "Нижний предел аварии"; value: root.especState.lowText || "—" }
-                    Fact { title: "Нагреватель"; value: root.especState.heaterText || "—" }
-                    Fact { title: "Холодильник"; value: root.especState.refText || "—" }
-                    Fact { title: "Пульт"; value: root.especState.keyText || "—"
-                        valueColor: root.especState.keyProtect ? "#b45309" : root.textMain }
-                    Item { Layout.fillWidth: true }
-                }
-
-                Text {
-                    Layout.fillWidth: true
-                    visible: (root.especState.programText || "").length > 0 || (root.especState.alarmsText || "").length > 0
-                    text: ((root.especState.programText || "").length > 0 ? "Программа: " + root.especState.programText + ".  " : "")
-                          + ((root.especState.alarmsText || "").length > 0 ? "Номера аварий: " + root.especState.alarmsText + "." : "")
-                    color: (root.especState.alarmsText || "").length > 0 ? "#dc2626" : "#7c3aed"
-                    font.pixelSize: 12
-                    font.family: "Bahnschrift"
-                    wrapMode: Text.WordWrap
-                }
+                    spacing: 8
 
                 Text {
                     Layout.fillWidth: true
@@ -959,7 +1160,6 @@ Card {
                     font.pixelSize: 11
                     font.family: "Bahnschrift"
                 }
-
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 8
@@ -1037,13 +1237,21 @@ Card {
                     font.family: "Bahnschrift"
                     wrapMode: Text.WordWrap
                 }
+                }
             }
 
-            // --- Список всех команд ESPEC и журнал обмена ---
-            Block {
+            // --- Все команды руководства и журнал обмена: для наладки ---
+            Spoiler {
+                visible: root.espec
+                title: "Команды камеры и журнал обмена (наладка)"
+                hintText: "все команды руководства ESPEC с параметрами, своя строка, ответы камеры словами"
+
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 8
                 visible: root.espec
 
-                BlockTitle { text: "Команды камеры ESPEC" }
 
                 RowLayout {
                     Layout.fillWidth: true
@@ -1300,16 +1508,24 @@ Card {
                     }
                 }
             }
+            }
 
             // --- Диагностика связи: журнал, проверка, отчёт для разбора ---
-            Block {
+            Spoiler {
+                visible: root.climate.driver !== "none"
+                title: "Диагностика связи и журналы"
+                hintText: "проверка связи, отчёт для разбора, счётчики обмена, журнал в logs/chamber"
+
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 8
                 id: diagBlock
                 visible: root.climate.driver !== "none"
                 readonly property var diag: root.climate.diag || ({})
                 readonly property var selftest: root.climate.selftest || ({})
                 readonly property var moxaCheck: root.climate.moxaCheck || ({})
 
-                BlockTitle { text: "Диагностика связи" }
 
                 Text {
                     Layout.fillWidth: true
@@ -1457,153 +1673,6 @@ Card {
                     }
                 }
             }
-
-            // --- Автоматический прогон ---
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: runLayout.implicitHeight + 20
-                radius: 12
-                color: root.run.active ? "#f0fdf4" : "#f8fbff"
-                border.width: 1
-                border.color: root.run.active ? "#86efac" : "#d6e2ef"
-
-                ColumnLayout {
-                    id: runLayout
-                    anchors.fill: parent
-                    anchors.margins: 10
-                    spacing: 8
-
-                    BlockTitle { text: "Автоматический прогон" }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-                        Caption { text: "Температуры, °C" }
-                        SettingField { key: "run_nodes"; Layout.preferredWidth: 260 }
-                        Caption { text: "Пометки через «;»" }
-                        SettingField { key: "run_labels"; Layout.fillWidth: true
-                            placeholderText: "например 0/0; 68/22; 150/47. Пусто - текущая пометка из «Прогона в камере»" }
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-                        Caption { text: "Выход на уставку ±, °C" }
-                        SettingField { key: "reach_tolerance_c"; Layout.preferredWidth: 50 }
-                        Caption { text: "Плата устоялась: за, мин" }
-                        SettingField { key: "settle_min"; Layout.preferredWidth: 50 }
-                        Caption { text: "медленнее, °C/мин" }
-                        SettingField { key: "settle_rate"; Layout.preferredWidth: 60 }
-                        Caption { text: "Предупредить через, мин:" }
-                        SettingField { key: "reach_timeout_min"; Layout.preferredWidth: 55 }
-                        SettingField { key: "settle_timeout_min"; Layout.preferredWidth: 55 }
-                        Caption { text: "В конце, °C" }
-                        SettingField { key: "finish_setpoint"; Layout.preferredWidth: 55 }
-                        FancySwitch {
-                            checked: root.settings.finish_stop === true
-                            trackWidth: 44; trackHeight: 24
-                            onToggled: if (root.appController) root.appController.setClimateFlag("finish_stop", checked)
-                        }
-                        Caption { text: "и остановить" }
-                        Item { Layout.fillWidth: true }
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 6
-
-                        Repeater {
-                            model: root.run.nodes || []
-
-                            Rectangle {
-                                required property var modelData
-                                Layout.preferredHeight: 26
-                                Layout.preferredWidth: nodeText.implicitWidth + 20
-                                radius: 13
-                                color: modelData.state === "done" ? "#dcfce7" : modelData.state === "run" ? "#dbeafe" : "#f1f5f9"
-                                border.width: 1
-                                border.color: modelData.state === "done" ? "#86efac" : modelData.state === "run" ? "#93c5fd" : "#e2e8f0"
-
-                                Text {
-                                    id: nodeText
-                                    anchors.centerIn: parent
-                                    text: parent.modelData.text + (parent.modelData.state === "done" ? "  ✓" : "")
-                                    color: parent.modelData.state === "run" ? "#1d4ed8" : root.textMain
-                                    font.pixelSize: 12
-                                    font.family: "Bahnschrift"
-                                }
-                            }
-                        }
-
-                        Text {
-                            Layout.fillWidth: true
-                            text: root.run.active ? "Этап: " + (root.run.stage || "") + (root.run.paused ? " (пауза)" : "") : ""
-                            color: "#1d4ed8"
-                            font.pixelSize: 12
-                            font.family: "Bahnschrift"
-                        }
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-
-                        FancyButton {
-                            Layout.preferredWidth: 200
-                            Layout.preferredHeight: 34
-                            text: root.run.active ? "Остановить прогон" : "Начать прогон"
-                            tone: root.run.active ? "#ef4444" : "#16a34a"
-                            toneHover: root.run.active ? "#dc2626" : "#15803d"
-                            tonePressed: root.run.active ? "#b91c1c" : "#166534"
-                            enabled: root.run.active || (root.climate.ok === true && root.climate.canSet === true)
-                            onClicked: {
-                                if (!root.appController) return
-                                if (root.run.active) root.appController.stopClimateRun()
-                                else root.appController.startClimateRun()
-                            }
-                        }
-
-                        FancyButton {
-                            Layout.preferredWidth: 170
-                            Layout.preferredHeight: 34
-                            fontPixelSize: 13
-                            visible: root.run.active === true
-                            text: root.run.paused ? "Продолжить прогон" : "Пауза"
-                            tone: "#64748b"; toneHover: "#475569"; tonePressed: "#334155"
-                            onClicked: if (root.appController) root.appController.pauseClimateRun(!root.run.paused)
-                        }
-
-                        FancyButton {
-                            Layout.preferredWidth: 200
-                            Layout.preferredHeight: 34
-                            fontPixelSize: 13
-                            visible: root.run.operator === true
-                            text: "Эталоны переключены"
-                            tone: "#ea580c"; toneHover: "#c2410c"; tonePressed: "#9a3412"
-                            onClicked: if (root.appController) root.appController.continueClimateRun()
-                        }
-
-                        Text {
-                            Layout.fillWidth: true
-                            text: root.run.status || ""
-                            color: root.run.color || root.textSoft
-                            font.pixelSize: 13
-                            font.family: "Bahnschrift"
-                            wrapMode: Text.WordWrap
-                        }
-                    }
-
-                    Text {
-                        Layout.fillWidth: true
-                        text: "В каждом узле: уставка - выход камеры на неё - плата устоялась - точки со всеми пометками - следующий узел. "
-                              + "Если пометок несколько, программа просит переключить эталоны и ждёт «Эталоны переключены», "
-                              + "а порядок чередует, чтобы переключать реже. Журнал, таблицы и запись профиля идут как обычно."
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                        wrapMode: Text.WordWrap
-                    }
-                }
             }
         }
     }

@@ -92,66 +92,6 @@ Item {
                     }
                 }
 
-                // Интервал опроса общий для обоих контуров, поэтому стоит над их карточками.
-                Rectangle {
-                    Layout.preferredHeight: pollLayout.implicitHeight + 12
-                    Layout.preferredWidth: pollLayout.implicitWidth + 20
-                    radius: 10
-                    color: "#f8fbff"
-                    border.width: 1
-                    border.color: "#d6e2ef"
-
-                    RowLayout {
-                        id: pollLayout
-                        anchors.centerIn: parent
-                        spacing: 8
-
-                        ColumnLayout {
-                            spacing: 0
-
-                            Text {
-                                text: "Опрос показаний, мс"
-                                color: root.textMain
-                                font.pixelSize: 12
-                                font.bold: true
-                                font.family: "Bahnschrift"
-                            }
-
-                            Text {
-                                text: "основной контур и плоский конденсатор"
-                                color: root.textSoft
-                                font.pixelSize: 10
-                                font.family: "Bahnschrift"
-                            }
-                        }
-
-                        FancyTextField {
-                            id: pollIntervalField
-                            Layout.preferredWidth: 76
-                            Layout.preferredHeight: 32
-                            text: root.appController ? String(root.appController.calibrationPollingIntervalMs) : "1000"
-                            placeholderText: "мс"
-                            textColor: root.textMain
-                            bgColor: root.inputBg
-                            borderColor: root.inputBorder
-                            focusBorderColor: root.inputFocus
-                            validator: IntValidator { bottom: 100; top: 10000 }
-                            onAccepted: if (root.appController) root.appController.setCalibrationPollingIntervalMs(text)
-                        }
-
-                        FancyButton {
-                            Layout.preferredWidth: 56
-                            Layout.preferredHeight: 32
-                            text: "OK"
-                            tone: "#0284c7"
-                            toneHover: "#0369a1"
-                            tonePressed: "#075985"
-                            toolTipText: "Применить интервал к опросу основного контура и плоского конденсатора"
-                            enabled: root.appController !== null
-                            onClicked: if (root.appController) root.appController.setCalibrationPollingIntervalMs(pollIntervalField.text)
-                        }
-                    }
-                }
             }
 
             // --- Живые показания обоих контуров ---
@@ -391,17 +331,6 @@ Item {
                 }
             }
 
-            // --- Ёмкость контуров ---
-            CapacitanceCard {
-                appController: root.appController
-                textMain: root.textMain
-                textSoft: root.textSoft
-                inputBg: root.inputBg
-                inputBorder: root.inputBorder
-                inputFocus: root.inputFocus
-                wide: root.wide
-            }
-
             // --- Два положения датчика ---
             GridLayout {
                 Layout.fillWidth: true
@@ -565,22 +494,6 @@ Item {
                             }
                         }
 
-                        // Отладочная точка: в прибор не пишется, нужна для оценки вклада кабеля.
-                        ImmersionTestBlock {
-                            point: root.appController ? root.appController.capacitance.testPoint : ({})
-                            capturedText: root.appController ? root.appController.mediaWizardCapturedText : "-"
-                            enabledActions: root.appController !== null
-                            textMain: root.textMain
-                            textSoft: root.textSoft
-                            inputBg: root.inputBg
-                            inputBorder: root.inputBorder
-                            inputFocus: root.inputFocus
-                            onSaveRequested: function(valueText) {
-                                if (root.appController) root.appController.saveCapacitanceTestPoint(valueText)
-                            }
-                            onClearRequested: if (root.appController) root.appController.clearCapacitanceTestPoint()
-                        }
-
                         Item { Layout.fillHeight: true }
                     }
                 }
@@ -734,6 +647,115 @@ Item {
                             onClicked: if (root.appController) root.appController.clearCalibrationMarkMediaStatus()
                         }
                     }
+                }
+            }
+
+            // --- Опрос и ёмкость контуров: диагностика, оператору при калибровке не нужна ---
+            SpoilerSection {
+                Layout.fillWidth: true
+                Layout.fillHeight: false
+                title: "Опрос и ёмкость контуров (диагностика)"
+                hintText: "интервал опроса, ёмкость в пикофарадах, проверка полного погружения"
+                cardColor: "#f8fafc"
+                cardBorder: "#dbeafe"
+                textMain: root.textMain
+                textSoft: root.textSoft
+                accentColor: "#0f766e"
+                headerHeight: 36
+                contentPadding: 10
+                expanded: false
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+
+                // Интервал опроса общий для обоих контуров, поэтому стоит над их карточками.
+                Rectangle {
+                    Layout.preferredHeight: pollLayout.implicitHeight + 12
+                    Layout.preferredWidth: pollLayout.implicitWidth + 20
+                    radius: 10
+                    color: "#f8fbff"
+                    border.width: 1
+                    border.color: "#d6e2ef"
+
+                    RowLayout {
+                        id: pollLayout
+                        anchors.centerIn: parent
+                        spacing: 8
+
+                        ColumnLayout {
+                            spacing: 0
+
+                            Text {
+                                text: "Опрос показаний, мс"
+                                color: root.textMain
+                                font.pixelSize: 12
+                                font.bold: true
+                                font.family: "Bahnschrift"
+                            }
+
+                            Text {
+                                text: "основной контур и плоский конденсатор"
+                                color: root.textSoft
+                                font.pixelSize: 10
+                                font.family: "Bahnschrift"
+                            }
+                        }
+
+                        FancyTextField {
+                            id: pollIntervalField
+                            Layout.preferredWidth: 76
+                            Layout.preferredHeight: 32
+                            text: root.appController ? String(root.appController.calibrationPollingIntervalMs) : "1000"
+                            placeholderText: "мс"
+                            textColor: root.textMain
+                            bgColor: root.inputBg
+                            borderColor: root.inputBorder
+                            focusBorderColor: root.inputFocus
+                            validator: IntValidator { bottom: 100; top: 10000 }
+                            onAccepted: if (root.appController) root.appController.setCalibrationPollingIntervalMs(text)
+                        }
+
+                        FancyButton {
+                            Layout.preferredWidth: 56
+                            Layout.preferredHeight: 32
+                            text: "OK"
+                            tone: "#0284c7"
+                            toneHover: "#0369a1"
+                            tonePressed: "#075985"
+                            toolTipText: "Применить интервал к опросу основного контура и плоского конденсатора"
+                            enabled: root.appController !== null
+                            onClicked: if (root.appController) root.appController.setCalibrationPollingIntervalMs(pollIntervalField.text)
+                        }
+                    }
+                }
+
+            // --- Ёмкость контуров ---
+            CapacitanceCard {
+                appController: root.appController
+                textMain: root.textMain
+                textSoft: root.textSoft
+                inputBg: root.inputBg
+                inputBorder: root.inputBorder
+                inputFocus: root.inputFocus
+                wide: root.wide
+            }
+
+                        // Отладочная точка: в прибор не пишется, нужна для оценки вклада кабеля.
+                        ImmersionTestBlock {
+                            point: root.appController ? root.appController.capacitance.testPoint : ({})
+                            capturedText: root.appController ? root.appController.mediaWizardCapturedText : "-"
+                            enabledActions: root.appController !== null
+                            textMain: root.textMain
+                            textSoft: root.textSoft
+                            inputBg: root.inputBg
+                            inputBorder: root.inputBorder
+                            inputFocus: root.inputFocus
+                            onSaveRequested: function(valueText) {
+                                if (root.appController) root.appController.saveCapacitanceTestPoint(valueText)
+                            }
+                            onClearRequested: if (root.appController) root.appController.clearCapacitanceTestPoint()
+                        }
                 }
             }
 
