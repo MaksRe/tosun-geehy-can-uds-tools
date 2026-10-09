@@ -34,6 +34,8 @@ Card {
     readonly property var climate: root.appController ? root.appController.climate : ({})
     readonly property var settings: root.climate.settings || ({})
     readonly property var run: root.climate.run || ({})
+    // Автономный прогон: проверка перед стартом, ход, проблемы, прерванный прогон.
+    readonly property var auto: root.run.auto || ({})
     readonly property bool modbus: root.climate.driver === "modbus_tcp" || root.climate.driver === "modbus_rtu"
     readonly property bool espec: root.climate.driver === "espec"
     readonly property var especState: root.climate.espec || ({})
@@ -588,6 +590,144 @@ Card {
 
                     BlockTitle { text: "Автоматический прогон" }
 
+                    // Прогон, прерванный перезапуском программы: продолжить или забыть.
+                    Rectangle {
+                        Layout.fillWidth: true
+                        visible: root.auto.resume !== null && root.auto.resume !== undefined
+                        Layout.preferredHeight: resumeLayout.implicitHeight + 14
+                        radius: 10
+                        color: "#fff7ed"
+                        border.width: 1
+                        border.color: "#fdba74"
+
+                        RowLayout {
+                            id: resumeLayout
+                            anchors.fill: parent
+                            anchors.margins: 7
+                            spacing: 8
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: ((root.auto.resume || {}).text || "")
+                                      + ((root.auto.resume || {}).auto ? " Продолжится сам, когда камера и прибор будут на связи 30 с." : "")
+                                color: "#9a3412"
+                                font.pixelSize: 12
+                                font.family: "Bahnschrift"
+                                wrapMode: Text.WordWrap
+                            }
+
+                            FancyButton {
+                                Layout.preferredWidth: 170
+                                Layout.preferredHeight: 30
+                                fontPixelSize: 12
+                                text: "Продолжить прогон"
+                                tone: "#ea580c"; toneHover: "#c2410c"; tonePressed: "#9a3412"
+                                enabled: root.climate.ok === true
+                                onClicked: if (root.appController) root.appController.resumeClimateRun()
+                            }
+
+                            FancyButton {
+                                Layout.preferredWidth: 90
+                                Layout.preferredHeight: 30
+                                fontPixelSize: 12
+                                text: "Забыть"
+                                tone: "#64748b"; toneHover: "#475569"; tonePressed: "#334155"
+                                onClicked: if (root.appController) root.appController.discardClimateRun()
+                            }
+                        }
+                    }
+
+                    // Проверка перед стартом: что мешает (✗) и что стоит знать (!).
+                    GridLayout {
+                        Layout.fillWidth: true
+                        visible: !root.run.active && root.climate.driver !== "none"
+                        columns: 2
+                        columnSpacing: 16
+                        rowSpacing: 3
+
+                        Repeater {
+                            model: root.auto.checks || []
+
+                            Text {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                Layout.preferredWidth: 1
+                                text: (modelData.ok ? "✓  " : (modelData.level === "block" ? "✗  " : "!  ")) + modelData.text
+                                color: modelData.ok ? "#15803d" : (modelData.level === "block" ? "#dc2626" : "#b45309")
+                                font.pixelSize: 12
+                                font.bold: !modelData.ok && modelData.level === "block"
+                                font.family: "Bahnschrift"
+                                wrapMode: Text.WordWrap
+                            }
+                        }
+                    }
+
+                    // Ход автономного прогона: доля пройденных узлов, время, проблемы.
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        visible: root.run.active === true
+                        spacing: 4
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 8
+                            radius: 4
+                            color: "#e2e8f0"
+
+                            Rectangle {
+                                width: parent.width * Math.max(0, Math.min(1, root.auto.progress || 0))
+                                height: parent.height
+                                radius: 4
+                                color: "#16a34a"
+                            }
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: root.auto.progressText || ""
+                            color: root.textMain
+                            font.pixelSize: 13
+                            font.bold: true
+                            font.family: "Bahnschrift"
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            visible: (root.auto.nodesText || "").length > 0
+                            text: "Время по узлам: " + (root.auto.nodesText || "")
+                            color: root.textSoft
+                            font.pixelSize: 12
+                            font.family: "Bahnschrift"
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+
+                    // Текущие проблемы: каждая видна, пока не прошла.
+                    Repeater {
+                        model: root.auto.alerts || []
+
+                        Rectangle {
+                            required property var modelData
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: alertText.implicitHeight + 10
+                            radius: 8
+                            color: modelData.level === "bad" ? "#fef2f2" : "#fffbeb"
+                            border.width: 1
+                            border.color: modelData.level === "bad" ? "#fca5a5" : "#fcd34d"
+
+                            Text {
+                                id: alertText
+                                anchors.fill: parent
+                                anchors.margins: 5
+                                text: (parent.modelData.level === "bad" ? "⛔  " : "⚠  ") + parent.modelData.time + "  " + parent.modelData.text
+                                color: parent.modelData.level === "bad" ? "#b91c1c" : "#92400e"
+                                font.pixelSize: 12
+                                font.family: "Bahnschrift"
+                                wrapMode: Text.WordWrap
+                            }
+                        }
+                    }
+
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 6
@@ -635,7 +775,10 @@ Card {
                             tone: root.run.active ? "#ef4444" : "#16a34a"
                             toneHover: root.run.active ? "#dc2626" : "#15803d"
                             tonePressed: root.run.active ? "#b91c1c" : "#166534"
-                            enabled: root.run.active || (root.climate.ok === true && root.climate.canSet === true)
+                            enabled: root.run.active || (root.climate.ok === true && root.climate.canSet === true
+                                                         && root.auto.canStart !== false)
+                            toolTipText: root.run.active || root.auto.canStart !== false ? ""
+                                         : "Сначала устраните то, что отмечено ✗ в проверке выше"
                             onClicked: {
                                 if (!root.appController) return
                                 if (root.run.active) root.appController.stopClimateRun()
@@ -715,6 +858,22 @@ Card {
                             onToggled: if (root.appController) root.appController.setClimateFlag("finish_stop", checked)
                         }
                         Caption { text: "и остановить" }
+                        Item { Layout.fillWidth: true }
+                    }
+                    // Автономность: продолжение после перезапуска, сводка, контроль платы.
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+                        FancySwitch {
+                            checked: root.settings.auto_resume === true
+                            trackWidth: 44; trackHeight: 24
+                            onToggled: if (root.appController) root.appController.setClimateFlag("auto_resume", checked)
+                        }
+                        Caption { text: "продолжать прогон после перезапуска программы" }
+                        Caption { text: "   Сводка в Telegram раз в, мин (0 - нет)" }
+                        SettingField { key: "report_every_min"; Layout.preferredWidth: 55 }
+                        Caption { text: "   Плата дальше от воздуха, чем на, °C - проблема" }
+                        SettingField { key: "board_gap_c"; Layout.preferredWidth: 55 }
                         Item { Layout.fillWidth: true }
                     }
                     RowLayout {

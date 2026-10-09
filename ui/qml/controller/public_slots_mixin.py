@@ -3384,6 +3384,16 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._climate_espec_scan()
 
     @Slot()
+    def resumeClimateRun(self):
+        """Цель функции в продолжении прогона, прерванного перезапуском программы, с того же узла."""
+        self._climate_auto_resume_now()
+
+    @Slot()
+    def discardClimateRun(self):
+        """Цель функции в отказе от прерванного прогона, затем его файл состояния удаляется."""
+        self._climate_auto_discard_resume()
+
+    @Slot()
     def runClimateSelftest(self):
         """Цель функции в проверке связи набором запросов, затем по каждому виден ответ, задержка и итог."""
         self._climate_selftest_start()

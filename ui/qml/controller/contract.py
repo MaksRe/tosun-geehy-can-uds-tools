@@ -197,6 +197,23 @@ class AppControllerContract:
     _climate_diag: Any
     _climate_selftest: Any
     _climate_moxa: Any
+    _climate_auto_alerts: Any
+    _climate_auto_watch: Any
+    _climate_auto_progress: Any
+    _climate_auto_durations: Any
+    _climate_auto_elapsed_before: Any
+    _climate_auto_session_start: Any
+    _climate_auto_node_start: Any
+    _climate_auto_last_report: Any
+    _climate_auto_last_save: Any
+    _climate_auto_finishing: Any
+    _climate_auto_finish_since: Any
+    _climate_auto_finish_elapsed: Any
+    _climate_auto_problems: Any
+    _climate_auto_paused_by: Any
+    _climate_auto_last_remind: Any
+    _climate_auto_resume: Any
+    _climate_auto_resume_since: Any
     _climate_timer: Any
     _climate_run_stage: Any
     _climate_run_nodes: Any

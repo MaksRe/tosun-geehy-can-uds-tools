@@ -309,8 +309,17 @@
         (climateRun.active
           ? `<div class="chips" style="margin-top:6px">${(climateRun.nodes || []).map((n) =>
               `<span class="chip ${n.state === "done" ? "ok" : n.state}">${esc(n.text)}${n.state === "done" ? " ✓" : ""}</span>`).join("")}</div>` +
-            `<div style="color:${esc(climateRun.color)}">${esc(climateRun.status)}</div>`
-          : `<div class="soft">Автопрогон не идёт.</div>`);
+            `<div style="color:${esc(climateRun.color)}">${esc(climateRun.status)}</div>` +
+            // Автономный прогон: сколько прошло и осталось, время по узлам и текущие проблемы.
+            `<div style="margin-top:4px"><b>${esc((climateRun.auto || {}).progressText || "")}</b></div>` +
+            ((climateRun.auto || {}).nodesText
+              ? `<div class="soft">Время по узлам: ${esc(climateRun.auto.nodesText)}</div>` : "") +
+            ((climateRun.auto || {}).alerts || []).map((a) =>
+              `<div class="${a.level === "bad" ? "bad" : ""}" style="${a.level === "bad" ? "" : "color:#b45309"}">` +
+              `${a.level === "bad" ? "⛔" : "⚠"} ${esc(a.time)} ${esc(a.text)}</div>`).join("")
+          : ((climateRun.auto || {}).resume
+              ? `<div style="color:#b45309">${esc(climateRun.auto.resume.text)}</div>`
+              : `<div class="soft">Автопрогон не идёт.</div>`));
 
     drawChart(s.history || {}, climate.history || {});
   }

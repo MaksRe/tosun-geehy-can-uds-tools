@@ -189,6 +189,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         self._climate_diag_reset(self._climate_logs_directory())
 
         self._climate_run_reset()
+        # Автономный прогон: сторож, сводки и продолжение прогона, прерванного перезапуском.
+        self._climate_hook("_climate_auto_init")
 
         self._climate_timer = QTimer(self)
         self._climate_timer.setInterval(self.CLIMATE_TICK_MS)
@@ -292,6 +294,12 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             "settle_timeout_min": 180.0,
             "finish_setpoint": 25.0,
             "finish_stop": False,
+            # Продолжать прогон, прерванный перезапуском программы, когда вернётся связь.
+            "auto_resume": True,
+            # Сводка в Telegram раз в столько минут, 0 - не присылать.
+            "report_every_min": 60.0,
+            # Плата дальше от воздуха камеры, чем на столько, - проблема установки или датчика, °C.
+            "board_gap_c": 10.0,
             # Журнал диагностики: каждый обмен байтами в файл (иначе - только вокруг ошибок).
             "diag_verbose": False,
         }
@@ -514,7 +522,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         self._climate_alarm_reported = alarm or 0
 
     def _climate_event(self, text: str, level: str = "info"):
-        """Событие камеры: в журнал программы и наблюдению издалека."""
+        """Событие камеры: в журнал программы, наблюдению издалека и в журнал диагностики камеры."""
+        self._climate_diag_event("EVENT", str(text), {"bad": "ERROR", "warn": "WARN"}.get(level, "INFO"))
         handler = getattr(self, "_remote_event", None)
         if handler is not None:
             handler(text, level)
@@ -797,6 +806,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         if self._climate_run_stage:
             self._climate_run_tick(now)
             changed = True
+        if self._climate_hook("_climate_auto_tick", now) is not None or getattr(self, "_climate_auto_finishing", False):
+            changed = True
         if changed:
             self.climateChanged.emit()
 
@@ -855,6 +866,11 @@ class AppControllerClimateChamberMixin(AppControllerContract):
 
     # ------------------------------------------------------------------ автоматический прогон
 
+    def _climate_hook(self, name: str, *args):
+        """Точка входа автономного прогона: вызывает его, если он подключён к контроллеру."""
+        handler = getattr(self, name, None)
+        return handler(*args) if handler is not None else None
+
     def _climate_run_set(self, text: str, color: str = "#0f6ab4"):
         self._climate_run_status = str(text)
         self._climate_run_color = str(color)
@@ -862,6 +878,11 @@ class AppControllerClimateChamberMixin(AppControllerContract):
     def _climate_run_start(self) -> bool:
         """Запускает прогон по списку узлов из настроек."""
         if self._climate_run_stage:
+            return False
+        blockers = self._climate_hook("_climate_auto_blockers") or []
+        if blockers:
+            self._climate_run_set("Прогон не запущен: " + blockers[0][:1].lower() + blockers[0][1:] + ".", "#dc2626")
+            self.climateChanged.emit()
             return False
         if self._climate_link is None or not self._climate_fresh():
             self._climate_run_set("Прогон не запущен: нет связи с камерой.", "#dc2626")
@@ -896,8 +917,11 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         self._climate_run_connected = str(self._chamber_label).strip()
         self._climate_run_stage = "setpoint"
         self._climate_event(
-            f"автоматический прогон начат: {len(nodes)} температур, пометки {', '.join(labels)}.", "info")
-        self._climate_run_tick(time.monotonic())
+            f"автоматический прогон начат: {len(nodes)} температур ({', '.join(_c(node) for node in nodes)}), "
+            f"пометки {', '.join(labels)}.", "info")
+        started = time.monotonic()
+        self._climate_hook("_climate_auto_on_start", started)
+        self._climate_run_tick(started)
         self.climateChanged.emit()
         return True
 
@@ -907,12 +931,18 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         self._climate_run_stage = ""
         self._climate_run_set(f"Автоматический прогон {reason}. Уставка камеры оставлена как есть.", "#d97706")
         self._climate_event(f"автоматический прогон {reason}.", "warn")
+        self._climate_hook("_climate_auto_on_stop", reason)
         self.climateChanged.emit()
 
     def _climate_run_pause(self, paused: bool):
         if not self._climate_run_stage:
             return
         self._climate_run_paused = bool(paused)
+        if not paused:
+            # Оператор сам продолжил: пауза из-за беды снята.
+            self._climate_auto_paused_by = ""
+        self._climate_event("прогон поставлен на паузу оператором." if paused else "прогон продолжен оператором.",
+                            "info")
         self.climateChanged.emit()
 
     def _climate_run_continue(self):
@@ -931,6 +961,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         self._climate_run_stage = stage
         self._climate_run_since = now
         self._climate_run_warned = False
+        self._climate_hook("_climate_auto_on_stage", stage, now)
 
     def _climate_run_tick(self, now: float):
         """Шаг прогона. Каждый этап ждёт своего условия и переходит к следующему."""
@@ -982,6 +1013,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         if stage == "points":
             if self._climate_run_label_index >= len(self._climate_run_order):
                 self._climate_run_done.append(node)
+                self._climate_hook("_climate_auto_on_node_done", node, now)
                 self._climate_run_index += 1
                 if self._climate_run_index >= len(self._climate_run_nodes):
                     self._climate_run_finish()
@@ -1078,6 +1110,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         self._climate_run_set(f"Автоматический прогон закончен: пройдено {len(self._climate_run_done)} температур.{tail}",
                               "#16a34a")
         self._climate_event(f"автоматический прогон закончен: {len(self._climate_run_done)} температур.{tail}", "ok")
+        self._climate_hook("_climate_auto_on_finish")
 
     # ------------------------------------------------------------------ показ
 
@@ -1147,6 +1180,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 "status": self._climate_run_status,
                 "color": self._climate_run_color,
                 "nodes": nodes,
+                "auto": self._climate_hook("_climate_auto_view") or {},
             },
             "history": {
                 "t": [round(stamp - now, 1) for stamp, *_rest in self._climate_history],
