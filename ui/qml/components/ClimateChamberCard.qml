@@ -238,6 +238,17 @@ Card {
         accentColor: "#0f766e"
     }
 
+    ClimateScenarioDialog {
+        id: scenarioDialog
+        appController: root.appController
+        view: root.climate.scenario || ({})
+        textMain: root.textMain
+        textSoft: root.textSoft
+        inputBg: root.inputBg
+        inputBorder: root.inputBorder
+        inputFocus: root.inputFocus
+    }
+
     ScrollView {
         id: pageScroll
         anchors.fill: parent
@@ -662,6 +673,44 @@ Card {
                         }
                     }
 
+                    // Сценарий, по которому пойдёт прогон: название, кратко, файл; форма - по кнопке.
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: "Сценарий: «" + (((root.climate.scenario || {}).scenario || {}).name || "") + "»  ·  "
+                                  + ((root.climate.scenario || {}).summary || "")
+                                  + ((root.climate.scenario || {}).dirty ? "  ·  не сохранён" : "")
+                            color: root.textMain
+                            font.pixelSize: 13
+                            font.bold: true
+                            font.family: "Bahnschrift"
+                            wrapMode: Text.WordWrap
+                        }
+
+                        FancyButton {
+                            Layout.preferredWidth: 190
+                            Layout.preferredHeight: 30
+                            fontPixelSize: 12
+                            text: root.run.active ? "Сценарий (просмотр)…" : "Сценарий прогона…"
+                            tone: "#0284c7"; toneHover: "#0369a1"; tonePressed: "#075985"
+                            onClicked: scenarioDialog.open()
+                        }
+
+                        FancyButton {
+                            Layout.preferredWidth: 250
+                            Layout.preferredHeight: 30
+                            fontPixelSize: 12
+                            visible: !root.run.active
+                            text: "Испытание платы, один цикл"
+                            toolTipText: "Готовый сценарий: узлы 25, -40, -20, 0, 50, 70, 85 °C; «только плата»; пометка «0/0»; автозапись профиля; тестовый режим выключен"
+                            tone: "#0f766e"; toneHover: "#115e59"; tonePressed: "#134e4a"
+                            onClicked: if (root.appController) root.appController.applyClimateBoardPreset()
+                        }
+                    }
+
                     // Ход автономного прогона: доля пройденных узлов, время, проблемы.
                     ColumnLayout {
                         Layout.fillWidth: true
@@ -818,11 +867,13 @@ Card {
                 }
             }
 
-            // --- Настройки прогона и пределы уставки ---
+            // --- Пределы уставки и автономность: температуры и критерии - в сценарии ---
             Spoiler {
                 visible: root.climate.driver !== "none"
-                title: "Настройки прогона и пределы уставки"
-                hintText: "узлы " + (root.settings.run_nodes || "") + "  ·  пределы уставки " + (root.settings.min_c || "") + " ... " + (root.settings.max_c || "") + " °C"
+                title: "Пределы уставки и автономность"
+                hintText: "пределы уставки " + (root.settings.min_c || "") + " ... " + (root.settings.max_c || "") + " °C"
+                          + "  ·  сводка раз в " + (root.settings.report_every_min || "") + " мин"
+                          + (root.settings.auto_resume === true ? "  ·  продолжать после перезапуска" : "")
 
                 ColumnLayout {
                     Layout.fillWidth: true
@@ -831,36 +882,13 @@ Card {
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 8
-                        Caption { text: "Температуры, °C" }
-                        SettingField { key: "run_nodes"; Layout.preferredWidth: 260 }
-                        Caption { text: "Пометки через «;»" }
-                        SettingField { key: "run_labels"; Layout.fillWidth: true
-                            placeholderText: "например 0/0; 68/22; 150/47. Пусто - текущая пометка из «Прогона в камере»" }
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-                        Caption { text: "Выход на уставку ±, °C" }
-                        SettingField { key: "reach_tolerance_c"; Layout.preferredWidth: 50 }
-                        Caption { text: "Плата устоялась: за, мин" }
-                        SettingField { key: "settle_min"; Layout.preferredWidth: 50 }
-                        Caption { text: "медленнее, °C/мин" }
-                        SettingField { key: "settle_rate"; Layout.preferredWidth: 60 }
-                        Caption { text: "Предупредить через, мин:" }
-                        SettingField { key: "reach_timeout_min"; Layout.preferredWidth: 55 }
-                        SettingField { key: "settle_timeout_min"; Layout.preferredWidth: 55 }
-                        Caption { text: "В конце, °C" }
-                        SettingField { key: "finish_setpoint"; Layout.preferredWidth: 55 }
-                        FancySwitch {
-                            checked: root.settings.finish_stop === true
-                            trackWidth: 44; trackHeight: 24
-                            onToggled: if (root.appController) root.appController.setClimateFlag("finish_stop", checked)
-                        }
-                        Caption { text: "и остановить" }
+                        Caption { text: "Пределы уставки, °C" }
+                        SettingField { key: "min_c"; Layout.preferredWidth: 60 }
+                        SettingField { key: "max_c"; Layout.preferredWidth: 60 }
+                        Caption { text: "- ни ручная уставка, ни сценарий не выйдут за эти пределы" }
                         Item { Layout.fillWidth: true }
                     }
-                    // Автономность: продолжение после перезапуска, сводка, контроль платы.
+
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 8
@@ -876,22 +904,12 @@ Card {
                         SettingField { key: "board_gap_c"; Layout.preferredWidth: 55 }
                         Item { Layout.fillWidth: true }
                     }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-
-                    Caption { text: "Пределы уставки, °C" }
-                    SettingField { key: "min_c"; Layout.preferredWidth: 60 }
-                    SettingField { key: "max_c"; Layout.preferredWidth: 60 }
-                        Caption { text: "- ручная уставка и прогон не выйдут за эти пределы" }
-                        Item { Layout.fillWidth: true }
-                    }
 
                     Text {
                         Layout.fillWidth: true
-                        text: "В каждом узле: уставка - выход камеры на неё - плата устоялась - точки со всеми пометками - следующий узел. "
-                              + "Если пометок несколько, программа просит переключить эталоны и ждёт «Эталоны переключены», "
-                              + "а порядок чередует, чтобы переключать реже. Журнал, таблицы и запись профиля идут как обычно."
+                        text: "Температуры, порядок, выдержки, критерии устойчивости и что делать в конце задаются в сценарии "
+                              + "(кнопка «Сценарий прогона…»). В каждом шаге: уставка - выход камеры на неё - плата устоялась - "
+                              + "выдержка - точки со всеми пометками - следующий шаг."
                         color: root.textSoft
                         font.pixelSize: 11
                         font.family: "Bahnschrift"

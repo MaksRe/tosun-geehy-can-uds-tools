@@ -4,6 +4,7 @@ from .can_mixin import AppControllerCanMixin
 from .capacitance_mixin import AppControllerCapacitanceMixin
 from .chamber_chain_mixin import AppControllerChamberChainMixin
 from .climate_chamber_mixin import AppControllerClimateChamberMixin
+from .climate_scenario_mixin import AppControllerClimateScenarioMixin
 from .climate_supervisor_mixin import AppControllerClimateSupervisorMixin
 from .chamber_live_mixin import AppControllerChamberLiveMixin
 from .chamber_mixin import AppControllerChamberMixin
@@ -36,6 +37,7 @@ __all__ = [
     "AppControllerChamberMixin",
     "AppControllerChamberTestMixin",
     "AppControllerClimateChamberMixin",
+    "AppControllerClimateScenarioMixin",
     "AppControllerClimateSupervisorMixin",
     "AppControllerTrialMixin",
     "AppControllerCollectorMixin",

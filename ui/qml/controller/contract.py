@@ -214,6 +214,14 @@ class AppControllerContract:
     _climate_auto_last_remind: Any
     _climate_auto_resume: Any
     _climate_auto_resume_since: Any
+    _climate_run_steps: Any
+    _climate_scenario: Any
+    _climate_scenario_revision: Any
+    _climate_scenario_status: Any
+    _climate_scenario_problems: Any
+    _climate_scenario_path: Any
+    _climate_scenario_dirty: Any
+    _climate_scenario_files: Any
     _climate_timer: Any
     _climate_run_stage: Any
     _climate_run_nodes: Any

@@ -3383,6 +3383,37 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         """Цель функции в поиске адреса, скорости и конца строки камеры ESPEC, затем они сохраняются сами."""
         self._climate_espec_scan()
 
+    @Slot(str)
+    def updateClimateScenario(self, text):
+        """Цель функции в приёме правки сценария из формы целиком, затем он проверяется и запоминается."""
+        self._climate_scenario_update(str(text))
+
+    @Slot(str)
+    def newClimateScenario(self, kind):
+        """Цель функции в создании сценария: «board_cycle» - испытание платы за один цикл, иначе пустой."""
+        self._climate_scenario_new(str(kind))
+
+    @Slot(str)
+    def saveClimateScenario(self, path):
+        """Цель функции в сохранении сценария: пустой путь - в свой файл или в папку сценариев по названию."""
+        self._climate_scenario_save(self._to_local_path(path) if str(path).strip() else "")
+
+    @Slot(str)
+    def loadClimateScenario(self, path):
+        """Цель функции в загрузке сценария из файла, затем прогон пойдёт по нему."""
+        self._climate_scenario_load(self._to_local_path(path))
+
+    @Slot()
+    def refreshClimateScenarios(self):
+        """Цель функции в обновлении списка сохранённых сценариев в папке scenarios."""
+        self._climate_scenario_refresh_files()
+        self.climateChanged.emit()
+
+    @Slot()
+    def applyClimateBoardPreset(self):
+        """Цель функции в быстрой настройке испытания одной платы на своих ёмкостях за один цикл."""
+        self._climate_auto_board_preset()
+
     @Slot()
     def resumeClimateRun(self):
         """Цель функции в продолжении прогона, прерванного перезапуском программы, с того же узла."""

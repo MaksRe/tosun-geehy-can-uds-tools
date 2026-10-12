@@ -35,15 +35,19 @@ import shutil
 import time
 from collections import deque
 
+import chamber_fit
 from ui.qml.climate_chamber import DRIVER_ESPEC, DRIVER_SIMULATOR
 
-from .climate_chamber_mixin import parse_labels, parse_nodes
 from .contract import AppControllerContract
 
 # Этапы, на которых камера уже должна держать уставку узла.
-ACTIVE_STAGES = ("reach", "settle", "points", "operator", "window", "capture", "capturing")
+ACTIVE_STAGES = ("reach", "settle", "hold", "points", "operator", "window", "capture", "capturing")
 # Этапы после выхода на уставку: температура камеры не должна уходить.
-HOLD_STAGES = ("settle", "points", "operator", "window", "capture", "capturing")
+HOLD_STAGES = ("settle", "hold", "points", "operator", "window", "capture", "capturing")
+
+# Испытание одной платы на своих ёмкостях за один цикл: все узлы сетки прибора,
+# первым - опорный +25 °C, затем вниз до -40 и вверх до +85.
+BOARD_CYCLE_NODES = "25, -40, -20, 0, 50, 70, 85"
 
 
 def duration_text(seconds: float | None) -> str:
@@ -156,6 +160,8 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             "active": True,
             "saved": time.strftime("%Y-%m-%d %H:%M:%S"),
             "nodes": list(self._climate_run_nodes),
+            "steps": [dict(step) for step in getattr(self, "_climate_run_steps", []) or []],
+            "scenario": str((getattr(self, "_climate_scenario", None) or {}).get("name", "")),
             "index": int(self._climate_run_index),
             "labels": list(self._climate_run_labels),
             "done": list(self._climate_run_done),
@@ -165,6 +171,13 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             "elapsed_s": round(self._climate_auto_elapsed(now), 1),
             "durations": [[node, round(seconds, 1)] for node, seconds in self._climate_auto_durations],
             "problems": list(self._climate_auto_problems[-50:]),
+            "chamber": {
+                "board_only": bool(getattr(self, "_chamber_board_only", False)),
+                "single_model": str(getattr(self, "_chamber_single_model", "")),
+                "label": str(getattr(self, "_chamber_label", "")),
+                "journal": str(getattr(self, "_chamber_file_path", "") or ""),
+                "auto_write": bool(getattr(self, "_chamber_auto_write", False)),
+            },
         }
         path = self._climate_auto_state_path()
         try:
@@ -204,14 +217,35 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
                 "Камера принимает уставку" if link.driver.can_set else "Камера не даёт задавать уставку")
 
         try:
-            nodes = parse_nodes(settings["run_nodes"])
+            plan = self._climate_run_plan()
         except ValueError:
-            nodes = []
+            plan = {"steps": [], "nodes": [], "labels": []}
+        nodes = plan["nodes"]
+        # Узлы, в которых снимается точка: только они идут в таблицу.
+        capture_nodes = [float(step["temp"]) for step in plan["steps"] if step.get("capture", True)]
         low, high = float(settings["min_c"]), float(settings["max_c"])
         nodes_ok = bool(nodes) and all(low <= node <= high for node in nodes)
         add("nodes", nodes_ok,
             f"Температуры: {', '.join(_c(node) for node in nodes)}" if nodes_ok
             else f"Список температур пуст или выходит за пределы {low:+.0f}...{high:+.0f} °C")
+
+        if nodes_ok:
+            # Узел, в который попадёт точка; None - температура дальше ±3 °C от любого узла.
+            mapped = {node: chamber_fit.nearest_node(int(round(node * 10))) for node in capture_nodes}
+            covered = {grid for grid in mapped.values() if grid is not None}
+            off_grid = [node for node, grid in mapped.items() if grid is None]
+            missing = [node for node in chamber_fit.NODES_X10 if node not in covered]
+            reference = chamber_fit.REFERENCE_X10 in covered
+            add("reference", reference, "Опорный узел +25 °C в списке" if reference
+                else "Нет узла +25 °C: это опорная точка, без неё таблица платы не посчитается")
+            if off_grid:
+                add("grid", False, f"Температуры {', '.join(_c(node) for node in off_grid)} не попадают в узлы "
+                                   f"прибора (±3 °C): точки там не войдут в таблицу", "warn")
+            elif missing:
+                add("grid", False, f"Не все узлы прибора: нет {', '.join(chamber_fit.node_text(node) for node in missing)}. "
+                                   f"Таблица будет неполной, профиль сам не запишется", "warn")
+            else:
+                add("grid", True, "Все 7 узлов прибора в списке: таблица будет полной", "warn")
 
         details = (getattr(reading, "details", None) or {}) if reading is not None else {}
         if settings["driver"] == DRIVER_ESPEC and nodes and details.get("high_c") is not None:
@@ -238,8 +272,7 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         hint = self._climate_mode_hint()
         add("mode", not hint, "Режим расчёта подходит камере" if not hint else hint)
 
-        labels = parse_labels(settings["run_labels"]) or [str(getattr(self, "_chamber_label", "")).strip()]
-        labels = [label for label in labels if label]
+        labels = [label for label in plan["labels"] if label]
         if not labels:
             add("labels", False, "Не задано, что подключено к прибору: впишите пометку, например 0/0")
         elif len(labels) > 1:
@@ -460,7 +493,7 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             "bad", "уставка камеры снова совпадает с узлом.")
 
         actual = getattr(reading, "actual_c", None)
-        tolerance = float(settings["reach_tolerance_c"])
+        tolerance = self._climate_run_param("reach_tolerance_c")
         if actual is not None:
             distance = abs(float(actual) - node)
             # Камера не идёт к уставке: за 20 минут расстояние почти не сократилось.
@@ -499,7 +532,7 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         # Этап завис вдвое дольше предупреждения.
         limit_key = {"reach": "reach_timeout_min", "settle": "settle_timeout_min"}.get(stage)
         if limit_key:
-            limit_s = 2.0 * float(settings[limit_key]) * 60.0 / speed
+            limit_s = 2.0 * self._climate_run_param(limit_key) * 60.0 / speed
             hang = now - self._climate_run_since >= limit_s
             what = "камера не выходит на уставку" if stage == "reach" else "плата не устаивается"
             self._climate_auto_alert(
@@ -656,9 +689,13 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             self._climate_run_set("Продолжить нельзя: нет связи с камерой.", "#dc2626")
             self.climateChanged.emit()
             return False
+        self._climate_auto_restore_chamber(saved.get("chamber") or {})
         self._climate_run_reset()
         self._climate_auto_reset()
         self._climate_run_nodes = list(saved["nodes"])
+        steps = saved.get("steps") or []
+        self._climate_run_steps = ([dict(step) for step in steps] if len(steps) == len(self._climate_run_nodes)
+                                   else [{"temp": node} for node in self._climate_run_nodes])
         self._climate_run_index = int(saved["index"])
         self._climate_run_labels = list(saved.get("labels") or []) or [str(self._chamber_label).strip()]
         self._climate_run_done = [float(node) for node in saved.get("done") or []]
@@ -681,6 +718,70 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         self._climate_run_tick(now)
         self.climateChanged.emit()
         return True
+
+    def _climate_auto_restore_chamber(self, chamber: dict):
+        """Возвращает настройки прогона и журнал точек, какими они были до перезапуска.
+
+        Без этого продолженный прогон начал бы новый журнал без точек прошлых
+        узлов (и без опорной +25 °C), а таблицу считал бы не в том режиме.
+        """
+        if not chamber:
+            return
+        set_board = getattr(self, "_chamber_set_board_only", None)
+        if set_board is not None:
+            set_board(bool(chamber.get("board_only")))
+        set_model = getattr(self, "_chamber_set_single_model", None)
+        if set_model is not None and chamber.get("single_model"):
+            set_model(str(chamber["single_model"]))
+        if chamber.get("label"):
+            self._chamber_label = str(chamber["label"])
+        if "auto_write" in chamber:
+            self._chamber_auto_write = bool(chamber["auto_write"])
+        journal = str(chamber.get("journal") or "")
+        if journal and journal != str(getattr(self, "_chamber_file_path", "") or ""):
+            loader = getattr(self, "_chamber_load_file", None)
+            if loader is not None and pathlib.Path(journal).is_file() and loader(journal):
+                self._climate_event(f"журнал прогона загружен обратно: {len(self._chamber_points)} точек из {journal}. "
+                                    "Новые точки допишутся в него.", "ok")
+            else:
+                self._climate_event(f"журнал прогона не загрузился ({journal}): точки до перезапуска не войдут "
+                                    "в таблицу. Загрузите его вручную в «Прогоне в камере».", "bad")
+        changed = getattr(self, "chamberChanged", None)
+        if changed is not None:
+            changed.emit()
+
+    def _climate_auto_board_preset(self) -> str:
+        """Быстрая настройка: испытание одной платы на своих ёмкостях за один цикл.
+
+        Все 7 узлов прибора (первым опорный +25 °C), режим «только плата», пометка
+        «0/0», без пометок для переключения, автозапись профиля, тестовый режим
+        выключен (кроме имитатора). Возвращает, что сделано, для строки окна.
+        """
+        if self._climate_run_stage:
+            return "Во время прогона настройки не меняются."
+        use_scenario = getattr(self, "_climate_scenario_use_board_cycle", None)
+        if use_scenario is not None:
+            return use_scenario()
+        self._climate_set("run_nodes", BOARD_CYCLE_NODES)
+        self._climate_set("run_labels", "")
+        set_board = getattr(self, "_chamber_set_board_only", None)
+        if set_board is not None:
+            set_board(True)
+        self._chamber_label = "0/0"
+        self._chamber_auto_write = True
+        if self._climate_settings["driver"] != DRIVER_SIMULATOR:
+            set_test = getattr(self, "_chamber_test_set_mode", None)
+            if set_test is not None:
+                set_test(False)
+        changed = getattr(self, "chamberChanged", None)
+        if changed is not None:
+            changed.emit()
+        text = ("Настроено испытание платы за один цикл: узлы " + BOARD_CYCLE_NODES + " °C, «только плата», "
+                "пометка «0/0», автозапись профиля.")
+        self._climate_command_status = text
+        self._climate_diag_event("RUN", text)
+        self.climateChanged.emit()
+        return text
 
     def _climate_auto_discard_resume(self):
         """Оператор не хочет продолжать прерванный прогон."""

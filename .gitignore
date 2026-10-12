@@ -29,6 +29,11 @@ logs/**
 **/config/remote_monitor.json
 # Настройки связи с камерой у каждого рабочего места свои
 **/config/climate_chamber.json
+# Текущий сценарий прогона и состояние идущего прогона - рабочие файлы программы
+**/config/climate_scenario_current.json
+**/config/climate_run_state.json
+# Сценарии прогона, сохранённые на рабочем месте (готовый программа создаёт сама)
+**/scenarios/
 
 # OS files
 Thumbs.db

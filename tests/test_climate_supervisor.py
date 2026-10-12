@@ -11,7 +11,10 @@
 - пропажа связи с камерой и молчание прибора - проблемы с сообщением о возврате;
 - камера, которая не идёт к уставке, замечается с данными нагревателя;
 - сводка приходит по расписанию;
-- состояние прогона сохраняется, после перезапуска прогон продолжается с узла.
+- состояние прогона сохраняется, после перезапуска прогон продолжается с узла;
+- без опорного узла +25 °C прогон не начинается, неполная сетка - предупреждение;
+- быстрая настройка «испытание платы за один цикл»;
+- после перезапуска возвращаются режим «только плата», пометка и журнал точек.
 """
 
 from __future__ import annotations
@@ -65,6 +68,9 @@ def _walk(stub, limit=6000, step_s=30.0):
         now = start + step * step_s
         stub.clock[0] = step * step_s
         reading = stub.sim.read()
+        # Среднее прибора - по последнему шагу модельного времени, как в обвязке прогона.
+        for key in ("board_temp", "fuel_temp", "main", "media"):
+            stub._chamber_live_recent[key] = []
         _feed(stub, now, reading)
         stub._climate_board.append((now, reading.product_c))
         real = time.monotonic()
@@ -81,7 +87,7 @@ def _walk(stub, limit=6000, step_s=30.0):
     raise AssertionError(f"прогон не закончился: {stub._climate_run_status}")
 
 
-def _started(tmp_path, nodes="-40"):
+def _started(tmp_path, nodes="-40, 25"):
     stub = _ready(tmp_path, nodes)
     assert stub._climate_run_start()
     return stub, time.monotonic()
@@ -258,7 +264,7 @@ def test_scheduled_summary(tmp_path: Path):
     stub._climate_settings["report_every_min"] = 1.0
     stub._climate_auto_tick(now + 10)
     stub._climate_auto_tick(now + 70)
-    summaries = [text for text in stub.kinds("info") if text.startswith("сводка: узел 1 из 1")]
+    summaries = [text for text in stub.kinds("info") if text.startswith("сводка: узел 1 из 2")]
     assert len(summaries) == 1 and "прошло" in summaries[0]
 
 
@@ -319,3 +325,66 @@ def test_stop_clears_the_saved_run(tmp_path: Path):
     stub, _now = _started(tmp_path, "25, -40")
     stub._climate_run_stop()
     assert not stub._climate_auto_state_path().exists()
+
+
+# ------------------------------------------------------------------ испытание одной платы за один цикл
+
+def test_reference_node_is_required(tmp_path: Path):
+    stub = _ready(tmp_path, "-40, 0, 85")
+    assert any("+25 °C" in text for text in stub._climate_auto_blockers())
+    assert not stub._climate_run_start()
+
+
+def test_grid_coverage_is_checked(tmp_path: Path):
+    checks = {item["key"]: item for item in _ready(tmp_path, "25, -40, 85")._climate_auto_checks()}
+    assert checks["grid"]["ok"] is False and "-20" in checks["grid"]["text"] and "неполной" in checks["grid"]["text"]
+    checks = {item["key"]: item for item in _ready(tmp_path, "25, -40, -20, 0, 50, 70, 85")._climate_auto_checks()}
+    assert checks["grid"]["ok"] is True
+    checks = {item["key"]: item for item in _ready(tmp_path, "25, 10")._climate_auto_checks()}
+    assert "не попадают в узлы" in checks["grid"]["text"]
+
+
+def test_board_cycle_preset(tmp_path: Path):
+    stub = _ready(tmp_path)
+    stub._climate_settings["driver"] = "espec"
+    stub._climate_settings["run_labels"] = "0/0; 150/47"
+    stub._chamber_auto_write = False
+    stub._climate_auto_board_preset()
+    assert stub._climate_settings["run_nodes"] == "25, -40, -20, 0, 50, 70, 85"
+    assert stub._climate_settings["run_labels"] == ""
+    assert stub._chamber_board_only is True and stub._chamber_label == "0/0"
+    assert stub._chamber_auto_write is True
+    assert stub._chamber_test_mode is False, "с настоящей камерой точки не должны быть пробными"
+    assert "один цикл" in stub._climate_command_status
+
+
+def test_resume_restores_board_mode_and_journal(tmp_path: Path):
+    stub, now = _started(tmp_path, "25, -40")
+    stub._chamber_board_only = True
+    stub._chamber_single_model = "сдвиг"
+    journal = tmp_path / "journal.csv"
+    journal.write_text("x", encoding="utf-8")
+    stub._chamber_file_path = str(journal)
+    stub._climate_auto_save(now)
+    saved = json.loads(stub._climate_auto_state_path().read_text(encoding="utf-8"))
+    assert saved["chamber"]["board_only"] is True and saved["chamber"]["journal"] == str(journal)
+
+    again = _SupStub(tmp_path)
+    loaded = []
+    again._chamber_load_file = lambda path: loaded.append(path) or True
+    again._chamber_label = ""
+    _feed(again, now)
+    assert again._climate_auto_resume_now(now)
+    assert again._chamber_board_only is True and again._chamber_single_model == "сдвиг"
+    assert again._chamber_label == "0/0" and loaded == [str(journal)]
+    assert any("журнал прогона загружен обратно" in text for text in again.kinds("ok"))
+
+
+def test_missing_journal_is_reported_on_resume(tmp_path: Path):
+    stub, now = _started(tmp_path, "25, -40")
+    stub._chamber_file_path = str(tmp_path / "gone.csv")
+    stub._climate_auto_save(now)
+    again = _SupStub(tmp_path)
+    _feed(again, now)
+    assert again._climate_auto_resume_now(now)
+    assert any("журнал прогона не загрузился" in text for text in again.kinds("bad"))

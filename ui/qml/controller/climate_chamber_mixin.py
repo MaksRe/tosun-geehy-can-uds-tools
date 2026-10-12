@@ -189,6 +189,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         self._climate_diag_reset(self._climate_logs_directory())
 
         self._climate_run_reset()
+        # Сценарий прогона: последний открытый или собранный из прежних настроек.
+        self._climate_hook("_climate_scenario_init")
         # Автономный прогон: сторож, сводки и продолжение прогона, прерванного перезапуском.
         self._climate_hook("_climate_auto_init")
 
@@ -241,6 +243,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         """Прогон не идёт: всё, что относится к нему, в исходном виде."""
         self._climate_run_stage = ""
         self._climate_run_nodes: list[float] = []
+        # Шаги сценария рядом с температурами: у шага свои выдержка, критерии и «снимать ли точку».
+        self._climate_run_steps: list[dict] = []
         self._climate_run_index = 0
         self._climate_run_labels: list[str] = []
         self._climate_run_order: list[str] = []
@@ -871,6 +875,37 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         handler = getattr(self, name, None)
         return handler(*args) if handler is not None else None
 
+    def _climate_run_plan(self) -> dict:
+        """Что пройдёт прогон: шаги сценария, а без сценария - температуры из настроек.
+
+        Возвращает {"steps", "nodes", "labels"}. ValueError - список температур не разобрался.
+        """
+        scenario = getattr(self, "_climate_scenario", None)
+        if scenario:
+            steps = [dict(step) for step in scenario.get("steps") or []]
+            labels = list(scenario.get("labels") or [])
+        else:
+            steps = [{"temp": node} for node in parse_nodes(self._climate_settings["run_nodes"])]
+            labels = parse_labels(self._climate_settings["run_labels"])
+        label = str(getattr(self, "_chamber_label", "")).strip()
+        return {"steps": steps, "nodes": [float(step["temp"]) for step in steps],
+                "labels": labels or ([label] if label else [])}
+
+    def _climate_run_step(self) -> dict:
+        steps = self._climate_run_steps
+        return steps[self._climate_run_index] if 0 <= self._climate_run_index < len(steps) else {}
+
+    def _climate_run_param(self, key: str) -> float:
+        """Параметр текущего шага: свой у шага, иначе общий сценария, иначе из настроек прогона."""
+        value = self._climate_run_step().get(key)
+        if value is None:
+            scenario = getattr(self, "_climate_scenario", None)
+            if scenario and scenario.get(key) is not None:
+                value = scenario[key]
+            else:
+                value = self._climate_settings.get(key, 0.0)
+        return float(value)
+
     def _climate_run_set(self, text: str, color: str = "#0f6ab4"):
         self._climate_run_status = str(text)
         self._climate_run_color = str(color)
@@ -879,6 +914,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         """Запускает прогон по списку узлов из настроек."""
         if self._climate_run_stage:
             return False
+        # Режим расчёта, пометка и автозапись берутся из сценария: проверка перед стартом видит их уже такими.
+        self._climate_hook("_climate_scenario_apply_chamber")
         blockers = self._climate_hook("_climate_auto_blockers") or []
         if blockers:
             self._climate_run_set("Прогон не запущен: " + blockers[0][:1].lower() + blockers[0][1:] + ".", "#dc2626")
@@ -893,18 +930,19 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             self.climateChanged.emit()
             return False
         try:
-            nodes = parse_nodes(self._climate_settings["run_nodes"])
+            plan = self._climate_run_plan()
         except ValueError:
             self._climate_run_set("Прогон не запущен: список температур не разобрался.", "#dc2626")
             self.climateChanged.emit()
             return False
+        nodes = plan["nodes"]
         low, high = float(self._climate_settings["min_c"]), float(self._climate_settings["max_c"])
         if not nodes or any(not (low <= node <= high) for node in nodes):
             self._climate_run_set(f"Прогон не запущен: температуры должны быть от {low:+.0f} до {high:+.0f} °C.",
                                   "#dc2626")
             self.climateChanged.emit()
             return False
-        labels = parse_labels(self._climate_settings["run_labels"]) or [str(self._chamber_label).strip()]
+        labels = plan["labels"] or [""]
         if not labels[0]:
             self._climate_run_set("Прогон не запущен: напишите, что подключено к прибору, или список пометок.",
                                   "#dc2626")
@@ -913,6 +951,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
 
         self._climate_run_reset()
         self._climate_run_nodes = nodes
+        self._climate_run_steps = plan["steps"]
         self._climate_run_labels = labels
         self._climate_run_connected = str(self._chamber_label).strip()
         self._climate_run_stage = "setpoint"
@@ -984,7 +1023,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
 
         if stage == "reach":
             actual = getattr(self._climate_reading, "actual_c", None) if self._climate_fresh(now) else None
-            tolerance = float(self._climate_settings["reach_tolerance_c"])
+            tolerance = self._climate_run_param("reach_tolerance_c")
             if actual is not None and abs(actual - node) <= tolerance:
                 self._climate_event(f"камера вышла на {_c(node)}, жду, пока устоится плата.", "info")
                 self._climate_run_enter("settle", now)
@@ -995,30 +1034,39 @@ class AppControllerClimateChamberMixin(AppControllerContract):
 
         if stage == "settle":
             speed = self._climate_speed()
-            window_s = float(self._climate_settings["settle_min"]) * 60.0 / speed
-            rate_limit = float(self._climate_settings["settle_rate"]) * speed
+            window_s = self._climate_run_param("settle_min") * 60.0 / speed
+            rate_limit = self._climate_run_param("settle_rate") * speed
             result = rate_and_spread(self._climate_board, now, window_s)
             if is_stable(result, window_s, rate_limit, self.CLIMATE_STABLE_SPREAD_C):
                 board = self._climate_board[-1][1]
-                self._climate_event(f"плата устоялась при {_c(board)} (узел {_c(node)}), снимаю точки.", "ok")
-                self._climate_run_label_index = 0
-                self._climate_run_order = self._climate_label_order()
-                self._climate_run_enter("points", now)
+                hold = self._climate_run_param("hold_min")
+                capture = bool(self._climate_run_step().get("capture", True))
+                then = (f"выдержка {hold:g} мин" if hold > 0
+                        else ("снимаю точки" if capture else "точка на этом шаге не снимается"))
+                self._climate_event(f"плата устоялась при {_c(board)} (узел {_c(node)}), {then}.", "ok")
+                if hold > 0:
+                    self._climate_run_enter("hold", now)
+                else:
+                    self._climate_run_after_hold(now)
                 return
             rate = "—" if result is None else f"{result[0] / speed:+.3f} °C/мин".replace(".", ",")
             self._climate_run_set(f"Узел {where}: камера на уставке, жду, пока устоится плата ({rate}).")
             self._climate_run_timeout(now, "settle_timeout_min", f"плата не устоялась при {_c(node)}")
             return
 
+        if stage == "hold":
+            hold_s = self._climate_run_param("hold_min") * 60.0 / self._climate_speed()
+            left = hold_s - (now - self._climate_run_since)
+            if left <= 0:
+                self._climate_run_after_hold(now)
+            else:
+                self._climate_run_set(f"Узел {where}: плата устоялась, выдержка ещё "
+                                      f"{max(1, int(left * self._climate_speed() // 60))} мин.")
+            return
+
         if stage == "points":
             if self._climate_run_label_index >= len(self._climate_run_order):
-                self._climate_run_done.append(node)
-                self._climate_hook("_climate_auto_on_node_done", node, now)
-                self._climate_run_index += 1
-                if self._climate_run_index >= len(self._climate_run_nodes):
-                    self._climate_run_finish()
-                else:
-                    self._climate_run_enter("setpoint", now)
+                self._climate_run_node_done(now)
                 return
             label = self._climate_run_order[self._climate_run_label_index]
             if label != self._climate_run_connected:
@@ -1066,6 +1114,26 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             if not self._chamber_capture_waiting:
                 self._climate_run_capture_failed(now)
 
+    def _climate_run_after_hold(self, now: float):
+        """После устойчивости и выдержки: точки, а у шага без точки - сразу следующий шаг."""
+        if not bool(self._climate_run_step().get("capture", True)):
+            self._climate_run_node_done(now)
+            return
+        self._climate_run_label_index = 0
+        self._climate_run_order = self._climate_label_order()
+        self._climate_run_enter("points", now)
+
+    def _climate_run_node_done(self, now: float):
+        """Шаг пройден: следующий шаг или конец прогона."""
+        node = self._climate_run_node()
+        self._climate_run_done.append(node)
+        self._climate_hook("_climate_auto_on_node_done", node, now)
+        self._climate_run_index += 1
+        if self._climate_run_index >= len(self._climate_run_nodes):
+            self._climate_run_finish()
+        else:
+            self._climate_run_enter("setpoint", now)
+
     def _climate_run_capture_failed(self, now: float):
         """Точка не записалась: несколько повторов, затем пауза и зов оператора."""
         self._climate_run_attempts += 1
@@ -1080,11 +1148,11 @@ class AppControllerClimateChamberMixin(AppControllerContract):
 
     def _climate_run_timeout(self, now: float, key: str, what: str):
         """Этап затянулся: предупреждение один раз, прогон ждёт дальше."""
-        limit_s = float(self._climate_settings[key]) * 60.0 / self._climate_speed()
+        minutes = self._climate_run_param(key)
+        limit_s = minutes * 60.0 / self._climate_speed()
         if not self._climate_run_warned and now - self._climate_run_since > limit_s:
             self._climate_run_warned = True
-            self._climate_event(f"{what} за {float(self._climate_settings[key]):.0f} мин. Прогон ждёт дальше, "
-                                "проверьте камеру.", "warn")
+            self._climate_event(f"{what} за {minutes:.0f} мин. Прогон ждёт дальше, проверьте камеру.", "warn")
 
     def _climate_label_order(self) -> list[str]:
         """Порядок пометок в узле: начинаем с уже подключённой, чтобы переключать реже."""
@@ -1099,12 +1167,14 @@ class AppControllerClimateChamberMixin(AppControllerContract):
 
     def _climate_run_finish(self):
         self._climate_run_stage = ""
-        finish = self._climate_settings["finish_setpoint"]
+        scenario = getattr(self, "_climate_scenario", None)
+        finish = scenario.get("finish_setpoint") if scenario else self._climate_settings["finish_setpoint"]
+        finish_stop = bool(scenario.get("finish_stop")) if scenario else bool(self._climate_settings["finish_stop"])
         tail = ""
         if finish is not None and self._climate_link is not None and self._climate_link.driver.can_set:
             self._climate_send_setpoint(float(finish))
             tail = f" Камере задано {_c(finish)}."
-        if self._climate_settings["finish_stop"]:
+        if finish_stop:
             self._climate_send_run(False)
             tail += " Камера остановлена."
         self._climate_run_set(f"Автоматический прогон закончен: пройдено {len(self._climate_run_done)} температур.{tail}",
@@ -1124,7 +1194,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
 
         nodes = []
         try:
-            planned = self._climate_run_nodes or parse_nodes(settings["run_nodes"])
+            planned = self._climate_run_nodes or self._climate_run_plan()["nodes"]
         except ValueError:
             planned = []
         for index, node in enumerate(planned):
@@ -1137,7 +1207,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             nodes.append({"text": _c(node), "state": state})
 
         stage_titles = {
-            "setpoint": "уставка", "reach": "выход на уставку", "settle": "плата устаивается",
+            "setpoint": "уставка", "reach": "выход на уставку", "settle": "плата устаивается", "hold": "выдержка",
             "points": "точки", "operator": "ждёт оператора", "window": "среднее набирается",
             "capture": "запись точки", "capturing": "запись точки",
         }
@@ -1182,6 +1252,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 "nodes": nodes,
                 "auto": self._climate_hook("_climate_auto_view") or {},
             },
+            "scenario": self._climate_hook("_climate_scenario_view") or {},
             "history": {
                 "t": [round(stamp - now, 1) for stamp, *_rest in self._climate_history],
                 "actual": [None if actual is None else round(float(actual), 2)
