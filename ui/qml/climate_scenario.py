@@ -61,6 +61,8 @@ GENERAL_LIMITS = {
 TEMP_LIMITS = (-100.0, 200.0)
 
 BOARD_CYCLE_NAME = "Испытание платы, один цикл"
+# Пометка точки одной платы: эталоны не подключены (основной 0 / вид топлива 0).
+BOARD_LABEL = "0/0"
 BOARD_CYCLE_TEMPS = (25.0, -40.0, -20.0, 0.0, 50.0, 70.0, 85.0)
 
 
@@ -168,6 +170,9 @@ def normalize(data) -> tuple[dict, list[str]]:
     if isinstance(labels, str):
         labels = labels.split(";")
     scenario["labels"] = [str(label).strip() for label in labels if str(label).strip()][:20]
+    if scenario["board_only"]:
+        # Одна плата на своих ёмкостях: к входам ничего не подключено, пометка всегда одна - «0/0».
+        scenario["labels"] = [BOARD_LABEL]
     scenario["auto_write"] = bool(data.get("auto_write", True))
     for key, (low, high) in GENERAL_LIMITS.items():
         scenario[key] = _number(data.get(key, DEFAULTS[key]), low, high, key, problems, DEFAULTS[key])

@@ -84,7 +84,8 @@ def test_from_old_settings():
     scenario = cs.from_settings({"run_nodes": "25, -40; 85", "run_labels": "0/0; 150/47", "settle_min": 7.0,
                                  "finish_setpoint": 20.0, "finish_stop": True}, board_only=True, single_model="сдвиг")
     assert [step["temp"] for step in scenario["steps"]] == [25.0, -40.0, 85.0]
-    assert scenario["labels"] == ["0/0", "150/47"] and scenario["settle_min"] == 7.0
+    # Одна плата: пометка всегда «0/0», что бы ни было в старых настройках.
+    assert scenario["labels"] == ["0/0"] and scenario["settle_min"] == 7.0
     assert scenario["finish_setpoint"] == 20.0 and scenario["finish_stop"] is True
     assert scenario["board_only"] is True and scenario["single_model"] == "сдвиг"
 
@@ -199,3 +200,10 @@ def test_bad_file_does_not_break_loading(tmp_path: Path):
     broken.write_text("{не json", encoding="utf-8")
     assert not stub._climate_scenario_load(str(broken))
     assert "не загрузился" in stub._climate_scenario_status
+
+
+def test_labels_kept_only_with_references():
+    with_refs, _ = cs.normalize({"board_only": False, "labels": "0/0; 150/47", "steps": [{"temp": 25}]})
+    assert with_refs["labels"] == ["0/0", "150/47"]
+    board, _ = cs.normalize({"board_only": True, "labels": "68/22", "steps": [{"temp": 25}]})
+    assert board["labels"] == ["0/0"]
