@@ -285,6 +285,22 @@ class TelegramBot:
         with self._lock:
             return self._app_url
 
+    def reset_menu_now(self, timeout: float = 2.0):
+        """При закрытии программы: кнопка меню снова - список команд, а не мёртвый адрес туннеля.
+
+        Отправляется сразу, без очереди: потоки бота вот-вот остановятся. Нет сети - не беда.
+        """
+        with self._lock:
+            had_app = bool(self._token) and bool(self._menu_url_sent)
+        if not had_app:
+            return
+        try:
+            self._call("setChatMenuButton", {"menu_button": {"type": "commands"}}, timeout=timeout)
+            with self._lock:
+                self._menu_url_sent = ""
+        except Exception:  # noqa: BLE001 - закрытие программы не должно зависеть от сети
+            pass
+
     def close(self):
         self._stop.set()
         self._queue.put(None)

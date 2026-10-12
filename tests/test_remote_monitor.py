@@ -602,3 +602,182 @@ def test_snapshot_is_plain_json(tmp_path: Path):
     assert len(snapshot["run"]["coverage"]) == len(chamber_fit.NODES_X10)
     assert len(snapshot["history"]["board"]) == 5
     assert json.loads(text)["device"]["node"] == "0x6A"
+
+
+# ------------------------------------------------------------------ туннель Cloudflare
+
+class _FakeProcess:
+    """cloudflared без сети: выдаёт заданные строки вывода и завершается."""
+
+    def __init__(self, lines, gate=None):
+        import io as _io
+        self._lines = [line.encode("utf-8") + b"\n" for line in lines]
+        self._gate = gate
+        self.returncode = None
+        self.stdout = self
+        self._buffer = _io.BytesIO()
+
+    def readline(self):
+        if not self._lines:
+            if self._gate is not None:
+                self._gate.wait(5)
+            return b""
+        return self._lines.pop(0)
+
+    def wait(self, timeout=None):
+        self.returncode = 0
+        return 0
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        if self._gate is not None:
+            self._gate.set()
+
+
+def _run_tunnel(monkeypatch, tmp_path, lines):
+    import threading
+    from ui.qml import public_tunnel
+
+    urls, statuses, commands = [], [], []
+    gate = threading.Event()
+
+    def fake_popen(command, **_kwargs):
+        commands.append(command)
+        return _FakeProcess(lines if len(commands) == 1 else [], gate)
+
+    monkeypatch.setattr(public_tunnel.subprocess, "Popen", fake_popen)
+    tunnel = public_tunnel.CloudflareTunnel(urls.append, lambda text, ok: statuses.append((text, ok)),
+                                            tmp_path / "logs" / "cloudflared.log")
+    tunnel.start(8765, "cloudflared.exe")
+    _wait(lambda: any("соединяется" in text or "работает" in text for text, _ok in statuses))
+    time.sleep(0.2)
+    return tunnel, urls, statuses, commands, gate
+
+
+def test_tunnel_url_is_given_only_after_connection(monkeypatch, tmp_path: Path):
+    lines = ["INF |  https://quiet-river-test.trycloudflare.com  |",
+             "INF Registered tunnel connection connIndex=0 protocol=http2"]
+    tunnel, urls, statuses, commands, gate = _run_tunnel(monkeypatch, tmp_path, lines)
+    try:
+        assert "--protocol" in commands[0] and commands[0][commands[0].index("--protocol") + 1] == "http2"
+        assert _wait(lambda: urls == ["https://quiet-river-test.trycloudflare.com"])
+        assert tunnel.url == "https://quiet-river-test.trycloudflare.com"
+        assert "Registered" in (tmp_path / "logs" / "cloudflared.log").read_text(encoding="utf-8")
+    finally:
+        gate.set()
+        tunnel.stop()
+
+
+def test_tunnel_without_connection_keeps_the_button_empty(monkeypatch, tmp_path: Path):
+    """Адрес выдан, а соединения нет (закрыт порт 7844): боту адрес не отдаётся - иначе «Error 1033»."""
+    lines = ["INF |  https://quiet-river-test.trycloudflare.com  |",
+             "ERR Failed to dial a quic connection error=\"timeout: no recent network activity\""]
+    tunnel, urls, statuses, _commands, gate = _run_tunnel(monkeypatch, tmp_path, lines)
+    try:
+        assert urls == [] and tunnel.url == ""
+        assert any("соединяется" in text for text, _ok in statuses)
+    finally:
+        gate.set()
+        tunnel.stop()
+
+
+def test_restart_pause_grows_and_is_capped():
+    from ui.qml.public_tunnel import MAX_RESTART_PAUSE_S, pause_text, restart_pause
+
+    assert [restart_pause(n, False) for n in (1, 2, 3)] == [15.0, 30.0, 60.0]
+    assert restart_pause(1, True) == 120.0 and restart_pause(2, True) == 240.0
+    assert restart_pause(50, True) == MAX_RESTART_PAUSE_S
+    assert pause_text(15) == "15 с" and pause_text(240) == "4 мин"
+
+
+def test_rate_limit_is_named_and_waits_longer(monkeypatch, tmp_path: Path):
+    """Cloudflare ответил 429: оператор видит причину, повтор не раньше чем через 2 минуты."""
+    lines = ["INF Requesting new quick Tunnel on trycloudflare.com...",
+             "quick tunnel provisioning failed with status 429"]
+    from ui.qml import public_tunnel
+
+    statuses = []
+    monkeypatch.setattr(public_tunnel.subprocess, "Popen", lambda command, **_kwargs: _FakeProcess(list(lines)))
+    tunnel = public_tunnel.CloudflareTunnel(lambda _url: None, lambda text, ok: statuses.append((text, ok)))
+    tunnel.start(8765, "cloudflared.exe")
+    try:
+        assert _wait(lambda: any("429" in text for text, _ok in statuses))
+        text, ok = [item for item in statuses if "429" in item[0]][0]
+        assert not ok and "Повтор через 2 мин" in text
+    finally:
+        tunnel.stop()
+
+
+# ------------------------------------------------------------------ туннель ngrok
+
+def _ngrok_line(**fields):
+    return json.dumps(dict({"t": "2026-10-12T16:20:00+0300", "lvl": "info"}, **fields))
+
+
+def test_ngrok_command_keeps_the_token_out_of_the_command_line():
+    from ui.qml.public_tunnel import NgrokTunnel, ngrok_command
+
+    command = ngrok_command("ngrok.exe", 8765, "camera.ngrok-free.dev")
+    assert command[:3] == ["ngrok.exe", "http", "http://127.0.0.1:8765"]
+    assert "--log-format=json" in command and command[-2:] == ["--url", "https://camera.ngrok-free.dev"]
+    assert "--url" not in ngrok_command("ngrok.exe", 8765, "")
+
+    tunnel = NgrokTunnel(lambda _url: None, lambda _text, _ok: None)
+    tunnel._exe, tunnel._port, tunnel._options = "ngrok.exe", 8765, {"authtoken": "SECRET", "domain": ""}
+    assert "SECRET" not in " ".join(tunnel.command())
+    assert tunnel.environment()["NGROK_AUTHTOKEN"] == "SECRET"
+    tunnel._options = {"authtoken": "", "domain": ""}
+    assert tunnel.environment() is None
+
+
+def test_ngrok_url_comes_from_started_tunnel(monkeypatch, tmp_path: Path):
+    import threading
+    from ui.qml import public_tunnel
+
+    lines = [_ngrok_line(msg="client session established"),
+             _ngrok_line(msg="started tunnel", name="command_line", addr="http://127.0.0.1:8765",
+                         url="https://quiet-river.ngrok-free.dev")]
+    urls, statuses = [], []
+    gate = threading.Event()
+    monkeypatch.setattr(public_tunnel.subprocess, "Popen", lambda command, **_kwargs: _FakeProcess(list(lines), gate))
+    tunnel = public_tunnel.NgrokTunnel(urls.append, lambda text, ok: statuses.append((text, ok)), tmp_path / "ngrok.log")
+    tunnel.start(8765, "ngrok.exe", authtoken="", domain="")
+    try:
+        assert _wait(lambda: urls == ["https://quiet-river.ngrok-free.dev"])
+        assert any("работает" in text and ok for text, ok in statuses)
+    finally:
+        gate.set()
+        tunnel.stop()
+
+
+def test_ngrok_errors_are_explained(monkeypatch):
+    from ui.qml import public_tunnel
+
+    lines = [_ngrok_line(lvl="eror", msg="session closing", err="authentication failed: Your account is limited to "
+                                                                 "1 simultaneous ngrok agent sessions.\r\n\r\nERR_NGROK_108\r\n")]
+    statuses = []
+    monkeypatch.setattr(public_tunnel.subprocess, "Popen", lambda command, **_kwargs: _FakeProcess(list(lines)))
+    tunnel = public_tunnel.NgrokTunnel(lambda _url: None, lambda text, ok: statuses.append((text, ok)))
+    tunnel.start(8765, "ngrok.exe")
+    try:
+        assert _wait(lambda: any("ERR_NGROK_108" in text for text, _ok in statuses))
+        text = [text for text, _ok in statuses if "ERR_NGROK_108" in text][0]
+        assert "другой агент" in text and "Повтор через" in text
+    finally:
+        tunnel.stop()
+
+    state = {"url": "", "ready": False, "error": "", "rate_limited": False}
+    public_tunnel.NgrokTunnel(lambda _u: None, lambda _t, _o: None).parse_line(
+        "ERROR:  authentication failed: Usage of ngrok requires a verified account and authtoken. ERR_NGROK_4018", state)
+    assert "токен ngrok" in state["error"]
+
+
+def test_tool_is_found_in_a_configured_folder(tmp_path: Path):
+    from ui.qml.public_tunnel import find_ngrok
+
+    (tmp_path / "ngrok.exe").write_bytes(b"")
+    assert find_ngrok(str(tmp_path)) == str(tmp_path / "ngrok.exe")
+    assert find_ngrok(f'"{tmp_path / "ngrok.exe"}"') == str(tmp_path / "ngrok.exe")
+

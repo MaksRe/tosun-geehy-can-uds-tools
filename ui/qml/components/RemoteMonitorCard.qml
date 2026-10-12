@@ -10,7 +10,7 @@ import "."
     уведомлений и переключатели (точки, сводки, файлы); доступ одобряет
     администратор или код доступа;
   - мини-приложение Telegram со всей телеметрией прогона: адрес https даёт
-    туннель Cloudflare или свой сервер;
+    туннель ngrok (основной), туннель Cloudflare или свой сервер;
   - копия каждого сохранённого журнала в сетевую папку или на сервер по SFTP.
 
   Всё это только для наблюдения: управлять прибором издалека нужно через
@@ -436,20 +436,23 @@ Card {
                     InfoMark {
                         tip: "Кнопка «Камера» в боте открывает всё о прогоне: камера и плата, контуры, история, "
                              + "ход по узлам, проблемы, события, журналы в чат и свои настройки уведомлений.<br><br>"
-                             + "Telegram открывает мини-приложение только по адресу https:// из интернета. "
-                             + "<b>Туннель Cloudflare</b> даёт такой адрес бесплатно и без регистрации; адрес меняется при "
-                             + "каждом запуске - бот сам обновит кнопку. <b>Свой адрес</b> - если есть сервер с https, "
-                             + "проксирующий на порт этой программы.<br><br>"
+                             + "Telegram открывает мини-приложение только по адресу https:// из интернета:<br>"
+                             + "<b>ngrok</b> - основной: бесплатная учётная запись, постоянный адрес, работает по обычному "
+                             + "https и проходит почти любую сеть;<br>"
+                             + "<b>Cloudflare</b> - без регистрации, но адрес меняется при каждом запуске, нужен порт 7844, "
+                             + "а при частых запусках Cloudflare временно отказывает (429);<br>"
+                             + "<b>Свой адрес</b> - если есть сервер с https, проксирующий на порт этой программы.<br><br>"
                              + "Данные видят только одобренные в боте пользователи: каждый запрос подписан Telegram."
                     }
                     Item { Layout.fillWidth: true }
 
                     Repeater {
-                        model: [{ "mode": "tunnel", "title": "Туннель Cloudflare" }, { "mode": "manual", "title": "Свой адрес" }]
+                        model: [{ "mode": "ngrok", "title": "ngrok" }, { "mode": "tunnel", "title": "Cloudflare" },
+                                { "mode": "manual", "title": "Свой адрес" }]
 
                         FancyButton {
                             required property var modelData
-                            Layout.preferredWidth: 140
+                            Layout.preferredWidth: 110
                             Layout.preferredHeight: 28
                             fontPixelSize: 12
                             text: modelData.title
@@ -462,6 +465,44 @@ Card {
 
                     Caption { text: "Порт" }
                     SettingField { key: "serverPort"; Layout.preferredWidth: 70; horizontalAlignment: TextInput.AlignHCenter; settingKey: "server_port" }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: root.remote.miniappMode === "ngrok"
+                    spacing: 8
+
+                    Caption { text: "ngrok" }
+                    SettingField {
+                        key: "ngrokPath"
+                        Layout.fillWidth: true
+                        placeholderText: root.remote.ngrokFound ? "найден: " + root.remote.ngrokFound
+                                                                 : "не найден - укажите путь к ngrok.exe"
+                        settingKey: "ngrok_path"
+                    }
+                    Caption { text: "Токен ngrok" }
+                    SettingField {
+                        key: "ngrokAuthtoken"
+                        Layout.preferredWidth: 200
+                        echoMode: activeFocus ? TextInput.Normal : TextInput.Password
+                        placeholderText: root.remote.ngrokConfigured ? "уже записан в ngrok" : "Your Authtoken"
+                        settingKey: "ngrok_authtoken"
+                    }
+                    Caption { text: "Адрес" }
+                    SettingField { key: "ngrokDomain"; Layout.preferredWidth: 220; placeholderText: "выданный учётной записи"
+                        settingKey: "ngrok_domain" }
+                    InfoMark {
+                        tip: "<b>Как подключить ngrok</b><br>"
+                             + "1. Зарегистрируйтесь на ngrok.com (бесплатно).<br>"
+                             + "2. Скачайте ngrok для Windows (ngrok.com/download), положите ngrok.exe рядом с программой "
+                             + "или в папку tools - тогда путь можно не указывать.<br>"
+                             + "3. Скопируйте «Your Authtoken» из кабинета ngrok в поле «Токен ngrok». Если токен уже "
+                             + "записан командой «ngrok config add-authtoken», поле можно оставить пустым.<br><br>"
+                             + "Адрес выдаётся учётной записи и не меняется (вида https://слова.ngrok-free.dev); поле "
+                             + "«Адрес» - только для своего домена ngrok. Бесплатно одновременно работает один ngrok на "
+                             + "учётную запись.<br><br>При самом первом открытии ngrok может показать страницу-предупреждение "
+                             + "- нажмите «Visit Site», дальше она не появится."
+                    }
                 }
 
                 RowLayout {
@@ -528,7 +569,7 @@ Card {
 
                 StatusLine { text: root.remote.serverStatus || ""; ok: root.remote.serverOk === true }
                 StatusLine {
-                    visible: root.remote.miniappMode === "tunnel" && (root.remote.tunnelStatus || "").length > 0
+                    visible: root.remote.miniappMode !== "manual" && (root.remote.tunnelStatus || "").length > 0
                     text: root.remote.tunnelStatus || ""
                     ok: root.remote.tunnelOk === true
                 }

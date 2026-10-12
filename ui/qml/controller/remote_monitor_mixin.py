@@ -8,7 +8,7 @@
   переключатели (точки, сводки, файлы); доступ одобряет администратор или код;
 - мини-приложение Telegram: температуры, контуры, ход прогона, проблемы,
   история, события, свои настройки уведомлений, журналы в чат. Открывается
-  кнопкой в боте; адрес https даёт туннель Cloudflare или свой сервер;
+  кнопкой в боте; адрес https даёт туннель ngrok или Cloudflare, или свой сервер;
 - копия каждого сохранённого журнала в сетевую папку или на сервер по SFTP.
 
 Связь здесь только для наблюдения. Пропала сеть - прогон идёт дальше, а
@@ -41,14 +41,17 @@ from PySide6.QtCore import QTimer
 
 import chamber_fit
 from ui.qml.remote_file_sync import MODE_FOLDER, MODE_SFTP, FileSyncConfig, RemoteFileSync
-from ui.qml.public_tunnel import CloudflareTunnel, find_cloudflared
+from ui.qml.public_tunnel import CloudflareTunnel, NgrokTunnel, find_cloudflared, find_ngrok, ngrok_config_has_token
 from ui.qml.remote_status_server import RemoteStatusServer
 from ui.qml.telegram_bot import LEVEL_TITLES, LEVELS, OPTIONS, TelegramBot, TelegramUsers, validate_init_data
 
 from .contract import AppControllerContract
 from .stability import is_stable, rate_and_spread
 
-MINIAPP_MODES = ("tunnel", "manual")
+# Откуда адрес https мини-приложения: ngrok (основной), туннель Cloudflare или свой сервер.
+MINIAPP_MODES = ("ngrok", "tunnel", "manual")
+# Режимы, в которых адрес даёт туннель, запущенный программой.
+TUNNEL_MODES = ("ngrok", "tunnel")
 
 
 class MiniAppAccess:
@@ -163,9 +166,15 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         self._remote_telegram = TelegramBot(self._remote_users,
                                             lambda text, ok: self._remote_queue_status("telegram", text, ok))
         self._remote_server.set_access(MiniAppAccess(self._remote_telegram, self._remote_server._resolve_file))
-        self._remote_tunnel = CloudflareTunnel(
-            lambda url: self._remote_queue_status("tunnel_url", url, True),
-            lambda text, ok: self._remote_queue_status("tunnel", text, ok))
+        root = pathlib.Path(getattr(self, "_project_root_directory", None) or pathlib.Path.cwd())
+
+        def tunnel(kind, mode, log_name):
+            # Итоги каждого туннеля помечены режимом: окно учитывает только выбранный.
+            return kind(lambda url: self._remote_queue_status(f"tunnel_url:{mode}", url, True),
+                        lambda text, ok: self._remote_queue_status(f"tunnel:{mode}", text, ok),
+                        root / "logs" / log_name)
+        self._remote_tunnels = {"ngrok": tunnel(NgrokTunnel, "ngrok", "ngrok.log"),
+                                "tunnel": tunnel(CloudflareTunnel, "tunnel", "cloudflared.log")}
         self._remote_sync = RemoteFileSync(lambda text, ok: self._remote_queue_status("sync", text, ok))
 
         self._remote_timer = QTimer(self)
@@ -191,9 +200,13 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             "telegram_summaries": True,
             "telegram_access_code": "",
             # Мини-приложение: адрес https от туннеля Cloudflare или свой.
-            "miniapp_mode": "tunnel",
+            "miniapp_mode": "ngrok",
             "miniapp_url": "",
             "cloudflared_path": "",
+            # ngrok: путь, токен учётной записи (пусто - из настроек ngrok) и свой адрес (пусто - выданный).
+            "ngrok_path": "",
+            "ngrok_authtoken": "",
+            "ngrok_domain": "",
             "sync_enabled": False,
             "sync_mode": MODE_FOLDER,
             "sync_folder": "",
@@ -243,6 +256,8 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
                     raise ValueError
             else:
                 value = str(value).strip() if key not in ("sync_password",) else str(value)
+                if key in ("cloudflared_path", "ngrok_path"):
+                    value = value.strip('"')
         except (TypeError, ValueError):
             self._remote_event("Порт задаётся числом от 1 до 65535.", "bad", telegram=False)
             self.remoteMonitorChanged.emit()
@@ -304,11 +319,12 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         """Приводит сервер, бота и копирование в соответствие с настройками."""
         settings = self._remote_settings
 
-        tunnel = settings["miniapp_mode"] == "tunnel"
+        mode = settings["miniapp_mode"]
+        tunnel = mode in TUNNEL_MODES
         if settings["server_enabled"]:
             self._remote_server.set_key(settings["server_key"])
             self._remote_server.set_folders(self._remote_folders())
-            # Для туннеля сервер слушает только этот компьютер: снаружи он виден лишь через Cloudflare.
+            # Для туннеля сервер слушает только этот компьютер: снаружи он виден лишь через туннель.
             host = "127.0.0.1" if tunnel else "0.0.0.0"
             if (not self._remote_server.running or self._remote_server.port != int(settings["server_port"])
                     or self._remote_server.host != host):
@@ -319,21 +335,10 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
                 else:
                     self._remote_server_status = "Сервер мини-приложения работает."
                     self._remote_server_ok = True
-            if tunnel and self._remote_server.running:
-                exe = find_cloudflared(settings["cloudflared_path"])
-                if exe:
-                    self._remote_tunnel.start(self._remote_server.port, exe)
-                else:
-                    self._remote_tunnel.stop()
-                    self._remote_tunnel_status = ("Не найден cloudflared.exe: скачайте его с github.com/cloudflare/"
-                                                  "cloudflared/releases и положите рядом с программой или укажите путь.")
-                    self._remote_tunnel_ok = False
-            else:
-                self._remote_tunnel.stop()
-                self._remote_tunnel_status = ""
+            self._remote_apply_tunnels(mode if tunnel and self._remote_server.running else "")
         else:
             self._remote_server.stop()
-            self._remote_tunnel.stop()
+            self._remote_apply_tunnels("")
             self._remote_server_status = "Мини-приложение выключено."
             self._remote_server_ok = False
             self._remote_tunnel_status = ""
@@ -383,13 +388,47 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             apply_live()
         self.remoteMonitorChanged.emit()
 
+    def _remote_apply_tunnels(self, active: str):
+        """Запускает выбранный туннель и останавливает остальные. active пусто - все остановлены."""
+        settings = self._remote_settings
+        for mode, tunnel in self._remote_tunnels.items():
+            if mode != active:
+                tunnel.stop()
+        self._remote_tunnel_status = ""
+        self._remote_tunnel_ok = False
+        if not active:
+            return
+        if active == "ngrok":
+            exe = find_ngrok(settings["ngrok_path"])
+            missing = ("Не найден ngrok.exe: скачайте его с ngrok.com/download и положите рядом с программой "
+                       "(или в папку tools) или укажите путь.")
+            options = {"authtoken": settings["ngrok_authtoken"], "domain": settings["ngrok_domain"]}
+        else:
+            exe = find_cloudflared(settings["cloudflared_path"])
+            missing = ("Не найден cloudflared.exe: скачайте его с github.com/cloudflare/cloudflared/releases и "
+                       "положите рядом с программой или укажите путь.")
+            options = {}
+        if not exe:
+            self._remote_tunnels[active].stop()
+            self._remote_tunnel_status = missing
+            return
+        if active == "ngrok" and not settings["ngrok_authtoken"] and not ngrok_config_has_token():
+            self._remote_tunnel_status = ("Для ngrok нужен токен учётной записи: зарегистрируйтесь на ngrok.com "
+                                          "и впишите «Your Authtoken» в поле «Токен ngrok».")
+        self._remote_tunnels[active].start(self._remote_server.port, exe, **options)
+
+    def _remote_active_tunnel(self):
+        """Туннель выбранного режима или None (свой адрес)."""
+        return self._remote_tunnels.get(self._remote_settings["miniapp_mode"])
+
     def _remote_apply_app_url(self):
         """Адрес мини-приложения для кнопки бота: от туннеля или свой."""
         settings = self._remote_settings
+        tunnel = self._remote_active_tunnel()
         if not settings["server_enabled"]:
             url = ""
-        elif settings["miniapp_mode"] == "tunnel":
-            url = self._remote_tunnel.url
+        elif tunnel is not None:
+            url = tunnel.url
         else:
             url = str(settings["miniapp_url"])
         self._remote_public_url = url
@@ -498,10 +537,12 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             if channel == "telegram":
                 self._remote_telegram_status = text
                 self._remote_telegram_ok = ok
-            elif channel == "tunnel":
-                self._remote_tunnel_status = text
-                self._remote_tunnel_ok = ok
-            elif channel == "tunnel_url":
+            elif channel.startswith("tunnel:"):
+                # Запоздалые итоги остановленного туннеля не затирают состояние выбранного.
+                if channel == f"tunnel:{self._remote_settings['miniapp_mode']}":
+                    self._remote_tunnel_status = text
+                    self._remote_tunnel_ok = ok
+            elif channel.startswith("tunnel_url:"):
                 self._remote_apply_app_url()
                 if text:
                     self._remote_event(f"мини-приложение доступно: {text}", "info", telegram=False)
@@ -743,6 +784,11 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             "miniappUrl": str(settings["miniapp_url"]),
             "cloudflaredPath": str(settings["cloudflared_path"]),
             "cloudflaredFound": find_cloudflared(settings["cloudflared_path"]),
+            "ngrokPath": str(settings["ngrok_path"]),
+            "ngrokFound": find_ngrok(settings["ngrok_path"]),
+            "ngrokAuthtoken": str(settings["ngrok_authtoken"]),
+            "ngrokConfigured": bool(settings["ngrok_authtoken"]) or ngrok_config_has_token(),
+            "ngrokDomain": str(settings["ngrok_domain"]),
             "publicUrl": self._remote_public_url,
             "tunnelStatus": self._remote_tunnel_status,
             "tunnelOk": self._remote_tunnel_ok,
@@ -777,6 +823,8 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
     def _remote_shutdown(self):
         """Останавливает сервер и фоновые потоки при закрытии программы."""
         self._remote_server.stop()
-        self._remote_tunnel.stop()
+        for tunnel in self._remote_tunnels.values():
+            tunnel.stop()
+        self._remote_telegram.reset_menu_now()
         self._remote_telegram.close()
         self._remote_sync.close()
