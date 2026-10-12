@@ -53,7 +53,7 @@ Popup {
     readonly property real gridTolerance: 3.0
 
     // Ширины колонок формы: подпись, значение, пояснение тянется.
-    readonly property int labelWidth: 290
+    readonly property int labelWidth: 330
     readonly property int valueWidth: 330
 
     modal: true
@@ -209,7 +209,7 @@ Popup {
         tonePressed: "#134e4a"
     }
 
-    // Раздел-карточка: заголовок, короткое пояснение, строки.
+    // Раздел-карточка: заголовок со знаком «i», строки.
     component Section: Rectangle {
         id: section
         property string title: ""
@@ -238,11 +238,8 @@ Popup {
                     font.bold: true
                     font.family: "Bahnschrift"
                 }
-                Soft {
-                    Layout.fillWidth: true
-                    visible: section.hint.length > 0
-                    text: section.hint
-                }
+                InfoMark { tip: section.hint }
+                Item { Layout.fillWidth: true }
             }
 
             ColumnLayout {
@@ -253,7 +250,7 @@ Popup {
         }
     }
 
-    // Строка формы: что (подпись) - значение (поля и кнопки) - пояснение.
+    // Строка формы: подпись со знаком «i» - значение (поля и кнопки).
     component FormRow: RowLayout {
         id: formRow
         property string label: ""
@@ -262,28 +259,28 @@ Popup {
         Layout.fillWidth: true
         spacing: 12
 
-        Text {
+        RowLayout {
             Layout.preferredWidth: dialog.labelWidth
+            Layout.maximumWidth: dialog.labelWidth
             Layout.alignment: Qt.AlignVCenter
-            text: formRow.label
-            color: dialog.textMain
-            font.pixelSize: 12
-            font.family: "Bahnschrift"
-            wrapMode: Text.WordWrap
+            spacing: 6
+
+            Text {
+                Layout.fillWidth: true
+                text: formRow.label
+                color: dialog.textMain
+                font.pixelSize: 12
+                font.family: "Bahnschrift"
+                wrapMode: Text.WordWrap
+            }
+            InfoMark { tip: formRow.hint }
         }
 
         RowLayout {
             id: valueBox
-            Layout.preferredWidth: dialog.valueWidth
-            Layout.maximumWidth: dialog.valueWidth
-            Layout.alignment: Qt.AlignVCenter
-            spacing: 6
-        }
-
-        Soft {
             Layout.fillWidth: true
             Layout.alignment: Qt.AlignVCenter
-            text: formRow.hint
+            spacing: 6
         }
     }
 
@@ -428,13 +425,21 @@ Popup {
                     Layout.fillWidth: true
                     spacing: 8
 
-                    Text {
+                    RowLayout {
                         Layout.preferredWidth: 90
-                        text: "Сохранённые"
-                        color: dialog.textMain
-                        font.pixelSize: 12
-                        font.bold: true
-                        font.family: "Bahnschrift"
+                        spacing: 4
+                        Text {
+                            text: "Сохранённые"
+                            color: dialog.textMain
+                            font.pixelSize: 12
+                            font.bold: true
+                            font.family: "Bahnschrift"
+                        }
+                        InfoMark {
+                            tip: "Сценарии хранятся в папке " + (dialog.view.folder || "scenarios") + ". Нажатие загружает сценарий. "
+                                 + "Прогон идёт по сценарию, открытому здесь; при старте режим, уход платы и запись профиля "
+                                 + "переносятся в «Прогон в камере»."
+                        }
                     }
 
                     Flow {
@@ -500,7 +505,6 @@ Popup {
 
                     FormRow {
                         label: "Название"
-                        hint: "Под этим именем сценарий виден в списке сохранённых и в блоке автопрогона."
                         Field {
                             Layout.fillWidth: true
                             text: dialog.draftRevision >= 0 ? (dialog.draft.name || "") : ""
@@ -511,7 +515,6 @@ Popup {
 
                     FormRow {
                         label: "Описание"
-                        hint: "Для себя: что за испытание, для какой платы."
                         Field {
                             Layout.fillWidth: true
                             text: dialog.draftRevision >= 0 ? (dialog.draft.description || "") : ""
@@ -698,27 +701,7 @@ Popup {
                 Section {
                     title: "5. Шаги по порядку"
                     hint: "Каждый шаг: задать камере температуру - дождаться выхода на неё - дождаться, пока устоится плата - "
-                          + "выдержка - точка - следующий шаг."
-
-                    // Как настраивать шаги.
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: helpText.implicitHeight + 16
-                        radius: 8
-                        color: "#f0f9ff"
-                        border.width: 1
-                        border.color: "#bae6fd"
-
-                        Text {
-                            id: helpText
-                            anchors.fill: parent
-                            anchors.margins: 8
-                            color: "#0c4a6e"
-                            font.pixelSize: 12
-                            font.family: "Bahnschrift"
-                            wrapMode: Text.WordWrap
-                            textFormat: Text.StyledText
-                            text: "<b>Как настроить шаги</b><br>"
+                          + "выдержка - точка - следующий шаг.<br><br>" + "<b>Как настроить шаги</b><br>"
                                   + "1. <b>Первым - +25 °C.</b> Это опорная точка: поправка во всех узлах считается от неё. Без неё таблица не посчитается.<br>"
                                   + "2. <b>Дальше - все узлы прибора:</b> −40, −20, 0, +50, +70, +85 °C. Удобный порядок - от +25 вниз до −40 и затем вверх до +85: "
                                   + "камера меньше мечется, цикл короче. Колонка «Узел прибора» показывает, в какой узел попадёт точка шага.<br>"
@@ -728,8 +711,6 @@ Popup {
                                   + "5. <b>Точка</b> выключена - вспомогательный шаг без точки: прогрев перед циклом, переход. Он в таблицу не идёт.<br>"
                                   + "6. <b>Свои правила шага</b> (допуск, окно, скорость) - только если на этой температуре камера ведёт себя иначе, "
                                   + "например на −40 держит хуже: допуск 2 °C. Пусто - правила из раздела 3."
-                        }
-                    }
 
                     // Шапка таблицы: те же ширины колонок, что у строк.
                     Rectangle {
@@ -746,10 +727,30 @@ Popup {
 
                             Text { Layout.preferredWidth: 26; text: "№"; color: dialog.textSoft; font.pixelSize: 11; font.bold: true; font.family: "Bahnschrift" }
                             Text { Layout.preferredWidth: 86; text: "Температура,\n°C"; color: dialog.textSoft; font.pixelSize: 11; font.bold: true; font.family: "Bahnschrift" }
-                            Text { Layout.preferredWidth: 96; text: "Узел\nприбора"; color: dialog.textSoft; font.pixelSize: 11; font.bold: true; font.family: "Bahnschrift" }
-                            Text { Layout.preferredWidth: 56; text: "Точка"; color: dialog.textSoft; font.pixelSize: 11; font.bold: true; font.family: "Bahnschrift" }
-                            Text { Layout.preferredWidth: 80; text: "Выдержка,\nмин"; color: dialog.textSoft; font.pixelSize: 11; font.bold: true; font.family: "Bahnschrift" }
-                            Text { Layout.preferredWidth: 80; text: "Допуск ±,\n°C"; color: dialog.textSoft; font.pixelSize: 11; font.bold: true; font.family: "Bahnschrift" }
+                            RowLayout {
+                                Layout.preferredWidth: 96
+                                spacing: 4
+                                Text { text: "Узел\nприбора"; color: dialog.textSoft; font.pixelSize: 11; font.bold: true; font.family: "Bahnschrift" }
+                                InfoMark { tip: "В какой узел сетки прибора попадёт точка шага: температура платы должна быть в пределах ±3 °C от узла. «вне узлов!» - точка в таблицу не войдёт." }
+                            }
+                            RowLayout {
+                                Layout.preferredWidth: 56
+                                spacing: 4
+                                Text { text: "Точка"; color: dialog.textSoft; font.pixelSize: 11; font.bold: true; font.family: "Bahnschrift" }
+                                InfoMark { tip: "Выключено - вспомогательный шаг без точки (прогрев, переход): в таблицу не идёт." }
+                            }
+                            RowLayout {
+                                Layout.preferredWidth: 80
+                                spacing: 4
+                                Text { text: "Выдержка,\nмин"; color: dialog.textSoft; font.pixelSize: 11; font.bold: true; font.family: "Bahnschrift" }
+                                InfoMark { tip: "Сколько ещё держать после того, как плата устоялась. Обычно 0; на крайних -40 и +85 можно 15...30 мин." }
+                            }
+                            RowLayout {
+                                Layout.preferredWidth: 80
+                                spacing: 4
+                                Text { text: "Допуск ±,\n°C"; color: dialog.textSoft; font.pixelSize: 11; font.bold: true; font.family: "Bahnschrift" }
+                                InfoMark { tip: "Свои правила шага: допуск выхода на уставку, окно и скорость устойчивости платы. Пусто - правила раздела 3 (видны серым)." }
+                            }
                             Text { Layout.preferredWidth: 80; text: "Окно,\nмин"; color: dialog.textSoft; font.pixelSize: 11; font.bold: true; font.family: "Bahnschrift" }
                             Text { Layout.preferredWidth: 80; text: "Скорость,\n°C/мин"; color: dialog.textSoft; font.pixelSize: 11; font.bold: true; font.family: "Bahnschrift" }
                             Text { Layout.fillWidth: true; text: "Примечание"; color: dialog.textSoft; font.pixelSize: 11; font.bold: true; font.family: "Bahnschrift" }
@@ -895,10 +896,7 @@ Popup {
                             onClicked: dialog.addStep()
                         }
 
-                        Soft {
-                            Layout.fillWidth: true
-                            text: "Пустые «Допуск», «Окно» и «Скорость» - правила из раздела 3 (видны серым)."
-                        }
+                        Item { Layout.fillWidth: true }
                     }
 
                     // Проверка сетки: опорный узел и все 7 узлов по шагам с точкой.
@@ -961,11 +959,7 @@ Popup {
                     }
                 }
 
-                Soft {
-                    Layout.fillWidth: true
-                    text: "Сценарии хранятся в папке " + (dialog.view.folder || "scenarios") + ". Прогон идёт по сценарию, "
-                          + "открытому здесь; при старте режим, уход платы и запись профиля переносятся в «Прогон в камере»."
-                }
+
             }
         }
     }
