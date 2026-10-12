@@ -97,8 +97,8 @@ Card {
 
         var remote = root.appController.remoteMonitor
         var parts = []
-        if (remote.serverEnabled) parts.push("страница")
-        if (remote.telegramEnabled) parts.push("Telegram")
+        if (remote.telegramEnabled) parts.push("бот (" + (remote.users || []).filter(function(u) { return u.approved }).length + ")")
+        if (remote.serverEnabled) parts.push("мини-приложение")
         if (remote.syncEnabled) parts.push("копия журналов")
         return parts.length > 0 ? "Включено: " + parts.join(", ") : "Выключено"
     }
@@ -249,7 +249,7 @@ Card {
                         },
                         {
                             "title": "Удалённое наблюдение",
-                            "hint": "Страница в браузере, Telegram, копия журналов"
+                            "hint": "Бот и мини-приложение Telegram, копия журналов"
                         }
                     ]
 

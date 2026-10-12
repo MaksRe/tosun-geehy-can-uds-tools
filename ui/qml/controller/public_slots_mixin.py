@@ -3480,6 +3480,26 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._remote_new_key()
 
     @Slot()
+    def newRemoteAccessCode(self):
+        """Цель функции в новом коде доступа к боту, затем «/start КОД» подключает без одобрения."""
+        self._remote_new_access_code()
+
+    @Slot(str, str)
+    def remoteUserAction(self, chat_id, action):
+        """Цель функции в управлении пользователями бота, затем человек одобрен, убран или стал администратором."""
+        self._remote_user_action(str(chat_id), str(action))
+
+    @Slot(str, str)
+    def setRemoteUserLevel(self, chat_id, level):
+        """Цель функции в выборе уровня уведомлений пользователя, затем ему приходит только нужное."""
+        self._remote_user_set(str(chat_id), "level", str(level))
+
+    @Slot(str, str, bool)
+    def setRemoteUserFlag(self, chat_id, key, enabled):
+        """Цель функции в переключателях пользователя (точки, сводки, файлы), затем рассылка их учитывает."""
+        self._remote_user_set(str(chat_id), str(key), bool(enabled))
+
+    @Slot()
     def findRemoteTelegramChat(self):
         """Цель функции в поиске номера чата, затем его не нужно узнавать вручную."""
         self._remote_find_chat()

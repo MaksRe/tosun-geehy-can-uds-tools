@@ -1,15 +1,21 @@
-"""Страница состояния прогона для наблюдения издалека.
+"""Сервер мини-приложения Telegram: наблюдение за прогоном с телефона.
 
 ЗАЧЕМ
 Камера стоит далеко от рабочего места. Удалённый рабочий стол даёт полный
 доступ, но чтобы просто взглянуть, всё ли в порядке, он тяжёл, а с телефона
-неудобен. Программа у камеры сама открывает маленькую страницу: её видно из
-любого браузера в сети, и на ней всё, что нужно для наблюдения.
+неудобен. Программа у камеры сама отдаёт мини-приложение: его открывают кнопкой
+в боте Telegram, и в нём всё о камере, плате и ходе прогона.
 
 ЧТО ОТДАЁТ
-- «/» - сама страница, она раз в две секунды забирает свежие данные;
-- «/status.json» - состояние прогона одним набором;
-- «/file?name=...» - скачать журнал из разрешённых папок.
+- «/» и «/app» - само мини-приложение;
+- «/api/state» - состояние прогона, настройки пользователя (и список
+  пользователей - администратору);
+- «/api/settings» - пользователь меняет свои уведомления;
+- «/api/users» - администратор одобряет и убирает пользователей;
+- «/api/sendfile» - прислать журнал или профиль в чат пользователя.
+Запросы к «/api/...» несут данные запуска Telegram (заголовок
+X-Telegram-Init-Data); без верной подписи и одобрения в боте данных нет.
+Для отладки в сети по ключу доступа остаются «/status.json» и «/file».
 
 Страница только показывает. Управлять прибором через неё нельзя намеренно:
 любое действие идёт через удалённый рабочий стол, где оператор видит всё окно.
@@ -69,6 +75,8 @@ class RemoteStatusServer:
         self._snapshot_text = "{}"
         self._folders: dict[str, Path] = {}
         self._key = ""
+        # Доступ мини-приложения: проверка подписи Telegram и действия пользователя (см. set_access).
+        self._access = None
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._port = 0
@@ -86,6 +94,12 @@ class RemoteStatusServer:
         with self._lock:
             self._folders = {str(title): Path(path) for title, path in folders.items()}
 
+    def set_access(self, access):
+        """Доступ мини-приложения: объект с методами user_for, update_settings, admin_action,
+        users_view, send_file. None - мини-приложение без данных."""
+        with self._lock:
+            self._access = access
+
     def set_key(self, key: str):
         """Ключ доступа. Пустой ключ означает открытый доступ из сети."""
         with self._lock:
@@ -101,18 +115,24 @@ class RemoteStatusServer:
     def port(self) -> int:
         return self._port
 
-    def start(self, port: int) -> str:
-        """Запускает сервер. Возвращает пустую строку или текст ошибки."""
+    @property
+    def host(self) -> str:
+        return getattr(self, "_host", "")
+
+    def start(self, port: int, host: str = "0.0.0.0") -> str:
+        """Запускает сервер. host 127.0.0.1 - только для туннеля, из сети не виден.
+        Возвращает пустую строку или текст ошибки."""
         self.stop()
         handler = self._make_handler()
         try:
-            server = ThreadingHTTPServer(("0.0.0.0", int(port)), handler)
+            server = ThreadingHTTPServer((str(host), int(port)), handler)
         except OSError as error:
             return f"порт {int(port)} занят или недоступен: {error}"
         server.daemon_threads = True
         self._server = server
         # Порт 0 означает «любой свободный»: запоминается тот, что выдала система.
         self._port = int(server.server_address[1])
+        self._host = str(host)
         self._thread = threading.Thread(target=server.serve_forever, daemon=True, name="remote-status-server")
         self._thread.start()
         return ""
@@ -189,19 +209,79 @@ class RemoteStatusServer:
                 self.end_headers()
                 self.wfile.write(body)
 
+            def _json(self, code: int, payload):
+                self._send(code, json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                           "application/json; charset=utf-8")
+
+            def _miniapp_user(self):
+                """Пользователь мини-приложения по подписанным данным запуска или None."""
+                with owner._lock:
+                    access = owner._access
+                if access is None:
+                    return None, None
+                init_data = self.headers.get("X-Telegram-Init-Data", "")
+                found = access.user_for(init_data)
+                return (access, found) if found else (access, None)
+
+            def _read_json(self) -> dict:
+                try:
+                    length = min(int(self.headers.get("Content-Length", "0")), 65536)
+                    data = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+                    return data if isinstance(data, dict) else {}
+                except (ValueError, OSError):
+                    return {}
+
+            def do_POST(self):
+                parsed = urlparse(self.path)
+                access, found = self._miniapp_user()
+                if found is None:
+                    self._json(401, {"error": "нет доступа: откройте через бота и дождитесь одобрения"})
+                    return
+                chat_id, user = found
+                body = self._read_json()
+                if parsed.path == "/api/settings":
+                    self._json(200, {"me": access.update_settings(chat_id, body)})
+                elif parsed.path == "/api/users" and user.get("admin"):
+                    text = access.admin_action(chat_id, str(body.get("action", "")), str(body.get("id", "")))
+                    self._json(200, {"text": text, "users": access.users_view()})
+                elif parsed.path == "/api/sendfile":
+                    self._json(200, {"text": access.send_file(chat_id, str(body.get("folder", "")),
+                                                              str(body.get("name", "")))})
+                else:
+                    self._json(404, {"error": "нет такого действия"})
+
             def do_GET(self):
                 parsed = urlparse(self.path)
                 query = parse_qs(parsed.query)
+
+                # Мини-приложение отдаётся всем: данные - только через «/api/...» с подписью Telegram.
+                if parsed.path in ("/", "/index.html", "/app"):
+                    self._send(200, owner._page_html.encode("utf-8"), "text/html; charset=utf-8")
+                    return
+
+                if parsed.path == "/api/state":
+                    access, found = self._miniapp_user()
+                    if found is None:
+                        self._json(401, {"error": "нет доступа: откройте через бота и дождитесь одобрения"})
+                        return
+                    chat_id, user = found
+                    with owner._lock:
+                        text = owner._snapshot_text
+                    payload = json.loads(text)
+                    payload["me"] = dict(user, id=chat_id)
+                    payload["files"] = owner._files_listing()
+                    if user.get("admin"):
+                        payload["users"] = access.users_view()
+                    self._json(200, payload)
+                    return
+
+                # Отладка в сети: снимок и файлы только по ключу доступа; без ключа - закрыто.
                 with owner._lock:
                     key = owner._key
                 given = (query.get("key") or [""])[0]
-                if key and not secrets.compare_digest(given, key):
-                    self._send(403, "Нужен ключ доступа: добавьте к адресу ?key=...".encode("utf-8"),
+                if not key or not secrets.compare_digest(given, key):
+                    self._send(403, "Наблюдение - через мини-приложение в Telegram.".encode("utf-8"),
                                "text/plain; charset=utf-8")
-                    return
-
-                if parsed.path in ("/", "/index.html"):
-                    self._send(200, owner._page_html.encode("utf-8"), "text/html; charset=utf-8")
                     return
 
                 if parsed.path == "/status.json":

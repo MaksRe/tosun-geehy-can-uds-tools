@@ -619,7 +619,7 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             return
         if now - self._climate_auto_last_report >= every_min * 60.0 / self._climate_speed():
             self._climate_auto_last_report = now
-            self._climate_event(self._climate_auto_summary_text(now), "info")
+            self._climate_event(self._climate_auto_summary_text(now), "info", kind="summary")
 
     # ------------------------------------------------------------------ итог
 
@@ -648,11 +648,11 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             self._climate_auto_send_report()
 
     def _climate_auto_send_report(self):
-        """Были проблемы: отчёт диагностики файлом - в Telegram, если файлы туда разрешены."""
+        """Были проблемы: отчёт диагностики файлом - в Telegram тем, у кого включены «файлы»."""
         path = self._climate_save_report()
         remote = getattr(self, "_remote_settings", {}) or {}
         telegram = getattr(self, "_remote_telegram", None)
-        if path and telegram is not None and remote.get("telegram_enabled") and remote.get("telegram_files"):
+        if path and telegram is not None and remote.get("telegram_enabled"):
             telegram.send_document(path, "Отчёт диагностики камеры за прогон")
 
     # ------------------------------------------------------------------ продолжение после перезапуска

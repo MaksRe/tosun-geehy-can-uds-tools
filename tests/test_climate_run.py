@@ -84,7 +84,7 @@ class _ClimateStub(AppControllerClimateChamberMixin, _TestStub):
         self.sim.set_setpoint(23.0)
         self._climate_link = _FakeLink(self.sim)
 
-    def _remote_event(self, text, level="info", telegram=True):
+    def _remote_event(self, text, level="info", telegram=True, kind="event"):
         self.events.append((level, text))
 
 

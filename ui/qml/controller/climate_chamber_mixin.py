@@ -525,12 +525,15 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             self._climate_event(f"АВАРИЯ КАМЕРЫ: код {alarm}. Проверьте камеру.", "bad")
         self._climate_alarm_reported = alarm or 0
 
-    def _climate_event(self, text: str, level: str = "info"):
-        """Событие камеры: в журнал программы, наблюдению издалека и в журнал диагностики камеры."""
+    def _climate_event(self, text: str, level: str = "info", kind: str = "event"):
+        """Событие камеры: в журнал программы, наблюдению издалека и в журнал диагностики камеры.
+
+        kind «summary» - сводка по расписанию: бот пришлёт её только тем, у кого включены сводки.
+        """
         self._climate_diag_event("EVENT", str(text), {"bad": "ERROR", "warn": "WARN"}.get(level, "INFO"))
         handler = getattr(self, "_remote_event", None)
         if handler is not None:
-            handler(text, level)
+            handler(text, level, kind=kind)
 
     def _climate_send_setpoint(self, value_c: float) -> bool:
         """Уставка камере, с проверкой пределов из настроек."""

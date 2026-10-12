@@ -1,0 +1,634 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Прогон в камере</title>
+<!-- Мини-приложение Telegram: наблюдение за прогоном в климатической камере.
+     Данные берутся из api/state раз в 5 секунд; каждый запрос несёт подписанные
+     Telegram данные запуска (заголовок X-Telegram-Init-Data), без них программа
+     у камеры ничего не отдаёт. -->
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-secondary-bg-color, #eef1f5);
+    --card: var(--tg-theme-section-bg-color, var(--tg-theme-bg-color, #ffffff));
+    --text: var(--tg-theme-text-color, #0f172a);
+    --soft: var(--tg-theme-hint-color, #64748b);
+    --accent: var(--tg-theme-button-color, #2481cc);
+    --accent-text: var(--tg-theme-button-text-color, #ffffff);
+    --link: var(--tg-theme-link-color, #2481cc);
+    --line: var(--tg-theme-section-separator-color, rgba(127, 127, 127, 0.22));
+    --ok: #16a34a;
+    --warn: #d97706;
+    --bad: var(--tg-theme-destructive-text-color, #dc2626);
+    --board: #ea580c;
+    --chamber: #9333ea;
+    --main: #0284c7;
+    --media: #16a34a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not(.tg) {
+      --bg: #0f1621; --card: #17212b; --text: #e8eef5; --soft: #8a9aab;
+      --accent: #5288c1; --link: #6ab2f2; --line: rgba(255, 255, 255, 0.1);
+    }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body { font: 15px/1.35 -apple-system, "Segoe UI", Roboto, sans-serif; padding-bottom: 72px; }
+  header { padding: 10px 14px 4px; display: flex; align-items: center; gap: 8px; }
+  header h1 { font-size: 17px; margin: 0; flex: 1; }
+  .link { font-size: 12px; color: var(--soft); white-space: nowrap; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 1px; }
+  main { padding: 6px 10px; }
+  .card { background: var(--card); border-radius: 14px; padding: 12px 14px; margin-bottom: 10px; }
+  .card h2 { font-size: 13px; font-weight: 600; color: var(--soft); text-transform: uppercase; letter-spacing: .03em;
+             margin: 0 0 8px; display: flex; justify-content: space-between; gap: 8px; }
+  .card h2 span { text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .soft { color: var(--soft); font-size: 13px; }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+  .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
+  .grid small { display: block; color: var(--soft); font-size: 12px; }
+  .big { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .mid { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .alert { border-radius: 12px; padding: 9px 12px; margin-bottom: 8px; font-size: 14px; }
+  .alert.bad { background: rgba(220, 38, 38, .12); color: var(--bad); }
+  .alert.warn { background: rgba(217, 119, 6, .13); color: var(--warn); }
+  .alert.ok { background: rgba(22, 163, 74, .12); color: var(--ok); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { font-size: 12px; padding: 3px 9px; border-radius: 99px; background: var(--bg); color: var(--soft); }
+  .chip.ok, .chip.done { background: rgba(22, 163, 74, .14); color: var(--ok); }
+  .chip.run, .chip.active { background: rgba(36, 129, 204, .16); color: var(--link); font-weight: 600; }
+  .chip.fail, .chip.bad { background: rgba(220, 38, 38, .14); color: var(--bad); }
+  .bar { height: 8px; background: var(--bg); border-radius: 99px; overflow: hidden; margin: 8px 0 6px; }
+  .bar div { height: 100%; background: var(--accent); border-radius: 99px; transition: width .4s; }
+  canvas { width: 100%; height: 190px; display: block; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--soft); margin-top: 6px; }
+  .legend i { display: inline-block; width: 12px; height: 3px; border-radius: 2px; margin-right: 4px; vertical-align: 3px; }
+  .list { list-style: none; margin: 0; padding: 0; }
+  .list li { padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; }
+  .list li:first-child { border-top: 0; padding-top: 0; }
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .row > div { min-width: 0; }
+  .nodes { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
+  .node { background: var(--bg); border-radius: 10px; padding: 6px 8px; font-size: 12px; }
+  .node b { display: block; font-size: 13px; }
+  .node.done { outline: 1.5px solid var(--ok); }
+  button { font: inherit; border: 0; border-radius: 10px; padding: 8px 12px; background: var(--accent);
+           color: var(--accent-text); cursor: pointer; }
+  button.light { background: var(--bg); color: var(--link); }
+  button.danger { background: var(--bg); color: var(--bad); }
+  button:disabled { opacity: .5; }
+  .seg { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+  .seg button { background: var(--bg); color: var(--text); text-align: left; padding: 9px 11px; }
+  .seg button small { display: block; color: var(--soft); font-size: 12px; }
+  .seg button.on { background: var(--accent); color: var(--accent-text); }
+  .seg button.on small { color: var(--accent-text); opacity: .85; }
+  .switch { display: flex; justify-content: space-between; align-items: center; padding: 9px 0;
+            border-top: 1px solid var(--line); gap: 12px; }
+  .switch:first-of-type { border-top: 0; }
+  .switch input { width: 42px; height: 24px; appearance: none; background: var(--line); border-radius: 99px;
+                  position: relative; flex: none; cursor: pointer; transition: background .2s; }
+  .switch input::after { content: ""; position: absolute; left: 3px; top: 3px; width: 18px; height: 18px;
+                         background: #fff; border-radius: 50%; transition: left .2s; }
+  .switch input:checked { background: var(--accent); }
+  .switch input:checked::after { left: 21px; }
+  .buttons { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  .buttons button { padding: 5px 10px; font-size: 13px; }
+  nav { position: fixed; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: repeat(4, 1fr);
+        background: var(--card); border-top: 1px solid var(--line); padding: 4px 4px calc(4px + env(safe-area-inset-bottom)); }
+  nav button { background: none; color: var(--soft); font-size: 11px; padding: 4px 0; border-radius: 8px; }
+  nav button b { display: block; font-size: 19px; line-height: 1.2; font-weight: 400; }
+  nav button.on { color: var(--link); }
+  .tab { display: none; } .tab.on { display: block; }
+  .points { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .points th { text-align: left; color: var(--soft); font-weight: 500; padding: 0 4px 4px 0; }
+  .points td { padding: 4px 4px 4px 0; border-top: 1px solid var(--line); }
+  .wrap { overflow-x: auto; }
+  .empty { text-align: center; padding: 40px 20px; color: var(--soft); }
+  .empty b { display: block; color: var(--text); font-size: 17px; margin-bottom: 6px; }
+  .toast { position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%); background: rgba(15, 23, 42, .9);
+           color: #fff; padding: 8px 14px; border-radius: 10px; font-size: 13px; opacity: 0; transition: opacity .25s;
+           pointer-events: none; max-width: 90vw; text-align: center; }
+  .toast.on { opacity: 1; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Прогон в камере</h1>
+  <div class="link" id="link">подключение...</div>
+</header>
+
+<main>
+  <div id="blocked" class="empty" hidden></div>
+
+  <!-- Сейчас: проблемы, камера, плата, контуры, график. -->
+  <section class="tab on" id="tab-now">
+    <div id="alerts"></div>
+    <div class="card">
+      <h2>Камера <span id="chamberName"></span></h2>
+      <div id="chamber"></div>
+    </div>
+    <div class="card">
+      <h2>Плата <span id="deviceNode"></span></h2>
+      <div class="grid">
+        <div><small>Температура платы</small><span class="big" id="boardNow">—</span>
+          <div class="soft" id="boardAvg"></div></div>
+        <div><small>Температура топлива</small><span class="big" id="fuelNow">—</span></div>
+      </div>
+      <div id="stability" style="margin-top:8px"></div>
+      <div class="soft" id="device" style="margin-top:4px"></div>
+    </div>
+    <div class="card">
+      <h2>Контуры <span id="window"></span></h2>
+      <div class="grid">
+        <div><small>Основной</small><span class="mid" id="mainNow">—</span>
+          <div class="soft">среднее <span id="mainAvg">—</span></div><div class="soft" id="mainInfo"></div></div>
+        <div><small>Вид топлива</small><span class="mid" id="mediaNow">—</span>
+          <div class="soft">среднее <span id="mediaAvg">—</span></div><div class="soft" id="mediaInfo"></div></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>История <span id="span"></span></h2>
+      <canvas id="chart"></canvas>
+      <div class="legend">
+        <span><i style="background:var(--chamber)"></i>камера, °C</span>
+        <span><i style="background:var(--board)"></i>плата, °C</span>
+        <span><i style="background:var(--main)"></i>основной, Δ</span>
+        <span><i style="background:var(--media)"></i>вид топлива, Δ</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Прогон: сценарий, ход по узлам, журнал, таблицы, запись профиля. -->
+  <section class="tab" id="tab-run">
+    <div class="card">
+      <h2>Автопрогон <span id="scenarioName"></span></h2>
+      <div id="auto"></div>
+    </div>
+    <div class="card">
+      <h2>Журнал <span id="journal"></span></h2>
+      <div id="run"></div>
+      <div class="nodes" id="nodes" style="margin-top:8px"></div>
+      <div id="report"></div>
+    </div>
+    <div class="card">
+      <h2>Запись профиля</h2>
+      <div class="chips" id="steps"></div>
+      <div id="chain" style="margin-top:6px"></div>
+    </div>
+    <div class="card" id="testCard" hidden>
+      <h2>Тестовый режим</h2>
+      <div id="test"></div>
+    </div>
+    <div class="card">
+      <h2>Последние точки</h2>
+      <div class="wrap"><table class="points" id="points"></table></div>
+    </div>
+  </section>
+
+  <!-- События и файлы журналов. -->
+  <section class="tab" id="tab-events">
+    <div class="card">
+      <h2>События</h2>
+      <ul class="list" id="events"></ul>
+    </div>
+    <div class="card">
+      <h2>Файлы <span>придут в чат с ботом</span></h2>
+      <ul class="list" id="files"></ul>
+    </div>
+  </section>
+
+  <!-- Свои уведомления; администратору - пользователи. -->
+  <section class="tab" id="tab-settings">
+    <div class="card">
+      <h2>Мои уведомления <span id="meName"></span></h2>
+      <div class="seg" id="levels"></div>
+      <div style="margin-top:10px" id="toggles"></div>
+    </div>
+    <div class="card" id="usersCard" hidden>
+      <h2>Пользователи <span>вы администратор</span></h2>
+      <ul class="list" id="users"></ul>
+    </div>
+  </section>
+</main>
+
+<nav id="nav">
+  <button class="on" data-tab="now"><b>◉</b>Сейчас</button>
+  <button data-tab="run"><b>▤</b>Прогон</button>
+  <button data-tab="events"><b>☰</b>События</button>
+  <button data-tab="settings"><b>⚙</b>Настройки</button>
+</nav>
+<div class="toast" id="toast"></div>
+
+<script>
+  const tg = window.Telegram && window.Telegram.WebApp;
+  if (tg) {
+    // Тема Telegram: его цвета приходят переменными --tg-theme-*.
+    document.documentElement.classList.add("tg");
+    tg.ready();
+    tg.expand();
+  }
+  const initData = (tg && tg.initData) || "";
+  const $ = (id) => document.getElementById(id);
+  const esc = (text) => String(text ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+  const LEVELS = [
+    ["all", "Все события", "весь ход прогона"],
+    ["important", "Важные", "этапы, итоги, предупреждения"],
+    ["alarms", "Только аварии", "камера, связь, остановка"],
+    ["off", "Без уведомлений", "только по запросу"],
+  ];
+  const OPTIONS = [
+    ["points", "Каждая точка", "сообщение о каждой записанной точке"],
+    ["summaries", "Сводки", "ход прогона по расписанию"],
+    ["files", "Файлы", "журнал, профиль и отчёт в чат"],
+  ];
+  let state = null;
+  let lastOk = 0;
+  let busy = false;
+
+  function toast(text) {
+    const box = $("toast");
+    box.textContent = text;
+    box.classList.add("on");
+    clearTimeout(toast.timer);
+    toast.timer = setTimeout(() => box.classList.remove("on"), 2600);
+  }
+
+  function haptic(kind) {
+    try { tg && tg.HapticFeedback && tg.HapticFeedback.impactOccurred(kind || "light"); } catch (e) { /* нет - не важно */ }
+  }
+
+  // Запрос к программе у камеры: относительный адрес api/state, api/settings и т.д.
+  async function api(path, body) {
+    const options = { cache: "no-store", headers: { "X-Telegram-Init-Data": initData } };
+    if (body !== undefined) {
+      options.method = "POST";
+      options.headers["Content-Type"] = "application/json";
+      options.body = JSON.stringify(body);
+    }
+    const answer = await fetch(path, options);
+    const payload = await answer.json().catch(() => ({}));
+    if (!answer.ok) {
+      const error = new Error(payload.error || "HTTP " + answer.status);
+      error.status = answer.status;
+      throw error;
+    }
+    return payload;
+  }
+
+  // ------------------------------------------------------------------ вкладки
+
+  $("nav").addEventListener("click", (event) => {
+    const button = event.target.closest("button");
+    if (!button) return;
+    document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("on", b === button));
+    document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("on", tab.id === "tab-" + button.dataset.tab));
+    haptic("light");
+    if (button.dataset.tab === "now" && state) drawChart(state.history || {}, (state.climate || {}).history || {});
+    window.scrollTo(0, 0);
+  });
+
+  // ------------------------------------------------------------------ график
+
+  function drawChart(history, chamber) {
+    const canvas = $("chart");
+    const ratio = window.devicePixelRatio || 1;
+    const width = canvas.clientWidth, height = canvas.clientHeight;
+    if (!width) return;
+    canvas.width = width * ratio; canvas.height = height * ratio;
+    const ctx = canvas.getContext("2d");
+    ctx.scale(ratio, ratio);
+    ctx.clearRect(0, 0, width, height);
+    const css = getComputedStyle(document.documentElement);
+    const color = (name) => css.getPropertyValue(name).trim();
+    ctx.font = "10px sans-serif";
+    ctx.fillStyle = color("--soft");
+    const t = history.t || [];
+    const ct = (chamber && chamber.t) || [];
+    if (t.length < 2 && ct.length < 2) { ctx.fillText("История ещё копится...", 8, 18); $("span").textContent = ""; return; }
+
+    const left = 34, right = 38, top = 6, bottom = 18;
+    const plotW = width - left - right, plotH = height - top - bottom;
+    const allT = [...t, ...ct];
+    const tMin = Math.min(...allT), tMax = Math.max(...allT, 1);
+    const x = (v) => left + (v - tMin) / Math.max(1, tMax - tMin) * plotW;
+    const minutes = Math.round((tMax - tMin) / 60);
+    $("span").textContent = minutes >= 90 ? `${(minutes / 60).toFixed(1).replace(".", ",")} ч` : `${minutes} мин`;
+
+    function range(values) {
+      const list = values.filter((v) => v !== null && v !== undefined);
+      if (!list.length) return null;
+      let lo = Math.min(...list), hi = Math.max(...list);
+      if (hi - lo < 1e-6) { lo -= 1; hi += 1; }
+      const pad = (hi - lo) * 0.08;
+      return [lo - pad, hi + pad];
+    }
+    // Контуры отличаются в разы, поэтому оба рисуются отклонением от первого значения окна.
+    function shifted(values) {
+      const base = (values || []).find((v) => v !== null);
+      return (values || []).map((v) => (v === null || base === undefined) ? null : v - base);
+    }
+    const mainShift = shifted(history.main), mediaShift = shifted(history.media);
+    const actual = (chamber && chamber.actual) || [];
+    const tempRange = range([...(history.board || []), ...actual]);
+    const periodRange = range([...mainShift, ...mediaShift]);
+
+    ctx.strokeStyle = color("--line");
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+      const y = top + plotH * i / 4;
+      ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(left + plotW, y); ctx.stroke();
+      if (tempRange) ctx.fillText((tempRange[1] - (tempRange[1] - tempRange[0]) * i / 4).toFixed(0), 2, y + 3);
+      if (periodRange) {
+        const v = periodRange[1] - (periodRange[1] - periodRange[0]) * i / 4;
+        ctx.fillText((v > 0 ? "+" : "") + v.toFixed(Math.abs(v) < 10 ? 1 : 0), left + plotW + 4, y + 3);
+      }
+    }
+    ctx.fillText("−" + (minutes >= 90 ? (minutes / 60).toFixed(1) + " ч" : minutes + " мин"), left, height - 4);
+    ctx.fillText("сейчас", left + plotW - 30, height - 4);
+
+    function line(values, rangeOf, stroke, times) {
+      if (!rangeOf) return;
+      const y = (v) => top + (rangeOf[1] - v) / (rangeOf[1] - rangeOf[0]) * plotH;
+      ctx.strokeStyle = stroke; ctx.lineWidth = 1.7; ctx.beginPath();
+      let started = false;
+      values.forEach((v, i) => {
+        if (v === null || v === undefined) { started = false; return; }
+        if (!started) { ctx.moveTo(x(times[i]), y(v)); started = true; } else ctx.lineTo(x(times[i]), y(v));
+      });
+      ctx.stroke();
+    }
+    line(actual, tempRange, color("--chamber"), ct);
+    line(history.board || [], tempRange, color("--board"), t);
+    line(mainShift, periodRange, color("--main"), t);
+    line(mediaShift, periodRange, color("--media"), t);
+  }
+
+  // ------------------------------------------------------------------ отрисовка
+
+  function renderNow(s) {
+    const climate = s.climate || {};
+    const run = climate.run || {};
+    const auto = run.auto || {};
+    const device = s.device || {};
+
+    // Проблемы - первыми: авария камеры, нет связи, прибор молчит, предупреждения прогона.
+    const alerts = [];
+    if (climate.connected && climate.alarm) alerts.push(["bad", "Авария камеры: " + climate.alarmText]);
+    if (climate.connected && !climate.ok) alerts.push(["bad", climate.status || "Нет связи с камерой"]);
+    if (!device.connected) alerts.push(["bad", "Адаптер CAN не подключён: прибор не опрашивается"]);
+    else if (!device.freshOk && device.freshText) alerts.push(["warn", device.freshText]);
+    (auto.alerts || []).forEach((a) => alerts.push([a.level === "bad" ? "bad" : "warn", `${a.time || ""} ${a.text}`]));
+    if (run.operator) alerts.push(["warn", run.status || "Прогон ждёт оператора"]);
+    if (run.paused) alerts.push(["warn", "Прогон на паузе"]);
+    $("alerts").innerHTML = alerts.map(([level, text]) => `<div class="alert ${level}">${esc(text)}</div>`).join("");
+
+    const chamber = climate.chamber || {};
+    const espec = climate.espec || {};
+    $("chamberName").textContent = chamber.name || "";
+    $("chamber").innerHTML = !climate.connected
+      ? `<span class="soft">Связь с камерой не включена в программе.</span>`
+      : `<div class="grid">
+           <div><small>В камере</small><span class="big">${esc(climate.actualText)}</span></div>
+           <div><small>Уставка</small><span class="big">${esc(climate.setpointText)}</span></div>
+         </div>
+         <div style="margin-top:8px">${esc(climate.runningText)}${espec.modeText && espec.modeText !== "—"
+             ? " · " + esc(espec.modeText) : ""} · авария: <span class="${climate.alarm ? "bad" : ""}">${esc(climate.alarmText)}</span></div>` +
+        (espec.heaterText && espec.heaterText !== "—"
+          ? `<div class="soft">Нагреватель ${esc(espec.heaterText)} · холодильник ${esc(espec.refText)} · пределы ${esc(espec.lowText)} … ${esc(espec.highText)}</div>` : "");
+
+    const live = s.live || {};
+    const board = live.boardTemp || {}, fuel = live.fuelTemp || {}, main = live.main || {}, media = live.media || {};
+    $("deviceNode").textContent = device.node ? "узел " + device.node : "";
+    $("boardNow").textContent = board.now || "—";
+    $("boardAvg").textContent = board.avg ? "среднее " + board.avg : "";
+    $("fuelNow").textContent = fuel.now || "—";
+    $("mainNow").textContent = main.now || "—";
+    $("mainAvg").textContent = main.avg || "—";
+    $("mainInfo").textContent = main.info || "";
+    $("mediaNow").textContent = media.now || "—";
+    $("mediaAvg").textContent = media.avg || "—";
+    $("mediaInfo").textContent = media.info || "";
+    $("window").textContent = live.windowText ? "окно " + live.windowText + " с" : "";
+    const st = s.stability || {};
+    $("stability").innerHTML = `<span class="${st.ok ? "ok" : "warn"}">${st.ok ? "● " : "○ "}${esc(st.text)}</span>`;
+    $("device").innerHTML = `${device.connected ? "Адаптер подключён" : "<span class=bad>Адаптер не подключён</span>"} · ` +
+      `${esc(device.freshText)} · запись ${device.writeOpen ? "открыта" : "закрыта"}`;
+    if ($("tab-now").classList.contains("on")) drawChart(s.history || {}, climate.history || {});
+  }
+
+  function renderRun(s) {
+    const climate = s.climate || {};
+    const run = climate.run || {};
+    const auto = run.auto || {};
+    $("scenarioName").textContent = climate.scenarioName || "";
+    const nodes = (run.nodes || []).map((n) =>
+      `<span class="chip ${n.state === "done" ? "ok" : esc(n.state)}">${esc(n.text)}${n.state === "done" ? " ✓" : ""}</span>`).join("");
+    if (run.active) {
+      $("auto").innerHTML =
+        `<div class="mid">${esc(run.stage || "идёт")}${run.paused ? " · пауза" : ""}</div>` +
+        `<div class="bar"><div style="width:${Math.round((auto.progress || 0) * 100)}%"></div></div>` +
+        `<div class="soft">${esc(auto.progressText)}</div>` +
+        `<div class="chips" style="margin:8px 0">${nodes}</div>` +
+        `<div style="color:${esc(run.color)}">${esc(run.status)}</div>` +
+        (auto.nodesText ? `<div class="soft" style="margin-top:4px">По узлам: ${esc(auto.nodesText)}</div>` : "") +
+        (auto.problems ? `<div class="warn" style="margin-top:4px">Проблем за прогон: ${auto.problems}</div>` : "");
+    } else if (auto.resume) {
+      $("auto").innerHTML = `<div class="warn">${esc(auto.resume.text)}</div>`;
+    } else {
+      $("auto").innerHTML = `<div class="soft">Автопрогон не идёт.</div>` +
+        (climate.scenario ? `<div class="soft" style="margin-top:4px">Сценарий: ${esc(climate.scenario)}</div>` : "");
+    }
+
+    const journal = s.run || {};
+    $("journal").textContent = `точек: ${journal.points ?? 0}`;
+    $("run").innerHTML =
+      `<div class="soft">${esc(journal.file || "журнал ещё не сохранён")}</div>` +
+      `<div style="color:${esc(journal.statusColor)}">${esc(journal.status)}</div>` +
+      `<div style="color:${esc(journal.tablesColor)}">${esc(journal.tablesText)}</div>`;
+    $("nodes").innerHTML = (journal.coverage || []).map((row) =>
+      `<div class="node ${row.capsOk && row.tubeOk ? "done" : ""}"><b>${esc(row.node)}</b>` +
+      `<span class="${row.capsOk ? "ok" : "warn"}">${esc(row.caps)}</span><br>` +
+      `<span class="${row.tubeOk ? "ok" : "warn"}">трубка: ${esc(row.tube)}</span></div>`).join("");
+    const report = journal.report || [];
+    $("report").innerHTML = report.length
+      ? `<div class="alert warn" style="margin:8px 0 0">Чего не хватило расчёту:<br>${report.map(esc).join("<br>")}</div>` : "";
+
+    const chain = s.chain || {};
+    $("steps").innerHTML = (chain.steps || []).map((step, i) =>
+      `<span class="chip ${esc(step.state)}">${i + 1}. ${esc(step.title)}${step.state === "ok" ? " ✓" : step.state === "fail" ? " ✗" : step.state === "run" ? " …" : ""}</span>`).join("");
+    $("chain").innerHTML = `<div style="color:${esc(chain.color)}">${esc(chain.status)}</div>` +
+      `<div class="soft">Запись при полных данных: ${chain.autoWrite ? "сама" : "вручную"}</div>`;
+
+    const test = s.test || {};
+    $("testCard").hidden = !test.mode;
+    if (test.mode) {
+      $("test").innerHTML = `<div class="warn">Температуру задаёт эмуляция: ${esc(test.emulationText)}</div>` +
+        `<div style="color:${esc(test.color)}">${esc(test.status)}</div>` +
+        (test.checkText ? `<div style="color:${esc(test.checkColor)}">${esc(test.checkText)}</div>` : "");
+    }
+
+    const rows = journal.rows || [];
+    $("points").innerHTML = rows.length
+      ? "<tr><th>Время</th><th>Узел</th><th>Плата</th><th>Основной</th><th>Вид</th></tr>" +
+        rows.map((r) => `<tr><td>${esc(r.time)}</td><td class="${r.nodeOk ? "" : "warn"}">${esc(r.node)}</td>` +
+          `<td>${esc(r.boardTemp)}</td><td>${esc(r.main)}</td><td>${esc(r.media)}</td></tr>`).join("")
+      : `<tr><td class="soft">Точек пока нет.</td></tr>`;
+  }
+
+  function sizeText(bytes) {
+    if (bytes > 1048576) return (bytes / 1048576).toFixed(1).replace(".", ",") + " МБ";
+    if (bytes > 1024) return Math.round(bytes / 1024) + " КБ";
+    return bytes + " Б";
+  }
+
+  function renderEvents(s) {
+    $("events").innerHTML = (s.events || []).map((e) =>
+      `<li><span class="soft">${esc(e.time)}</span> <span class="${e.level === "info" ? "" : esc(e.level)}">${esc(e.text)}</span></li>`).join("")
+      || `<li class="soft">Событий пока нет.</li>`;
+    $("files").innerHTML = (s.files || []).slice(0, 25).map((f, i) =>
+      `<li class="row"><div><div>${esc(f.name)}</div><div class="soft">${esc(f.folder)} · ${sizeText(f.size)} · ` +
+      `${esc(new Date(f.mtime * 1000).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }))}</div></div>` +
+      `<button class="light" data-file="${i}">В чат</button></li>`).join("")
+      || `<li class="soft">Журналов пока нет.</li>`;
+  }
+
+  function renderSettings(s) {
+    const me = s.me || {};
+    $("meName").textContent = me.name || "";
+    $("levels").innerHTML = LEVELS.map(([key, title, hint]) =>
+      `<button class="${me.level === key ? "on" : ""}" data-level="${key}">${title}<small>${hint}</small></button>`).join("");
+    $("toggles").innerHTML = OPTIONS.map(([key, title, hint]) =>
+      `<label class="switch"><div><div>${title}</div><div class="soft">${hint}</div></div>` +
+      `<input type="checkbox" data-option="${key}" ${me[key] ? "checked" : ""} ${me.level === "off" ? "disabled" : ""}></label>`).join("");
+
+    const users = s.users;
+    $("usersCard").hidden = !users;
+    if (!users) return;
+    $("users").innerHTML = users.map((u) => {
+      const state = u.admin ? "администратор" : (u.approved ? u.levelTitle : "<span class=warn>ждёт одобрения</span>");
+      const self = u.id === me.id;
+      const buttons = [];
+      if (!u.approved) buttons.push(`<button data-user="${esc(u.id)}" data-action="ok">Одобрить</button>`);
+      if (!self) {
+        buttons.push(`<button class="light" data-user="${esc(u.id)}" data-action="ad">${u.admin ? "Снять админа" : "Сделать админом"}</button>`);
+        buttons.push(`<button class="danger" data-user="${esc(u.id)}" data-action="rm">Убрать</button>`);
+      }
+      return `<li><div>${esc(u.name || u.id)}${u.username ? ` <span class="soft">@${esc(u.username)}</span>` : ""}${self ? " <span class=soft>(вы)</span>" : ""}</div>` +
+        `<div class="soft">${state} · с ${esc(u.since)}</div>` +
+        (buttons.length ? `<div class="buttons">${buttons.join("")}</div>` : "") + `</li>`;
+    }).join("");
+  }
+
+  function render(s) {
+    state = s;
+    renderNow(s);
+    renderRun(s);
+    renderEvents(s);
+    if (!busy) renderSettings(s);
+  }
+
+  // ------------------------------------------------------------------ действия
+
+  $("levels").addEventListener("click", async (event) => {
+    const button = event.target.closest("button[data-level]");
+    if (!button) return;
+    await saveSettings({ level: button.dataset.level });
+  });
+
+  $("toggles").addEventListener("change", async (event) => {
+    const input = event.target.closest("input[data-option]");
+    if (!input) return;
+    await saveSettings({ [input.dataset.option]: input.checked });
+  });
+
+  async function saveSettings(change) {
+    busy = true;
+    haptic("light");
+    try {
+      const answer = await api("api/settings", change);
+      state.me = Object.assign({}, state.me, answer.me);
+      renderSettings(state);
+      toast("Сохранено");
+    } catch (error) {
+      toast("Не сохранилось: " + error.message);
+    } finally {
+      busy = false;
+    }
+  }
+
+  $("files").addEventListener("click", async (event) => {
+    const button = event.target.closest("button[data-file]");
+    if (!button || !state) return;
+    const file = (state.files || [])[Number(button.dataset.file)];
+    if (!file) return;
+    button.disabled = true;
+    haptic("medium");
+    try {
+      toast((await api("api/sendfile", { folder: file.folder, name: file.name })).text);
+    } catch (error) {
+      toast("Не отправлено: " + error.message);
+    }
+    setTimeout(() => { button.disabled = false; }, 3000);
+  });
+
+  $("users").addEventListener("click", async (event) => {
+    const button = event.target.closest("button[data-action]");
+    if (!button) return;
+    const run = async () => {
+      haptic("medium");
+      try {
+        const answer = await api("api/users", { action: button.dataset.action, id: button.dataset.user });
+        state.users = answer.users;
+        renderSettings(state);
+        toast(answer.text);
+      } catch (error) {
+        toast("Не получилось: " + error.message);
+      }
+    };
+    if (button.dataset.action === "rm" && tg && tg.showConfirm) {
+      tg.showConfirm("Убрать пользователя из наблюдения?", (yes) => { if (yes) run(); });
+    } else {
+      run();
+    }
+  });
+
+  // ------------------------------------------------------------------ обновление
+
+  function blocked(title, text) {
+    $("blocked").hidden = false;
+    $("blocked").innerHTML = `<b>${esc(title)}</b>${esc(text)}`;
+    document.querySelectorAll(".tab").forEach((tab) => { tab.hidden = true; });
+    $("nav").hidden = true;
+  }
+
+  async function refresh() {
+    if (document.hidden) return;
+    try {
+      render(await api("api/state"));
+      lastOk = Date.now();
+      $("link").innerHTML = `<span class="dot" style="background:var(--ok)"></span>${esc(state.time ? state.time.slice(-8) : "на связи")}`;
+    } catch (error) {
+      if (error.status === 401) {
+        blocked("Нет доступа", " Напишите боту /start и дождитесь, пока администратор одобрит заявку.");
+        clearInterval(timer);
+        return;
+      }
+      const silent = lastOk ? Math.round((Date.now() - lastOk) / 1000) + " с" : "";
+      $("link").innerHTML = `<span class="dot" style="background:var(--bad)"></span>нет связи ${silent}`;
+    }
+  }
+
+  let timer = null;
+  if (!initData) {
+    blocked("Откройте через Telegram", " Это мини-приложение бота наблюдения: нажмите в боте кнопку «Камера» или команду /app.");
+  } else {
+    refresh();
+    timer = setInterval(refresh, 5000);
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("resize", () => state && drawChart(state.history || {}, (state.climate || {}).history || {}));
+  }
+</script>
+</body>
+</html>

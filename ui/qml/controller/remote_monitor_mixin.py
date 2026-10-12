@@ -1,12 +1,14 @@
-"""Наблюдение за прогоном издалека: страница состояния, Telegram, копия журналов.
+"""Наблюдение за прогоном издалека: бот Telegram, мини-приложение, копия журналов.
 
 ЗАЧЕМ
 Камера стоит далеко от рабочего места. Вся работа идёт на компьютере у камеры,
 а этот модуль даёт видеть её издалека, не держа открытым удалённый стол:
-- страница состояния в браузере: температуры, контуры, ход прогона, история,
-  события и журналы для скачивания;
-- сообщения в Telegram о важном: плата устоялась, точка записана, прибор
-  замолчал, профиль записан;
+- бот Telegram с несколькими пользователями: у каждого свой уровень
+  уведомлений (все / важные / только аварии / без уведомлений) и свои
+  переключатели (точки, сводки, файлы); доступ одобряет администратор или код;
+- мини-приложение Telegram: температуры, контуры, ход прогона, проблемы,
+  история, события, свои настройки уведомлений, журналы в чат. Открывается
+  кнопкой в боте; адрес https даёт туннель Cloudflare или свой сервер;
 - копия каждого сохранённого журнала в сетевую папку или на сервер по SFTP.
 
 Связь здесь только для наблюдения. Пропала сеть - прогон идёт дальше, а
@@ -39,15 +41,66 @@ from PySide6.QtCore import QTimer
 
 import chamber_fit
 from ui.qml.remote_file_sync import MODE_FOLDER, MODE_SFTP, FileSyncConfig, RemoteFileSync
-from ui.qml.remote_status_server import RemoteStatusServer, local_addresses
-from ui.qml.telegram_notifier import TelegramNotifier
+from ui.qml.public_tunnel import CloudflareTunnel, find_cloudflared
+from ui.qml.remote_status_server import RemoteStatusServer
+from ui.qml.telegram_bot import LEVEL_TITLES, LEVELS, OPTIONS, TelegramBot, TelegramUsers, validate_init_data
 
 from .contract import AppControllerContract
 from .stability import is_stable, rate_and_spread
 
-# Запасная страница, если файл страницы не нашёлся рядом с программой.
+MINIAPP_MODES = ("tunnel", "manual")
+
+
+class MiniAppAccess:
+    """Доступ мини-приложения для сервера: подпись Telegram, пользователь, его действия.
+
+    Методы вызываются из потоков сервера, поэтому работают только с
+    потокобезопасными пользователями бота и очередью отправки.
+    """
+
+    def __init__(self, bot: TelegramBot, resolve_file):
+        self.bot = bot
+        self._resolve_file = resolve_file
+
+    def user_for(self, init_data: str):
+        user = validate_init_data(init_data, self.bot.token)
+        if user is None:
+            return None
+        chat_id = str(user["id"])
+        stored = self.bot.users.get(chat_id)
+        if stored is None or not stored.get("approved"):
+            return None
+        return chat_id, stored
+
+    def update_settings(self, chat_id: str, payload: dict) -> dict:
+        fields = {}
+        if payload.get("level") in LEVELS:
+            fields["level"] = payload["level"]
+        for key in OPTIONS:
+            if key in payload:
+                fields[key] = bool(payload[key])
+        return self.bot.users.upsert(chat_id, **fields)
+
+    def admin_action(self, chat_id: str, action: str, target: str) -> str:
+        if action not in ("ok", "rm", "ad"):
+            return "неизвестное действие"
+        return self.bot.admin_action(action, target)
+
+    def users_view(self) -> list[dict]:
+        return [dict(user, id=chat_id, levelTitle=LEVEL_TITLES.get(user["level"], ""))
+                for chat_id, user in self.bot.users.all().items()]
+
+    def send_file(self, chat_id: str, folder: str, name: str) -> str:
+        path = self._resolve_file(folder, name)
+        if path is None:
+            return "файл не найден"
+        self.bot.send_document(path, f"{folder}: {name}", [chat_id])
+        return f"файл {name} отправлен в чат"
+
+
+# Запасная страница, если файл мини-приложения не нашёлся рядом с программой.
 FALLBACK_PAGE = ("<!doctype html><meta charset='utf-8'><title>Прогон в камере</title>"
-                 "<p>Файл страницы не найден. Данные: <a href='status.json'>status.json</a></p>")
+                 "<p>Файл мини-приложения telegram_miniapp.html не найден рядом с программой.</p>")
 
 
 class AppControllerRemoteMonitorMixin(AppControllerContract):
@@ -90,21 +143,29 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         self._remote_tables_were_complete = False
         self._remote_last_calibration_sync_s = 0.0
 
-        self._remote_server_status = "Страница выключена."
+        self._remote_server_status = "Мини-приложение выключено."
         self._remote_server_ok = False
+        self._remote_tunnel_status = ""
+        self._remote_tunnel_ok = False
+        self._remote_public_url = ""
         self._remote_telegram_status = "Telegram выключен."
         self._remote_telegram_ok = False
         self._remote_sync_status = "Копия журналов выключена."
         self._remote_sync_ok = False
 
-        page_path = pathlib.Path(__file__).resolve().parent.parent / "remote_status_page.html"
+        page_path = pathlib.Path(__file__).resolve().parent.parent / "telegram_miniapp.html"
         try:
             page = page_path.read_text(encoding="utf-8")
         except OSError:
             page = FALLBACK_PAGE
         self._remote_server = RemoteStatusServer(page)
-        self._remote_telegram = TelegramNotifier(
-            lambda text, ok: self._remote_queue_status("telegram", text, ok))
+        self._remote_users = TelegramUsers(self._remote_settings_path().with_name("telegram_users.json"))
+        self._remote_telegram = TelegramBot(self._remote_users,
+                                            lambda text, ok: self._remote_queue_status("telegram", text, ok))
+        self._remote_server.set_access(MiniAppAccess(self._remote_telegram, self._remote_server._resolve_file))
+        self._remote_tunnel = CloudflareTunnel(
+            lambda url: self._remote_queue_status("tunnel_url", url, True),
+            lambda text, ok: self._remote_queue_status("tunnel", text, ok))
         self._remote_sync = RemoteFileSync(lambda text, ok: self._remote_queue_status("sync", text, ok))
 
         self._remote_timer = QTimer(self)
@@ -125,6 +186,14 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             "telegram_chat": "",
             "telegram_points": True,
             "telegram_files": True,
+            # Новые пользователи бота: уровень и сводки по умолчанию; код доступа без одобрения.
+            "telegram_default_level": "important",
+            "telegram_summaries": True,
+            "telegram_access_code": "",
+            # Мини-приложение: адрес https от туннеля Cloudflare или свой.
+            "miniapp_mode": "tunnel",
+            "miniapp_url": "",
+            "cloudflared_path": "",
             "sync_enabled": False,
             "sync_mode": MODE_FOLDER,
             "sync_folder": "",
@@ -180,6 +249,14 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             return False
         if key == "sync_mode" and value not in (MODE_FOLDER, MODE_SFTP):
             return False
+        if key == "telegram_default_level" and value not in LEVELS:
+            return False
+        if key == "miniapp_mode" and value not in MINIAPP_MODES:
+            return False
+        if key == "miniapp_url" and value and not value.startswith("https://"):
+            self._remote_event("Адрес мини-приложения должен начинаться с https://", "bad", telegram=False)
+            self.remoteMonitorChanged.emit()
+            return False
         if self._remote_settings[key] == value:
             return True
         self._remote_settings[key] = value
@@ -188,8 +265,31 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         return True
 
     def _remote_new_key(self):
-        """Придумывает ключ доступа к странице."""
+        """Придумывает ключ доступа к отладочному снимку в сети."""
         self._remote_set("server_key", secrets.token_urlsafe(9))
+
+    def _remote_new_access_code(self):
+        """Придумывает код доступа к боту: «/start КОД» подключает без одобрения."""
+        self._remote_set("telegram_access_code", secrets.token_hex(3).upper())
+
+    def _remote_user_action(self, chat_id: str, action: str) -> str:
+        """Администратор в окне программы: одобрить (ok), убрать (rm), сделать администратором (ad)."""
+        text = self._remote_telegram.admin_action(str(action), str(chat_id))
+        self._remote_telegram_status = f"Telegram: {text}."
+        self.remoteMonitorChanged.emit()
+        return text
+
+    def _remote_user_set(self, chat_id: str, key: str, value) -> bool:
+        """Уровень или переключатель пользователя из окна программы."""
+        if key == "level" and value not in LEVELS:
+            return False
+        if key != "level" and key not in OPTIONS:
+            return False
+        if self._remote_users.get(chat_id) is None:
+            return False
+        self._remote_users.upsert(chat_id, **{key: value if key == "level" else bool(value)})
+        self.remoteMonitorChanged.emit()
+        return True
 
     def _remote_active(self) -> bool:
         """Нужен ли постоянный опрос прибора: что-то из наблюдения включено."""
@@ -204,29 +304,55 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         """Приводит сервер, бота и копирование в соответствие с настройками."""
         settings = self._remote_settings
 
+        tunnel = settings["miniapp_mode"] == "tunnel"
         if settings["server_enabled"]:
             self._remote_server.set_key(settings["server_key"])
             self._remote_server.set_folders(self._remote_folders())
-            if not self._remote_server.running or self._remote_server.port != int(settings["server_port"]):
-                problem = self._remote_server.start(int(settings["server_port"]))
+            # Для туннеля сервер слушает только этот компьютер: снаружи он виден лишь через Cloudflare.
+            host = "127.0.0.1" if tunnel else "0.0.0.0"
+            if (not self._remote_server.running or self._remote_server.port != int(settings["server_port"])
+                    or self._remote_server.host != host):
+                problem = self._remote_server.start(int(settings["server_port"]), host)
                 if problem:
-                    self._remote_server_status = f"Страница не запущена: {problem}."
+                    self._remote_server_status = f"Мини-приложение не запущено: {problem}."
                     self._remote_server_ok = False
                 else:
-                    self._remote_server_status = "Страница работает. Адреса ниже открываются из любого браузера в сети."
+                    self._remote_server_status = "Сервер мини-приложения работает."
                     self._remote_server_ok = True
+            if tunnel and self._remote_server.running:
+                exe = find_cloudflared(settings["cloudflared_path"])
+                if exe:
+                    self._remote_tunnel.start(self._remote_server.port, exe)
+                else:
+                    self._remote_tunnel.stop()
+                    self._remote_tunnel_status = ("Не найден cloudflared.exe: скачайте его с github.com/cloudflare/"
+                                                  "cloudflared/releases и положите рядом с программой или укажите путь.")
+                    self._remote_tunnel_ok = False
+            else:
+                self._remote_tunnel.stop()
+                self._remote_tunnel_status = ""
         else:
             self._remote_server.stop()
-            self._remote_server_status = "Страница выключена."
+            self._remote_tunnel.stop()
+            self._remote_server_status = "Мини-приложение выключено."
             self._remote_server_ok = False
+            self._remote_tunnel_status = ""
+        self._remote_apply_app_url()
 
         if settings["telegram_enabled"]:
-            self._remote_telegram.configure(settings["telegram_token"], settings["telegram_chat"])
-            if not settings["telegram_token"] or not settings["telegram_chat"]:
-                self._remote_telegram_status = "Впишите токен бота и номер чата (кнопка «Найти чат»)."
+            defaults = {"level": settings["telegram_default_level"], "points": settings["telegram_points"],
+                        "summaries": settings["telegram_summaries"], "files": settings["telegram_files"]}
+            self._remote_telegram.configure(settings["telegram_token"], settings["telegram_chat"],
+                                            settings["telegram_access_code"], defaults)
+            if not settings["telegram_token"]:
+                self._remote_telegram_status = "Впишите токен бота."
                 self._remote_telegram_ok = False
+            elif not settings["telegram_chat"]:
+                self._remote_telegram_status = ("Бот работает. Напишите ему /start и нажмите «Найти чат», чтобы "
+                                                "стать администратором.")
+                self._remote_telegram_ok = True
             elif not self._remote_telegram_ok:
-                self._remote_telegram_status = "Telegram включён. Проверьте связь кнопкой «Проверить»."
+                self._remote_telegram_status = "Бот работает. Проверьте связь кнопкой «Проверить»."
         else:
             self._remote_telegram.configure("", "")
             self._remote_telegram_status = "Telegram выключен."
@@ -257,6 +383,18 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             apply_live()
         self.remoteMonitorChanged.emit()
 
+    def _remote_apply_app_url(self):
+        """Адрес мини-приложения для кнопки бота: от туннеля или свой."""
+        settings = self._remote_settings
+        if not settings["server_enabled"]:
+            url = ""
+        elif settings["miniapp_mode"] == "tunnel":
+            url = self._remote_tunnel.url
+        else:
+            url = str(settings["miniapp_url"])
+        self._remote_public_url = url
+        self._remote_telegram.set_app_url(url)
+
     def _remote_folders(self) -> dict:
         """Папки журналов, которые можно скачать со страницы."""
         root = pathlib.Path(getattr(self, "_project_root_directory", None) or pathlib.Path.cwd())
@@ -271,16 +409,19 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
 
     # ------------------------------------------------------------------ события
 
-    def _remote_event(self, text: str, level: str = "info", telegram: bool = True):
-        """Запоминает событие для страницы и, если нужно, шлёт его в Telegram."""
+    def _remote_event(self, text: str, level: str = "info", telegram: bool = True, kind: str = "event"):
+        """Запоминает событие для мини-приложения и рассылает его в Telegram.
+
+        Кому - решает бот: по одобрению, уровню и переключателям каждого
+        пользователя. kind: «event», «point» (точка записана), «summary» (сводка).
+        """
         self._remote_events.appendleft({
             "time": datetime.now().strftime("%H:%M:%S"),
             "text": str(text),
             "level": str(level),
         })
         if telegram and self._remote_settings["telegram_enabled"]:
-            mark = {"ok": "✅", "warn": "⚠️", "bad": "❌"}.get(level, "ℹ️")
-            self._remote_telegram.send_text(f"{mark} Камера: {text}")
+            self._remote_telegram.notify(f"Камера: {text}", level, kind)
         self.remoteMonitorChanged.emit()
 
     def _remote_queue_status(self, channel: str, text: str, ok: bool):
@@ -297,7 +438,7 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         self._remote_event(
             f"точка «{point['note']}»{trial} записана: узел {where}, основной {point['main']}, "
             f"вид топлива {media}. Всего точек: {len(self._chamber_points)}.",
-            "ok", telegram=bool(self._remote_settings["telegram_points"]))
+            "ok", kind="point")
 
     def _remote_note_journal_saved(self, path: str):
         """Журнал прогона сохранён: его копия уходит на рабочее место."""
@@ -318,7 +459,8 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         for path in (journal, profile_path):
             if path:
                 self._remote_sync.enqueue(path, "chamber")
-        if self._remote_settings["telegram_enabled"] and self._remote_settings["telegram_files"]:
+        if self._remote_settings["telegram_enabled"]:
+            # Файлы получают те, у кого включены «файлы».
             for path, caption in ((journal, "Журнал прогона"), (profile_path, "Записанный профиль")):
                 if path and pathlib.Path(path).is_file():
                     self._remote_telegram.send_document(path, caption)
@@ -337,8 +479,10 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             self._remote_watch_history(now)
             self._remote_watch_device(now)
             self._remote_sync_calibration_log(now)
+            snapshot = self._remote_snapshot()
             if self._remote_server.running:
-                self._remote_server.set_snapshot(self._remote_snapshot())
+                self._remote_server.set_snapshot(snapshot)
+            self._remote_telegram.set_status_text(self._remote_status_text(snapshot))
             changed = True
         if changed:
             self.remoteMonitorChanged.emit()
@@ -354,6 +498,13 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             if channel == "telegram":
                 self._remote_telegram_status = text
                 self._remote_telegram_ok = ok
+            elif channel == "tunnel":
+                self._remote_tunnel_status = text
+                self._remote_tunnel_ok = ok
+            elif channel == "tunnel_url":
+                self._remote_apply_app_url()
+                if text:
+                    self._remote_event(f"мини-приложение доступно: {text}", "info", telegram=False)
             else:
                 self._remote_sync_status = text
                 self._remote_sync_ok = ok
@@ -369,9 +520,7 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         return bool(incoming) or found is not None
 
     def _remote_find_chat(self):
-        """Ищет номер чата по последнему сообщению боту."""
-        token = self._remote_settings["telegram_token"]
-        self._remote_telegram.configure(token, self._remote_settings["telegram_chat"])
+        """Администратор - последний, кто написал боту (/start)."""
         self._remote_telegram_status = "Telegram: ищу чат..."
         self.remoteMonitorChanged.emit()
 
@@ -384,13 +533,13 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         """Пробное сообщение: проверка бота, чата и сети у камеры."""
         settings = self._remote_settings
         if not settings["telegram_token"] or not settings["telegram_chat"]:
-            self._remote_telegram_status = "Впишите токен бота и номер чата."
+            self._remote_telegram_status = "Впишите токен бота и найдите чат администратора."
             self._remote_telegram_ok = False
             self.remoteMonitorChanged.emit()
             return
-        self._remote_telegram.configure(settings["telegram_token"], settings["telegram_chat"])
-        self._remote_telegram.send_text(
-            f"ℹ️ Камера: проверка связи. Программа на компьютере {socket.gethostname()} на связи.")
+        self._remote_telegram.send_to(settings["telegram_chat"],
+                                      f"ℹ️ Проверка связи: программа на компьютере {socket.gethostname()} на связи. "
+                                      "Команды: /status, /settings, /app, /users.")
         self._remote_telegram_status = "Telegram: пробное сообщение отправляется..."
         self.remoteMonitorChanged.emit()
 
@@ -543,6 +692,30 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             "events": list(self._remote_events)[:30],
         }
 
+    def _remote_status_text(self, snapshot: dict) -> str:
+        """Что сейчас с прогоном - ответ бота на /status."""
+        climate = snapshot.get("climate") or {}
+        run = (climate.get("run") or {})
+        auto = run.get("auto") or {}
+        live = snapshot.get("live") or {}
+        board = (live.get("boardTemp") or {}).get("now") or "—"
+        lines = [f"Прогон {snapshot.get('time', '')}"]
+        if climate:
+            name = (climate.get("chamber") or {}).get("name", "камера")
+            lines.append(f"{name}: {'на связи' if climate.get('ok') else 'нет связи'}; в камере "
+                         f"{climate.get('actualText', '—')}, уставка {climate.get('setpointText', '—')}, "
+                         f"{climate.get('runningText', '—')}, авария {climate.get('alarmText', '—')}.")
+        lines.append(f"Плата {board}. {snapshot.get('stability', {}).get('text', '')}")
+        if run.get("active"):
+            lines.append(auto.get("progressText") or run.get("status", ""))
+            lines.append(run.get("status", ""))
+            for alert in auto.get("alerts") or []:
+                lines.append(("❌ " if alert.get("level") == "bad" else "⚠️ ") + alert.get("text", ""))
+        else:
+            lines.append("Автопрогон не идёт.")
+        lines.append(f"Точек в журнале: {(snapshot.get('run') or {}).get('points', 0)}.")
+        return "\n".join(line for line in lines if line)
+
     def _remote_climate_snapshot(self) -> dict:
         """Камера для страницы: температура, уставка, авария и ход автопрогона."""
         view = getattr(self, "_climate_view", None)
@@ -551,22 +724,33 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         climate = view()
         return {key: climate.get(key) for key in (
             "connected", "ok", "status", "chamber", "actualText", "setpointText", "runningText", "alarmText", "alarm",
-            "run", "history")}
+            "run", "history", "espec")} | {"scenario": (climate.get("scenario") or {}).get("summary", ""),
+                                            "scenarioName": ((climate.get("scenario") or {}).get("scenario") or {}).get("name", "")}
 
     def _remote_view(self) -> dict:
         """Состояние наблюдения для окна программы."""
         settings = self._remote_settings
-        key = settings["server_key"]
-        suffix = f"/?key={key}" if key else "/"
-        addresses = [f"http://{address}:{int(settings['server_port'])}{suffix}" for address in local_addresses()]
-        addresses.append(f"http://localhost:{int(settings['server_port'])}{suffix}")
+        users = [dict(user, id=chat_id, levelTitle=LEVEL_TITLES.get(user["level"], ""))
+                 for chat_id, user in self._remote_users.all().items()]
+        users.sort(key=lambda item: (not item.get("admin"), item.get("approved"), item.get("name", "")))
         return {
+            "users": users,
+            "levels": [{"key": key, "title": LEVEL_TITLES[key]} for key in LEVELS],
+            "telegramAccessCode": str(settings["telegram_access_code"]),
+            "telegramDefaultLevel": str(settings["telegram_default_level"]),
+            "telegramSummaries": bool(settings["telegram_summaries"]),
+            "miniappMode": str(settings["miniapp_mode"]),
+            "miniappUrl": str(settings["miniapp_url"]),
+            "cloudflaredPath": str(settings["cloudflared_path"]),
+            "cloudflaredFound": find_cloudflared(settings["cloudflared_path"]),
+            "publicUrl": self._remote_public_url,
+            "tunnelStatus": self._remote_tunnel_status,
+            "tunnelOk": self._remote_tunnel_ok,
             "serverEnabled": bool(settings["server_enabled"]),
             "serverPort": str(settings["server_port"]),
-            "serverKey": str(key),
+            "serverKey": str(settings["server_key"]),
             "serverStatus": self._remote_server_status,
             "serverOk": self._remote_server_ok,
-            "serverUrls": addresses if settings["server_enabled"] else [],
             "telegramEnabled": bool(settings["telegram_enabled"]),
             "telegramToken": str(settings["telegram_token"]),
             "telegramChat": str(settings["telegram_chat"]),
@@ -593,5 +777,6 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
     def _remote_shutdown(self):
         """Останавливает сервер и фоновые потоки при закрытии программы."""
         self._remote_server.stop()
+        self._remote_tunnel.stop()
         self._remote_telegram.close()
         self._remote_sync.close()

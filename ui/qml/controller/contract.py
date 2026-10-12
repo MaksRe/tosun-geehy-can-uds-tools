@@ -264,6 +264,11 @@ class AppControllerContract:
     _remote_telegram: Any
     _remote_sync: Any
     _remote_timer: Any
+    _remote_users: Any
+    _remote_tunnel: Any
+    _remote_tunnel_status: Any
+    _remote_tunnel_ok: Any
+    _remote_public_url: Any
     trialChanged: Any
     nodeLiveChanged: Any
     _trial_read: Any
