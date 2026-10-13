@@ -39,6 +39,7 @@ import chamber_fit
 from ui.qml.climate_chamber import DRIVER_ESPEC, DRIVER_SIMULATOR
 
 from .contract import AppControllerContract
+from .stability import rate_and_spread
 
 # Этапы, на которых камера уже должна держать уставку узла.
 ACTIVE_STAGES = ("reach", "settle", "hold", "points", "operator", "window", "capture", "capturing")
@@ -83,6 +84,9 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
     AUTO_DRIFT_HOLD_S = 300.0
     # Плата не догоняет воздух дольше чем столько после выхода на уставку, с.
     AUTO_GAP_HOLD_S = 600.0
+    # «Плата не догоняет воздух» - только если она почти не движется к нему: инертная плата догоняет медленно.
+    AUTO_GAP_MIN_RATE_C_MIN = 0.05
+    AUTO_GAP_RATE_WINDOW_S = 300.0
     # Как часто напоминать о паузе и ожидании оператора, с.
     AUTO_REMIND_S = 1800.0
     # Как часто сохранять состояние прогона, с.
@@ -528,12 +532,21 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             board = self._chamber_live_last.get("board_temp") if board_fresh else None
             gap_limit = float(settings.get("board_gap_c", 10.0))
             gap = None if board is None else abs(int(board) / 10.0 - float(actual))
-            far = self._climate_auto_since("gap_since", stage == "settle" and gap is not None and gap > gap_limit, now)
+            # Скорость, с которой плата идёт к воздуху (°C/мин): идёт - значит, просто инертная, а не застряла.
+            trend = rate_and_spread(self._climate_board, now, self.AUTO_GAP_RATE_WINDOW_S / speed)
+            approach = None
+            if trend is not None and board is not None:
+                toward = 1.0 if float(actual) > int(board) / 10.0 else -1.0
+                approach = toward * trend[0] / speed
+            stuck = approach is None or approach < self.AUTO_GAP_MIN_RATE_C_MIN
+            far = self._climate_auto_since(
+                "gap_since", stage == "settle" and gap is not None and gap > gap_limit and stuck, now)
+            approach_text = "" if approach is None else f", а к воздуху она идёт лишь {approach:+.3f} °C/мин".replace(".", ",")
             self._climate_auto_alert(
                 "gap", far >= self.AUTO_GAP_HOLD_S / speed,
                 f"плата не догоняет воздух камеры: разница {gap if gap is None else round(gap, 1)} °C дольше "
-                f"{int(self.AUTO_GAP_HOLD_S // 60)} мин. Проверьте, что плата в камере и датчик исправен.",
-                "warn", "плата догнала воздух камеры.")
+                f"{int(self.AUTO_GAP_HOLD_S // 60)} мин{approach_text}. Проверьте, что плата в камере и датчик исправен.",
+                "warn", "плата догнала воздух камеры или снова идёт к нему.")
 
         # Этап завис вдвое дольше предупреждения.
         limit_key = {"reach": "reach_timeout_min", "settle": "settle_timeout_min"}.get(stage)

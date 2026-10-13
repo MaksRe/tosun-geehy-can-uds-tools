@@ -199,6 +199,14 @@ def test_only_admin_grants_rights(tmp_path: Path):
     assert ok and stub._remote_users.get("3")["role"] == "admin"
 
 
+def test_chamber_settings_changes_are_logged(tmp_path: Path):
+    """Пределы уставки влияют на камеру и доводку: их смена - в журнал с именем оператора."""
+    stub = _ControlStub(tmp_path)
+    assert stub._climate_set("min_c", "-55")
+    row = _log_rows(stub)[-1]
+    assert row[3] == "настройка камеры" and row[4] == "min_c: -45.0 → -55.0" and row[1].startswith("оператор у камеры")
+
+
 def test_log_survives_a_restart(tmp_path: Path):
     log = ControlLog(tmp_path)
     log.add("Анна", "Telegram", "уставка камеры", "+30 °C", True, "задано")

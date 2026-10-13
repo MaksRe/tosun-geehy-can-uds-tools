@@ -8,7 +8,10 @@
 - сторож прогона не считает сдвинутую уставку ошибкой и не «возвращает» её;
 - если сдвиг ограничен и попытки не помогли, предупреждение уходит в события и
   журнал действий, точка снимается при текущих условиях, прогон идёт дальше;
-- шаг без точки не доводится.
+- шаг без точки не доводится;
+- у инертной платы (τ - десятки минут) предел считается по кривой заранее, и
+  доводка начинается по прогнозу, не дожидаясь часами её «устаивания»;
+- «плата не догоняет воздух» - только если плата почти не движется к нему.
 """
 
 from __future__ import annotations
@@ -20,7 +23,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import math
+import random
+
 from tests.test_climate_supervisor import _ready, _walk
+from ui.qml.controller.stability import predict_final
 from ui.qml.control_log import ControlLog
 
 
@@ -72,7 +79,8 @@ def test_limited_shift_warns_and_captures_as_is(tmp_path: Path):
 
 def test_setpoint_limit_stops_the_shift(tmp_path: Path):
     """Уставку некуда двигать (предел камеры): предупреждение и точка при текущих условиях."""
-    stub = _run(tmp_path, "-40, 25", heating=6.0, min_c=-45.0)
+    # Самонагрев 8 °C: даже при уставке -45 плата стоит около -37 - за допуском.
+    stub = _run(tmp_path, "-40, 25", heating=8.0, min_c=-45.0)
     setpoints = [value for name, value in stub._climate_link.commands if name == "setpoint"]
     assert min(setpoints) == -45.0
     missed = [text for _level, text in stub.events if "плата не дошла до шага -40,0 °C" in text]
@@ -87,3 +95,41 @@ def test_step_without_point_is_not_brought(tmp_path: Path):
     _walk(stub, limit=12000)
     setpoints = [value for name, value in stub._climate_link.commands if name == "setpoint"]
     assert min(setpoints) == -40.0, setpoints
+
+
+def test_forecast_finds_where_a_slow_board_settles():
+    """Экспонента с τ 80 мин и шумом датчика: через полчаса предел известен с точностью до полуградуса."""
+    rnd = random.Random(1)
+
+    def samples(minutes):
+        return [(i * 10.0, round(-35 + 20 * math.exp(-i * 10.0 / 4800.0) + rnd.uniform(-0.05, 0.05), 1))
+                for i in range(int(minutes * 6))]
+
+    assert predict_final(samples(15), 0.0, 900.0) is None, "на коротком отрезке прогноз - шум"
+    final, tau = predict_final(samples(35), 0.0, 35 * 60.0)
+    assert abs(final - (-35.0)) <= 0.5 and 3600 <= tau <= 6000
+    flat = [(i * 10.0, -40.0 + rnd.uniform(-0.05, 0.05)) for i in range(300)]
+    assert predict_final(flat, 0.0, 3000.0) is None, "ровная температура - не подход к пределу"
+
+
+def test_slow_board_is_brought_by_forecast(tmp_path: Path):
+    stub = _ready(tmp_path, "-40, 25")
+    stub._climate_settings.update({"min_c": -60.0, "max_c": 120.0})
+    stub.sim.PRODUCT_TAU_MIN = 60.0
+    stub.sim.self_heating_c = 5.0
+    assert stub._climate_run_start()
+    _walk(stub, limit=20000)
+    texts = [text for _level, text in stub.events]
+    assert any("по прогнозу устоится" in text and "довожу" in text for text in texts), texts
+    assert all(abs(board - node) <= 1.0 for board, node in zip(_boards(stub), (-40.0, 25.0))), _boards(stub)
+    assert not any("не догоняет" in text for text in texts), "инертная плата идёт к воздуху - это не беда"
+
+
+def test_board_far_and_still_is_reported(tmp_path: Path):
+    """Плата стоит на 15 °C теплее воздуха и не движется: предупреждение «не догоняет»."""
+    stub = _ready(tmp_path, "-40, 25")
+    stub._climate_settings.update({"board_max_shift_c": 0.0})
+    stub.sim.self_heating_c = 15.0
+    assert stub._climate_run_start()
+    _walk(stub, limit=20000)
+    assert any("не догоняет" in text for _level, text in stub.events)
