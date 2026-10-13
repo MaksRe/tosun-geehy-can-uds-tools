@@ -165,3 +165,25 @@ def test_leaky_board_needs_no_bringing_after_the_model_is_known(tmp_path: Path):
     assert not any("шаг -20,0 °C" in text or "шаг +85,0 °C" in text for text in brought), brought
     # Доводка на холодном шаге - по модели, с запасом на неполную передачу: одной попытки хватает.
     assert sum("шаг -40,0 °C" in text for text in brought) == 1, brought
+
+
+def test_jittery_board_sensor_still_settles(tmp_path: Path):
+    """Плата стоит на -35,7, а датчик скачет на ±0,2 °C: по средним за окно плата устоялась (так было на стенде)."""
+    import time as _time
+
+    from tests.test_climate_run import _ClimateStub
+    from ui.qml.controller.stability import is_stable, rate_and_spread
+
+    stub = _ClimateStub(tmp_path)
+    rnd = random.Random(7)
+    start = _time.monotonic()
+    for index in range(80):
+        stamp = start + index * 5.0
+        for part in range(10):
+            stub._chamber_live_note("board_temp", -357 + rnd.choice((-2, -1, 0, 1, 2)), stamp - 4.5 + part * 0.5)
+        stub._climate_note_board(stamp)
+    now = start + 79 * 5.0
+    result = rate_and_spread(stub._climate_board, now, 300.0)
+    assert is_stable(result, 300.0, 0.05, stub.CLIMATE_STABLE_SPREAD_C), result
+    raw = [-35.7 + rnd.choice((-0.2, -0.1, 0.0, 0.1, 0.2)) for _ in range(60)]
+    assert max(raw) - min(raw) >= 0.3, "по одиночным показаниям разброс не прошёл бы правило"

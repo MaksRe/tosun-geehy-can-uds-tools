@@ -834,13 +834,21 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         self._climate_history.append((now, reading.actual_c, reading.setpoint_c))
 
     def _climate_note_board(self, now: float):
-        """Температура платы из прибора для правила «устоялась»."""
+        """Температура платы из прибора для правила «устоялась» - среднее за окно усреднения.
+
+        Одиночное показание датчика скачет на ±0,1...0,2 °C (шаг 0,1 и шум): по таким
+        точкам разброс за 5 минут не опускается ниже 0,3 °C, и плата «не устаивается»
+        никогда, хотя стоит. Среднее за окно - то же, по чему судит наблюдение и
+        снимается точка.
+        """
         if now - self._climate_last_board_s < self.CLIMATE_BOARD_STEP_S:
             return
         self._climate_last_board_s = now
         if not self._chamber_live_fresh("board_temp", now):
             return
-        self._climate_board.append((now, int(self._chamber_live_last["board_temp"]) / 10.0))
+        stats = self._chamber_live_stats("board_temp", now)
+        value = stats["mean"] if stats is not None else int(self._chamber_live_last["board_temp"])
+        self._climate_board.append((now, round(float(value) / 10.0, 3)))
 
     def _climate_speed(self) -> float:
         """Ускорение времени: у имитатора правило устойчивости сжимается вместе с ним."""
