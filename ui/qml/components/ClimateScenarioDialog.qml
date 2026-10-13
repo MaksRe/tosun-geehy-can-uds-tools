@@ -23,6 +23,11 @@ import "."
   целиком; контроллер проверяет значения и показывает замечания. Копия
   перечитывается только при загрузке или создании сценария (растёт ревизия).
 
+  Во время прогона сценарий тоже правится, но правки копятся и уходят к идущему
+  прогону кнопкой «Применить к прогону» (с записью в журнал действий):
+  пройденные шаги закрыты, текущий правится, но не удаляется и не двигается;
+  режим испытания (раздел 2) во время прогона не меняется.
+
   Публичные свойства:
   - appController: контроллер приложения;
   - view: сценарий из контроллера (climate.scenario);
@@ -46,6 +51,9 @@ Popup {
     // Пересчёт проверки сетки после правки температуры шага (строки при этом не перестраиваются).
     property int checkTick: 0
     readonly property bool locked: dialog.view.locked === true
+    // Идущий шаг прогона (-1 - прогон не идёт) и есть ли неприменённые правки к идущему прогону.
+    readonly property int runIndex: dialog.view.runIndex !== undefined ? dialog.view.runIndex : -1
+    property bool pending: false
     readonly property bool boardOnly: dialog.draftRevision >= 0 && dialog.draft.board_only === true
 
     // Сетка температурных узлов прибора и допуск попадания точки в узел (по температуре платы).
@@ -78,11 +86,25 @@ Popup {
         dialog.draft = JSON.parse(JSON.stringify(dialog.view.scenario))
         dialog.loadedRevision = dialog.view.revision
         dialog.draftRevision += 1
+        dialog.pending = false
+    }
+
+    // Во время прогона шаг правится, если он не пройден; двигать и удалять можно только будущие.
+    function stepEditable(index) {
+        return !dialog.locked || index >= dialog.runIndex
+    }
+    function stepMovable(index) {
+        return !dialog.locked || index > dialog.runIndex
     }
 
     // Правка уходит в контроллер целиком: он проверит значения и сохранит текущий сценарий.
     function push() {
-        if (dialog.appController && !dialog.locked)
+        if (dialog.locked) {
+            // Идёт прогон: правка копится до «Применить к прогону».
+            dialog.pending = true
+            return
+        }
+        if (dialog.appController)
             dialog.appController.updateClimateScenario(JSON.stringify(dialog.draft))
     }
 
@@ -183,7 +205,6 @@ Popup {
         bgColor: dialog.inputBg
         borderColor: dialog.inputBorder
         focusBorderColor: dialog.inputFocus
-        enabled: !dialog.locked
         onTextChanged: if (!activeFocus) cursorPosition = 0
     }
 
@@ -476,15 +497,40 @@ Popup {
             }
         }
 
-        Text {
+        // Идёт прогон: правки копятся и применяются к нему одной кнопкой.
+        RowLayout {
             Layout.fillWidth: true
             visible: dialog.locked
-            text: "Идёт прогон: он идёт по сценарию, с которым начат. Менять сценарий можно после окончания или остановки."
-            color: "#b45309"
-            font.pixelSize: 12
-            font.bold: true
-            font.family: "Bahnschrift"
-            wrapMode: Text.WordWrap
+            spacing: 8
+
+            Text {
+                Layout.fillWidth: true
+                text: "Идёт прогон, шаг " + (dialog.runIndex + 1) + ". Правки применятся к нему кнопкой «Применить к прогону»: "
+                      + "пройденные шаги не меняются, текущий можно поправить (новая температура - шаг заново), "
+                      + "режим испытания не меняется. Действие записывается в журнал."
+                color: "#b45309"
+                font.pixelSize: 12
+                font.bold: true
+                font.family: "Bahnschrift"
+                wrapMode: Text.WordWrap
+            }
+            SmallButton {
+                Layout.preferredWidth: 170
+                text: "Применить к прогону"
+                enabled: dialog.pending
+                tone: "#b45309"; toneHover: "#92400e"; tonePressed: "#78350f"
+                onClicked: {
+                    if (dialog.appController)
+                        dialog.appController.applyClimateScenarioLive(JSON.stringify(dialog.draft))
+                    dialog.pending = false
+                }
+            }
+            SmallButton {
+                Layout.preferredWidth: 130
+                text: "Отменить правки"
+                enabled: dialog.pending
+                onClicked: dialog.reload()
+            }
         }
 
         ScrollView {
@@ -650,6 +696,32 @@ Popup {
                     }
 
                     FormRow {
+                        label: "Плата должна дойти до температуры шага с допуском"
+                        hint: "Плата греется сама и устаивается не там, где воздух. Если она устоялась дальше допуска, программа "
+                              + "сдвигает уставку камеры на разницу (не дальше заданного сдвига и пределов уставки) и снова ждёт "
+                              + "плату. Не вышло за заданное число попыток - предупреждение в события и журнал действий, точка "
+                              + "снимается при текущих условиях, прогон идёт дальше. Сдвиг 0 - доводки нет. Шаг без точки не доводится."
+                        NumberField {
+                            text: dialog.draftRevision >= 0 ? dialog.show(dialog.draft.board_tolerance_c) : ""
+                            onTextEdited: dialog.draft.board_tolerance_c = dialog.num(text)
+                            onEditingFinished: dialog.push()
+                        }
+                        Text { text: "°C; сдвигать уставку до"; color: dialog.textSoft; font.pixelSize: 12; font.family: "Bahnschrift" }
+                        NumberField {
+                            text: dialog.draftRevision >= 0 ? dialog.show(dialog.draft.board_max_shift_c) : ""
+                            onTextEdited: dialog.draft.board_max_shift_c = dialog.num(text)
+                            onEditingFinished: dialog.push()
+                        }
+                        Text { text: "°C, попыток"; color: dialog.textSoft; font.pixelSize: 12; font.family: "Bahnschrift" }
+                        NumberField {
+                            text: dialog.draftRevision >= 0 ? dialog.show(dialog.draft.board_attempts) : ""
+                            onTextEdited: dialog.draft.board_attempts = dialog.num(text)
+                            onEditingFinished: dialog.push()
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    FormRow {
                         label: "Предупредить, если плата не устоялась за"
                         hint: "Считая от выхода камеры на уставку. Так же: предупреждение, прогон ждёт дальше."
                         NumberField {
@@ -684,7 +756,6 @@ Popup {
                         hint: "Выключено - камера держит эту температуру, пока её не остановят."
                         FancySwitch {
                             checked: dialog.draftRevision >= 0 && dialog.draft.finish_stop === true
-                            enabled: !dialog.locked
                             onToggled: dialog.change("finish_stop", checked)
                         }
                         Text {
@@ -773,7 +844,11 @@ Popup {
                             Layout.fillWidth: true
                             Layout.preferredHeight: 38
                             radius: 6
-                            color: stepRow.index % 2 === 0 ? "#ffffff" : "#f8fafc"
+                            // Пройденные шаги идущего прогона закрыты, идущий - подсвечен.
+                            enabled: dialog.stepEditable(stepRow.index)
+                            opacity: enabled ? 1.0 : 0.55
+                            color: dialog.locked && stepRow.index === dialog.runIndex ? "#e0f2fe"
+                                   : (stepRow.index % 2 === 0 ? "#ffffff" : "#f8fafc")
                             border.width: 1
                             border.color: "#eef2f7"
 
@@ -816,7 +891,6 @@ Popup {
                                     FancySwitch {
                                         anchors.verticalCenter: parent.verticalCenter
                                         checked: stepRow.capture
-                                        enabled: !dialog.locked
                                         onToggled: {
                                             dialog.draft.steps[stepRow.index].capture = checked
                                             dialog.change("steps", dialog.draft.steps)
@@ -862,14 +936,14 @@ Popup {
                                     Layout.preferredWidth: 32
                                     text: "↑"
                                     toolTipText: "Выше"
-                                    enabled: !dialog.locked && stepRow.index > 0
+                                    enabled: dialog.stepMovable(stepRow.index) && dialog.stepMovable(stepRow.index - 1) && stepRow.index > 0
                                     onClicked: dialog.moveStep(stepRow.index, -1)
                                 }
                                 SmallButton {
                                     Layout.preferredWidth: 32
                                     text: "↓"
                                     toolTipText: "Ниже"
-                                    enabled: !dialog.locked && stepRow.index < (dialog.draft.steps || []).length - 1
+                                    enabled: dialog.stepMovable(stepRow.index) && stepRow.index < (dialog.draft.steps || []).length - 1
                                     onClicked: dialog.moveStep(stepRow.index, 1)
                                 }
                                 SmallButton {
@@ -877,7 +951,7 @@ Popup {
                                     text: "✕"
                                     toolTipText: "Удалить шаг"
                                     tone: "#ef4444"; toneHover: "#dc2626"; tonePressed: "#b91c1c"
-                                    enabled: !dialog.locked && (dialog.draft.steps || []).length > 1
+                                    enabled: dialog.stepMovable(stepRow.index) && (dialog.draft.steps || []).length > 1
                                     onClicked: dialog.removeStep(stepRow.index)
                                 }
                             }
@@ -892,7 +966,6 @@ Popup {
                             Layout.preferredWidth: 160
                             text: "+ Добавить шаг"
                             tone: "#0284c7"; toneHover: "#0369a1"; tonePressed: "#075985"
-                            enabled: !dialog.locked
                             onClicked: dialog.addStep()
                         }
 

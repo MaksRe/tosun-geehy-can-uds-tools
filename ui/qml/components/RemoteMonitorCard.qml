@@ -6,11 +6,11 @@ import "."
 /*
   Раздел «Удалённое наблюдение».
   Назначение:
-  - бот Telegram с несколькими пользователями: у каждого свой уровень
-    уведомлений и переключатели (точки, сводки, файлы); доступ одобряет
-    администратор или код доступа;
-  - мини-приложение Telegram со всей телеметрией прогона: адрес https даёт
-    туннель ngrok (основной), туннель Cloudflare или свой сервер;
+  - бот Telegram: кто написал ему /start - подписан, без одобрений; у каждого
+    подписчика свой уровень уведомлений и переключатели (точки, сводки, файлы);
+  - сайт и мини-приложение Telegram (одна страница) со всей телеметрией
+    прогона, открыт по адресу без входа; адрес https даёт туннель ngrok
+    (основной), туннель Cloudflare или свой сервер;
   - копия каждого сохранённого журнала в сетевую папку или на сервер по SFTP.
 
   Всё это только для наблюдения: управлять прибором издалека нужно через
@@ -34,6 +34,8 @@ Card {
 
     readonly property var remote: root.appController ? root.appController.remoteMonitor : ({})
     readonly property var levelShort: ({ "all": "Все", "important": "Важные", "alarms": "Аварии", "off": "Выкл" })
+    readonly property var roleChoices: [{ "key": "viewer", "title": "Наблюдает" }, { "key": "operator", "title": "Управляет" },
+                                        { "key": "admin", "title": "Админ" }]
     readonly property var userOptions: [{ "key": "points", "title": "точки" }, { "key": "summaries", "title": "сводки" },
                                         { "key": "files", "title": "файлы" }]
 
@@ -168,17 +170,16 @@ Card {
         }
     }
 
-    // Пользователь бота: кто, доступ, уровень, переключатели, действия администратора.
+    // Подписчик бота: кто, уровень уведомлений, переключатели, отписка.
     component UserRow: Rectangle {
         id: userRow
         required property var modelData
-        readonly property bool isAdminChat: userRow.modelData.id === root.remote.telegramChat
         Layout.fillWidth: true
         Layout.preferredHeight: userLayout.implicitHeight + 12
         radius: 8
-        color: userRow.modelData.approved ? "#ffffff" : "#fff7ed"
+        color: "#ffffff"
         border.width: 1
-        border.color: userRow.modelData.approved ? "#e2e8f0" : "#fed7aa"
+        border.color: "#e2e8f0"
 
         RowLayout {
             id: userLayout
@@ -194,7 +195,7 @@ Card {
 
                 Text {
                     Layout.fillWidth: true
-                    text: (userRow.modelData.name || userRow.modelData.id) + (userRow.modelData.admin ? "  ★" : "")
+                    text: userRow.modelData.name || userRow.modelData.id
                     color: root.textMain
                     font.pixelSize: 13
                     font.bold: true
@@ -204,11 +205,32 @@ Card {
                 Text {
                     Layout.fillWidth: true
                     text: (userRow.modelData.username ? "@" + userRow.modelData.username + " · " : "")
-                          + (userRow.modelData.admin ? "администратор" : userRow.modelData.approved ? "одобрен" : "ждёт одобрения")
-                    color: userRow.modelData.approved ? root.textSoft : "#c2410c"
+                          + "с " + (userRow.modelData.since || "")
+                    color: root.textSoft
                     font.pixelSize: 11
                     font.family: "Bahnschrift"
                     elide: Text.ElideRight
+                }
+            }
+
+            // Права: наблюдает, управляет камерой и прогоном или админ (ещё и раздаёт права).
+            RowLayout {
+                spacing: 4
+                Repeater {
+                    model: root.roleChoices
+
+                    FancyButton {
+                        required property var modelData
+                        Layout.preferredWidth: 84
+                        Layout.preferredHeight: 26
+                        fontPixelSize: 11
+                        text: modelData.title
+                        tone: (userRow.modelData.role || "viewer") === modelData.key
+                              ? (modelData.key === "viewer" ? "#64748b" : "#b45309") : "#cbd5e1"
+                        toneHover: "#92400e"
+                        tonePressed: "#78350f"
+                        onClicked: if (root.appController) root.appController.setRemoteUserRole(userRow.modelData.id, modelData.key)
+                    }
                 }
             }
 
@@ -234,25 +256,11 @@ Card {
             Item { Layout.fillWidth: true }
 
             SmallButton {
-                visible: !userRow.modelData.approved
                 Layout.preferredWidth: 90
-                text: "Одобрить"
-                tone: "#16a34a"; toneHover: "#15803d"; tonePressed: "#166534"
-                onClicked: if (root.appController) root.appController.remoteUserAction(userRow.modelData.id, "ok")
-            }
-            SmallButton {
-                visible: !userRow.isAdminChat && userRow.modelData.approved
-                Layout.preferredWidth: 80
-                text: userRow.modelData.admin ? "− админ" : "+ админ"
-                toolTipText: "Администратор одобряет заявки и видит пользователей в мини-приложении"
-                onClicked: if (root.appController) root.appController.remoteUserAction(userRow.modelData.id, "ad")
-            }
-            SmallButton {
-                visible: !userRow.isAdminChat
-                Layout.preferredWidth: 80
-                text: "Убрать"
+                text: "Отписать"
+                toolTipText: "Уведомления этому человеку больше не придут; подписаться снова - /start в боте"
                 tone: "#ef4444"; toneHover: "#dc2626"; tonePressed: "#b91c1c"
-                onClicked: if (root.appController) root.appController.remoteUserAction(userRow.modelData.id, "rm")
+                onClicked: if (root.appController) root.appController.removeRemoteUser(userRow.modelData.id)
             }
         }
     }
@@ -301,20 +309,18 @@ Card {
                         checked: root.remote.telegramEnabled === true
                         onToggled: if (root.appController) root.appController.setRemoteFlag("telegram_enabled", checked)
                     }
-                    Title { text: "Бот Telegram" }
+                    Title { text: "Бот Telegram" + (root.remote.botUsername ? "  @" + root.remote.botUsername : "") }
                     InfoMark {
                         tip: "<b>Как подключить</b><br>1. В Telegram найдите @BotFather, команда /newbot, впишите выданный токен.<br>"
-                             + "2. Напишите своему боту /start и нажмите «Найти чат» - вы станете администратором.<br>"
-                             + "3. Коллеги пишут боту /start: вам придёт заявка с кнопками «Одобрить» / «Отклонить». "
-                             + "С кодом доступа («/start КОД») они подключатся сразу.<br><br>"
-                             + "Каждый сам выбирает уровень уведомлений командой /settings или в мини-приложении."
+                             + "2. Каждый, кому нужны уведомления, пишет боту /start - и подписан. /stop - отписаться.<br><br>"
+                             + "Каждый сам выбирает, что присылать: командой /settings или в мини-приложении."
                     }
                     Item { Layout.fillWidth: true }
                     SmallButton {
                         Layout.preferredWidth: 110
                         text: "Проверить"
                         tone: "#0284c7"; toneHover: "#0369a1"; tonePressed: "#075985"
-                        toolTipText: "Пробное сообщение администратору"
+                        toolTipText: "Пробное сообщение всем подписчикам"
                         onClicked: if (root.appController) root.appController.sendRemoteTelegramTest()
                     }
                 }
@@ -326,38 +332,13 @@ Card {
                     Caption { text: "Токен" }
                     SettingField { key: "telegramToken"; Layout.fillWidth: true; echoMode: activeFocus ? TextInput.Normal : TextInput.Password
                         placeholderText: "выдаёт @BotFather, вида 123456:ABC..."; settingKey: "telegram_token" }
-
-                    Caption { text: "Администратор" }
-                    SettingField { key: "telegramChat"; Layout.preferredWidth: 140; placeholderText: "номер чата"; settingKey: "telegram_chat" }
-
-                    SmallButton {
-                        Layout.preferredWidth: 100
-                        text: "Найти чат"
-                        toolTipText: "Берёт чат того, кто последним написал боту"
-                        onClicked: if (root.appController) root.appController.findRemoteTelegramChat()
-                    }
                 }
 
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 8
 
-                    Caption { text: "Код доступа" }
-                    SettingField { key: "telegramAccessCode"; Layout.preferredWidth: 110; placeholderText: "нет"
-                        horizontalAlignment: TextInput.AlignHCenter; settingKey: "telegram_access_code" }
-                    SmallButton {
-                        Layout.preferredWidth: 100
-                        text: "Новый код"
-                        onClicked: if (root.appController) root.appController.newRemoteAccessCode()
-                    }
-                    InfoMark {
-                        tip: "Кто пришлёт боту «/start КОД», подключится сразу, без одобрения. "
-                             + "Пусто - только по одобрению администратора. Новый код не отключает уже подключённых."
-                    }
-
-                    Item { Layout.preferredWidth: 16 }
-
-                    Caption { text: "Новым:" }
+                    Caption { text: "Новым подписчикам:" }
                     LevelPicker {
                         current: root.remote.telegramDefaultLevel || ""
                         onPicked: (level) => { if (root.appController) root.appController.setRemoteSetting("telegram_default_level", level) }
@@ -384,7 +365,7 @@ Card {
                              + "Выкл - ничего, только по запросу (/status, мини-приложение).<br><br>"
                              + "<b>Точки</b> - сообщение о каждой записанной точке. <b>Сводки</b> - ход прогона по расписанию. "
                              + "<b>Файлы</b> - журнал, профиль и отчёт диагностики в чат.<br><br>"
-                             + "Здесь - что получит новый пользователь; потом каждый меняет своё сам."
+                             + "Здесь - что получит новый подписчик; потом каждый меняет своё сам."
                     }
                     Item { Layout.fillWidth: true }
                 }
@@ -392,7 +373,7 @@ Card {
                 StatusLine { text: root.remote.telegramStatus || ""; ok: root.remote.telegramOk === true }
             }
 
-            // --- Пользователи бота ---
+            // --- Подписчики бота ---
             Block {
                 visible: root.remote.telegramEnabled === true
                 enabledFlag: true
@@ -401,10 +382,13 @@ Card {
                     Layout.fillWidth: true
                     spacing: 8
 
-                    Title { text: "Пользователи · " + (root.remote.users || []).length }
+                    Title { text: "Подписчики · " + (root.remote.users || []).length }
                     InfoMark {
-                        tip: "Кто подключён к боту и что получает. ★ - администратор: одобряет заявки и видит этот список "
-                             + "в мини-приложении. Администратора из настроек убрать нельзя."
+                        tip: "Кто написал боту /start, что получает и что может. Подписаться и смотреть может любой.<br><br>"
+                             + "<b>Управляет</b> - может управлять камерой и прогоном с сайта, из мини-приложения и бота: "
+                             + "экстренная остановка, режим, уставка, старт/пауза/стоп, шаги сценария на ходу. "
+                             + "<b>Админ</b> - ещё и даёт или снимает право «управляет» другим. Назначить админа можно "
+                             + "только здесь, у камеры.<br><br>Каждое действие записывается в журнал действий с именем."
                     }
                     Item { Layout.fillWidth: true }
                 }
@@ -416,7 +400,7 @@ Card {
 
                 Caption {
                     visible: (root.remote.users || []).length === 0
-                    text: "Пока никого: пользователи появятся, когда напишут боту /start."
+                    text: "Пока никого: подписчики появятся, когда напишут боту /start."
                 }
             }
 
@@ -432,17 +416,18 @@ Card {
                         checked: root.remote.serverEnabled === true
                         onToggled: if (root.appController) root.appController.setRemoteFlag("server_enabled", checked)
                     }
-                    Title { text: "Мини-приложение в Telegram" }
+                    Title { text: "Сайт и мини-приложение" }
                     InfoMark {
-                        tip: "Кнопка «Камера» в боте открывает всё о прогоне: камера и плата, контуры, история, "
-                             + "ход по узлам, проблемы, события, журналы в чат и свои настройки уведомлений.<br><br>"
+                        tip: "Одна страница со всем о прогоне: камера и плата, контуры, графики, ход по узлам, проблемы, "
+                             + "события, журналы. Открывается по адресу в любом браузере (без входа) и кнопкой «Камера» "
+                             + "в боте.<br><br>"
                              + "Telegram открывает мини-приложение только по адресу https:// из интернета:<br>"
                              + "<b>ngrok</b> - основной: бесплатная учётная запись, постоянный адрес, работает по обычному "
                              + "https и проходит почти любую сеть;<br>"
                              + "<b>Cloudflare</b> - без регистрации, но адрес меняется при каждом запуске, нужен порт 7844, "
                              + "а при частых запусках Cloudflare временно отказывает (429);<br>"
                              + "<b>Свой адрес</b> - если есть сервер с https, проксирующий на порт этой программы.<br><br>"
-                             + "Данные видят только одобренные в боте пользователи: каждый запрос подписан Telegram."
+                             + "Страница видна всем, кто знает адрес, но только показывает: управлять через неё нельзя."
                     }
                     Item { Layout.fillWidth: true }
 
@@ -531,18 +516,8 @@ Card {
                     spacing: 8
 
                     Caption { text: "Адрес https" }
-                    SettingField { key: "miniappUrl"; Layout.fillWidth: true; placeholderText: "https://camera.example.ru/app"; settingKey: "miniapp_url" }
-                    Caption { text: "Ключ отладки" }
-                    SettingField { key: "serverKey"; Layout.preferredWidth: 140; placeholderText: "закрыто"; settingKey: "server_key" }
-                    SmallButton {
-                        Layout.preferredWidth: 100
-                        text: "Новый ключ"
-                        onClicked: if (root.appController) root.appController.newRemoteServerKey()
-                    }
-                    InfoMark {
-                        tip: "Адрес, по которому ваш сервер с https пересылает запросы на порт этой программы.<br><br>"
-                             + "Ключ отладки открывает в сети снимок status.json?key=... для проверки; пусто - закрыто."
-                    }
+                    SettingField { key: "miniappUrl"; Layout.fillWidth: true; placeholderText: "https://camera.example.ru/"; settingKey: "miniapp_url" }
+                    InfoMark { tip: "Адрес, по которому ваш сервер с https пересылает запросы на порт этой программы." }
                 }
 
                 RowLayout {
@@ -550,7 +525,7 @@ Card {
                     visible: root.remote.serverEnabled === true
                     spacing: 8
 
-                    Caption { text: "Открывается по" }
+                    Caption { text: "Адрес сайта" }
                     Text {
                         Layout.fillWidth: true
                         text: root.remote.publicUrl || "адреса пока нет"
@@ -558,6 +533,13 @@ Card {
                         font.pixelSize: 13
                         font.family: "Bahnschrift"
                         elide: Text.ElideRight
+                    }
+                    SmallButton {
+                        visible: !!root.remote.publicUrl
+                        Layout.preferredWidth: 90
+                        text: "Открыть"
+                        tone: "#0284c7"; toneHover: "#0369a1"; tonePressed: "#075985"
+                        onClicked: Qt.openUrlExternally(root.remote.publicUrl)
                     }
                     SmallButton {
                         visible: !!root.remote.publicUrl
@@ -644,6 +626,42 @@ Card {
                 }
 
                 StatusLine { text: root.remote.syncStatus || ""; ok: root.remote.syncOk === true }
+            }
+
+            // --- Журнал действий управления ---
+            Block {
+                enabledFlag: true
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Title { text: "Журнал действий" }
+                    InfoMark {
+                        tip: "Кто, когда и откуда управлял камерой и прогоном или менял сценарий: окно программы, сайт, "
+                             + "Telegram. Полный журнал - в файле " + (root.remote.controlLogPath || "logs/control") + "."
+                    }
+                    Item { Layout.fillWidth: true }
+                }
+
+                Repeater {
+                    model: root.remote.controlLog || []
+
+                    Text {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        text: modelData.time + "  " + modelData.who + " (" + modelData.channel + "): " + modelData.action
+                              + (modelData.details ? " - " + modelData.details : "") + "  →  " + modelData.result
+                        color: modelData.ok ? root.textMain : "#b45309"
+                        font.pixelSize: 12
+                        font.family: "Bahnschrift"
+                        elide: Text.ElideRight
+                    }
+                }
+
+                Caption {
+                    visible: (root.remote.controlLog || []).length === 0
+                    text: "Действий управления пока не было."
+                }
             }
 
             // --- Состояние и события ---

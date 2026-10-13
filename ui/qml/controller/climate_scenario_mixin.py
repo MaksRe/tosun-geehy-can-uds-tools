@@ -245,4 +245,6 @@ class AppControllerClimateScenarioMixin(AppControllerContract):
             "folder": str(self._climate_scenario_dir()),
             "folderUrl": self._climate_scenario_dir().as_uri() if self._climate_scenario_dir().is_absolute() else "",
             "locked": bool(self._climate_run_stage),
+            # Идущий шаг прогона: пройденные шаги в форме не правятся. -1 - прогон не идёт.
+            "runIndex": int(self._climate_run_index) if self._climate_run_stage else -1,
         }

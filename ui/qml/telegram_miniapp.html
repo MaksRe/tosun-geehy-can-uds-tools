@@ -4,10 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Прогон в камере</title>
-<!-- Мини-приложение Telegram: наблюдение за прогоном в климатической камере.
-     Данные берутся из api/state раз в 5 секунд; каждый запрос несёт подписанные
-     Telegram данные запуска (заголовок X-Telegram-Init-Data), без них программа
-     у камеры ничего не отдаёт. -->
+<!-- Сайт и мини-приложение Telegram (одна страница): наблюдение за прогоном в климатической камере.
+     Смотреть может любой по адресу, без входа; данные берутся из api/state раз в 5 секунд.
+     Управлять (экстренная остановка, режим, уставка, прогон, шаги сценария) могут только
+     админ и назначенные им люди. Кто это, программа узнаёт по подписи Telegram (заголовок
+     X-Telegram-Init-Data) или по ключу ссылки входа из бота /login (заголовок X-Web-Token).
+     Каждое действие записывается в журнал действий с именем человека. -->
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   :root {
@@ -34,6 +36,8 @@
     }
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  /* Скрытое - скрыто всегда, даже если правило вкладки говорит «показать». */
+  [hidden] { display: none !important; }
   html, body { margin: 0; background: var(--bg); color: var(--text); }
   body { font: 15px/1.35 -apple-system, "Segoe UI", Roboto, sans-serif; padding-bottom: 72px; }
   header { padding: 10px 14px 4px; display: flex; align-items: center; gap: 8px; }
@@ -95,7 +99,7 @@
   .switch input:checked::after { left: 21px; }
   .buttons { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
   .buttons button { padding: 5px 10px; font-size: 13px; }
-  nav { position: fixed; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: repeat(4, 1fr);
+  nav { position: fixed; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: repeat(5, 1fr);
         background: var(--card); border-top: 1px solid var(--line); padding: 4px 4px calc(4px + env(safe-area-inset-bottom)); }
   nav button { background: none; color: var(--soft); font-size: 11px; padding: 4px 0; border-radius: 8px; }
   nav button b { display: block; font-size: 19px; line-height: 1.2; font-weight: 400; }
@@ -111,6 +115,41 @@
            color: #fff; padding: 8px 14px; border-radius: 10px; font-size: 13px; opacity: 0; transition: opacity .25s;
            pointer-events: none; max-width: 90vw; text-align: center; }
   .toast.on { opacity: 1; }
+  .plot { height: 170px; touch-action: pan-y; }
+  .readout { font-size: 12px; color: var(--soft); margin-top: 4px; min-height: 16px; font-variant-numeric: tabular-nums; }
+  .readout b { color: var(--text); font-weight: 600; }
+  .ranges { display: flex; gap: 6px; }
+  .ranges button { flex: 1; background: var(--bg); color: var(--text); padding: 7px 0; }
+  .ranges button.on { background: var(--accent); color: var(--accent-text); }
+  .estop { width: 100%; padding: 14px; font-size: 16px; font-weight: 700; background: #dc2626; color: #fff;
+           border-radius: 12px; letter-spacing: .02em; }
+  .ctlrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+  .ctlrow .soft { min-width: 70px; }
+  .ctlrow input, .steps input { font: inherit; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px;
+                                background: var(--bg); color: var(--text); }
+  .ctlrow input { width: 90px; }
+  .steps { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .steps td, .steps th { padding: 4px 3px; border-top: 1px solid var(--line); text-align: left; }
+  .steps th { color: var(--soft); font-weight: 500; border-top: 0; }
+  .steps input[type=text] { width: 64px; padding: 4px 6px; }
+  .steps tr.done td { color: var(--soft); }
+  .steps tr.now td { background: rgba(36, 129, 204, .10); }
+  .steps button { padding: 4px 8px; font-size: 12px; }
+  .log li b { font-weight: 600; }
+  a.button { display: inline-block; text-decoration: none; border-radius: 10px; padding: 8px 12px;
+             background: var(--accent); color: var(--accent-text); }
+  a.button.light { background: var(--bg); color: var(--link); }
+  .linkbox { word-break: break-all; user-select: all; background: var(--bg); border-radius: 8px; padding: 6px 8px;
+             margin-top: 6px; font-size: 12px; }
+  /* Веб-версия на широком экране: страница по центру, «Сейчас» - в две колонки. */
+  body.web header, body.web main { max-width: 980px; margin-left: auto; margin-right: auto; }
+  body.web nav { max-width: 980px; margin: 0 auto; border-radius: 14px 14px 0 0; }
+  @media (min-width: 860px) {
+    body.web #tab-now.on { display: grid; grid-template-columns: 1fr 1fr; column-gap: 10px; align-items: start; }
+    body.web #tab-now #alerts, body.web #tab-now .wide { grid-column: 1 / -1; }
+    body.web #tab-charts.on { display: grid; grid-template-columns: 1fr 1fr; column-gap: 10px; align-items: start; }
+    body.web #tab-charts .wide { grid-column: 1 / -1; }
+  }
 </style>
 </head>
 <body>
@@ -120,11 +159,20 @@
 </header>
 
 <main>
-  <div id="blocked" class="empty" hidden></div>
 
   <!-- Сейчас: проблемы, камера, плата, контуры, график. -->
   <section class="tab on" id="tab-now">
     <div id="alerts"></div>
+    <!-- Управление: только для админа и назначенных им людей. -->
+    <div class="card wide" id="controlCard" hidden>
+      <h2>Управление <span id="controlWho"></span></h2>
+      <button class="estop" data-ctl="estop">⛔ ЭКСТРЕННАЯ ОСТАНОВКА КАМЕРЫ</button>
+      <div class="ctlrow"><span class="soft">Режим</span><span class="buttons" style="margin:0" id="ctlModes"></span></div>
+      <div class="ctlrow"><span class="soft">Уставка</span><input id="ctlSetpoint" type="text" inputmode="decimal" placeholder="°C">
+        <button class="light" data-ctl="setpoint">Задать</button></div>
+      <div class="ctlrow"><span class="soft">Прогон</span><span class="buttons" style="margin:0" id="ctlRun"></span></div>
+      <div class="soft" style="margin-top:8px">Ручной режим или уставка во время прогона ставят его на паузу. Все действия записываются в журнал с вашим именем.</div>
+    </div>
     <div class="card">
       <h2>Камера <span id="chamberName"></span></h2>
       <div id="chamber"></div>
@@ -148,7 +196,7 @@
           <div class="soft">среднее <span id="mediaAvg">—</span></div><div class="soft" id="mediaInfo"></div></div>
       </div>
     </div>
-    <div class="card">
+    <div class="card wide">
       <h2>История <span id="span"></span></h2>
       <canvas id="chart"></canvas>
       <div class="legend">
@@ -165,6 +213,11 @@
     <div class="card">
       <h2>Автопрогон <span id="scenarioName"></span></h2>
       <div id="auto"></div>
+    </div>
+    <div class="card">
+      <h2>Шаги сценария <span id="stepsHint"></span></h2>
+      <div class="wrap"><table class="steps" id="stepsTable"></table></div>
+      <div class="buttons" id="stepsButtons"></div>
     </div>
     <div class="card">
       <h2>Журнал <span id="journal"></span></h2>
@@ -187,6 +240,43 @@
     </div>
   </section>
 
+  <!-- Графики важных параметров: окно времени, показания под пальцем или курсором. -->
+  <section class="tab" id="tab-charts">
+    <div class="card wide">
+      <div class="ranges" id="ranges"></div>
+      <div class="soft" style="margin-top:6px">Проведите пальцем или курсором по графику - внизу будут значения в этот момент.</div>
+    </div>
+    <div class="card">
+      <h2>Температура, °C <span id="tempNow"></span></h2>
+      <canvas class="plot" id="plotTemp"></canvas>
+      <div class="legend">
+        <span><i style="background:var(--chamber)"></i>камера</span>
+        <span><i style="background:var(--chamber);opacity:.45"></i>уставка</span>
+        <span><i style="background:var(--board)"></i>плата</span>
+      </div>
+      <div class="readout" id="readTemp"></div>
+    </div>
+    <div class="card">
+      <h2>Скорость платы, °C/мин <span id="rateNow"></span></h2>
+      <canvas class="plot" id="plotRate"></canvas>
+      <div class="legend">
+        <span><i style="background:var(--board)"></i>за 5 мин</span>
+        <span><i style="background:var(--ok)"></i>±0,05 - плата устоялась</span>
+      </div>
+      <div class="readout" id="readRate"></div>
+    </div>
+    <div class="card">
+      <h2>Основной контур <span id="mainSpread"></span></h2>
+      <canvas class="plot" id="plotMain"></canvas>
+      <div class="readout" id="readMain"></div>
+    </div>
+    <div class="card">
+      <h2>Вид топлива <span id="mediaSpread"></span></h2>
+      <canvas class="plot" id="plotMedia"></canvas>
+      <div class="readout" id="readMedia"></div>
+    </div>
+  </section>
+
   <!-- События и файлы журналов. -->
   <section class="tab" id="tab-events">
     <div class="card">
@@ -194,21 +284,40 @@
       <ul class="list" id="events"></ul>
     </div>
     <div class="card">
-      <h2>Файлы <span>придут в чат с ботом</span></h2>
+      <h2>Журнал действий <span>кто и что менял</span></h2>
+      <ul class="list log" id="actions"></ul>
+    </div>
+    <div class="card">
+      <h2>Файлы <span id="filesHint">придут в чат с ботом</span></h2>
       <ul class="list" id="files"></ul>
     </div>
   </section>
 
-  <!-- Свои уведомления; администратору - пользователи. -->
+  <!-- Уведомления в Telegram: подписка и что присылать; адрес сайта. -->
   <section class="tab" id="tab-settings">
     <div class="card">
-      <h2>Мои уведомления <span id="meName"></span></h2>
-      <div class="seg" id="levels"></div>
-      <div style="margin-top:10px" id="toggles"></div>
+      <h2>Уведомления в Telegram <span id="meName"></span></h2>
+      <div id="subscribe"></div>
+      <div id="mySettings" hidden>
+        <div class="seg" id="levels"></div>
+        <div style="margin-top:10px" id="toggles"></div>
+        <div class="buttons"><button class="danger" data-sub="0">Отписаться</button></div>
+      </div>
     </div>
-    <div class="card" id="usersCard" hidden>
-      <h2>Пользователи <span>вы администратор</span></h2>
-      <ul class="list" id="users"></ul>
+    <div class="card">
+      <h2>Управление <span id="roleTitle"></span></h2>
+      <div id="access"></div>
+    </div>
+    <div class="card" id="rightsCard" hidden>
+      <h2>Права управления <span>вы админ</span></h2>
+      <ul class="list" id="rights"></ul>
+      <div class="soft" style="margin-top:6px">Назначить или снять админа можно только в окне программы у камеры.</div>
+    </div>
+    <div class="card">
+      <h2>Сайт</h2>
+      <div class="soft">Эта же страница открывается в любом браузере - на компьютере или телефоне, без входа.</div>
+      <div class="linkbox" id="siteLink"></div>
+      <div class="buttons" id="siteButtons"></div>
     </div>
   </section>
 </main>
@@ -216,6 +325,7 @@
 <nav id="nav">
   <button class="on" data-tab="now"><b>◉</b>Сейчас</button>
   <button data-tab="run"><b>▤</b>Прогон</button>
+  <button data-tab="charts"><b>∿</b>Графики</button>
   <button data-tab="events"><b>☰</b>События</button>
   <button data-tab="settings"><b>⚙</b>Настройки</button>
 </nav>
@@ -223,13 +333,36 @@
 
 <script>
   const tg = window.Telegram && window.Telegram.WebApp;
-  if (tg) {
+  // Скрипт Telegram есть и в обычном браузере, но данных запуска там нет.
+  const inTelegram = !!(tg && tg.initData);
+  if (inTelegram) {
     // Тема Telegram: его цвета приходят переменными --tg-theme-*.
     document.documentElement.classList.add("tg");
     tg.ready();
     tg.expand();
   }
-  const initData = (tg && tg.initData) || "";
+  const initData = inTelegram ? tg.initData : "";
+
+  if (!inTelegram) document.body.classList.add("web");
+
+  // Вход на сайт с правом управления: ключ из ссылки бота (#login=...) запоминается в браузере
+  // и убирается из адреса, чтобы не остаться в истории и на снимках экрана.
+  const LOGIN_KEY = "chamberLoginKey";
+  function storedLogin() { try { return localStorage.getItem(LOGIN_KEY) || ""; } catch (e) { return ""; } }
+  function storeLogin(value) {
+    try { if (value) localStorage.setItem(LOGIN_KEY, value); else localStorage.removeItem(LOGIN_KEY); } catch (e) { /* без памяти */ }
+  }
+  let loginKey = "";
+  if (!inTelegram) {
+    const fromLink = new URLSearchParams(window.location.hash.slice(1)).get("login");
+    if (fromLink) {
+      storeLogin(fromLink);
+      history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+    loginKey = fromLink || storedLogin();
+  }
+  // Адрес сайта - тот, по которому открыта страница.
+  const siteUrl = window.location.origin + "/";
   const $ = (id) => document.getElementById(id);
   const esc = (text) => String(text ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
   const LEVELS = [
@@ -259,10 +392,24 @@
     try { tg && tg.HapticFeedback && tg.HapticFeedback.impactOccurred(kind || "light"); } catch (e) { /* нет - не важно */ }
   }
 
+  // ngrok-skip-browser-warning: без него бесплатный ngrok отвечает браузеру страницей-предупреждением.
+  // В Telegram - ещё подпись: по ней программа знает, чьи это уведомления.
+  function authHeaders() {
+    const headers = { "ngrok-skip-browser-warning": "1" };
+    if (inTelegram) headers["X-Telegram-Init-Data"] = initData;
+    else if (loginKey) headers["X-Web-Token"] = loginKey;
+    return headers;
+  }
+
+  // Подтверждение: окно Telegram или обычное окно браузера.
+  function confirmDo(text, action) {
+    if (inTelegram && tg.showConfirm) tg.showConfirm(text, (yes) => { if (yes) action(); });
+    else if (window.confirm(text)) action();
+  }
+
   // Запрос к программе у камеры: относительный адрес api/state, api/settings и т.д.
   async function api(path, body) {
-    // ngrok-skip-browser-warning: без него бесплатный ngrok отвечает браузеру страницей-предупреждением.
-    const options = { cache: "no-store", headers: { "X-Telegram-Init-Data": initData, "ngrok-skip-browser-warning": "1" } };
+    const options = { cache: "no-store", headers: authHeaders() };
     if (body !== undefined) {
       options.method = "POST";
       options.headers["Content-Type"] = "application/json";
@@ -287,10 +434,179 @@
     document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("on", tab.id === "tab-" + button.dataset.tab));
     haptic("light");
     if (button.dataset.tab === "now" && state) drawChart(state.history || {}, (state.climate || {}).history || {});
+    if (button.dataset.tab === "charts" && state) renderCharts(state);
     window.scrollTo(0, 0);
   });
 
   // ------------------------------------------------------------------ график
+
+  // ------------------------------------------------------------------ графики
+
+  // Окно времени графиков, с. История в программе - последние 3 часа.
+  const RANGES = [[1800, "30 мин"], [3600, "1 час"], [10800, "3 часа"]];
+  let chartRange = 3600;
+  try { chartRange = Number(localStorage.getItem("chamberChartRange")) || chartRange; } catch (e) { /* по умолчанию */ }
+
+  const fmt = (value, digits) => value === null || value === undefined ? "—"
+    : (value > 0 && digits > 0 ? "+" : "") + value.toFixed(digits).replace(".", ",");
+  const ago = (seconds) => seconds > -30 ? "сейчас" : "−" + (seconds <= -5400 ? (-seconds / 3600).toFixed(1).replace(".", ",") + " ч"
+    : Math.round(-seconds / 60) + " мин");
+
+  // Один график: линии рядов, опорные линии, оси; запоминает точки для показаний под пальцем.
+  function plot(canvasId, readoutId, series, opts) {
+    const canvas = $(canvasId);
+    const width = canvas.clientWidth, height = canvas.clientHeight;
+    if (!width) return;
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = width * ratio; canvas.height = height * ratio;
+    const ctx = canvas.getContext("2d");
+    ctx.scale(ratio, ratio);
+    const css = getComputedStyle(document.documentElement);
+    const color = (value) => value.startsWith("--") ? css.getPropertyValue(value).trim() : value;
+    ctx.font = "10px sans-serif";
+    ctx.fillStyle = color("--soft");
+    const rows = series.map((row) => Object.assign({}, row, {
+      pts: (row.t || []).map((t, i) => [t, row.v[i]]).filter(([t, v]) => t >= -chartRange && v !== null && v !== undefined),
+    }));
+    const values = rows.flatMap((row) => row.pts.map(([, v]) => v)).concat((opts.lines || []).map((line) => line.v));
+    canvas._plot = null;
+    if (!rows.some((row) => row.pts.length > 1)) {
+      ctx.fillText("Данных за это время пока нет", 8, 18);
+      $(readoutId).textContent = "";
+      return;
+    }
+    let lo = Math.min(...values), hi = Math.max(...values);
+    const minSpan = opts.minSpan || 1e-6;
+    if (hi - lo < minSpan) { const mid = (hi + lo) / 2; lo = mid - minSpan / 2; hi = mid + minSpan / 2; }
+    const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+    const left = 46, right = 8, top = 6, bottom = 18;
+    const plotW = width - left - right, plotH = height - top - bottom;
+    const x = (t) => left + (t + chartRange) / chartRange * plotW;
+    const y = (v) => top + (hi - v) / (hi - lo) * plotH;
+
+    ctx.strokeStyle = color("--line"); ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+      const yy = top + plotH * i / 4;
+      ctx.beginPath(); ctx.moveTo(left, yy); ctx.lineTo(left + plotW, yy); ctx.stroke();
+      ctx.fillText(fmt(hi - (hi - lo) * i / 4, opts.digits).replace("+", ""), 2, yy + 3);
+    }
+    ctx.fillText(ago(-chartRange), left, height - 4);
+    ctx.fillText(ago(-chartRange / 2), left + plotW / 2 - 14, height - 4);
+    ctx.fillText("сейчас", left + plotW - 32, height - 4);
+
+    (opts.lines || []).forEach((line) => {
+      ctx.strokeStyle = color(line.color); ctx.setLineDash([5, 4]); ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(left, y(line.v)); ctx.lineTo(left + plotW, y(line.v)); ctx.stroke();
+      ctx.setLineDash([]);
+    });
+    rows.forEach((row) => {
+      ctx.strokeStyle = color(row.color); ctx.globalAlpha = row.alpha || 1;
+      ctx.lineWidth = row.width || 1.8; ctx.setLineDash(row.dash || []);
+      ctx.beginPath();
+      let previous = null;
+      row.pts.forEach(([t, v]) => {
+        // Разрыв больше минуты - связи не было: линия не тянется через пропуск.
+        if (previous === null || t - previous > 60) ctx.moveTo(x(t), y(v)); else ctx.lineTo(x(t), y(v));
+        previous = t;
+      });
+      ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha = 1;
+    });
+    canvas._plot = { rows, left, plotW, opts, readoutId, x, top, plotH, width, height };
+    readout(canvas, null);
+  }
+
+  // Показания на графике в момент под пальцем (или последние, если палец убран).
+  function readout(canvas, clientX) {
+    const p = canvas._plot;
+    if (!p) return;
+    let t = 0;
+    if (clientX !== null) {
+      const rect = canvas.getBoundingClientRect();
+      t = Math.max(-chartRange, Math.min(0, ((clientX - rect.left) - p.left) / p.plotW * chartRange - chartRange));
+    }
+    const parts = p.rows.filter((row) => !row.hideReadout).map((row) => {
+      let best = null;
+      row.pts.forEach(([pt, v]) => { if (best === null || Math.abs(pt - t) < Math.abs(best[0] - t)) best = [pt, v]; });
+      return best && Math.abs(best[0] - t) <= 90 ? `${row.name} <b>${fmt(best[1], p.opts.digits)}</b>` : `${row.name} —`;
+    });
+    $(p.readoutId).innerHTML = `${clientX === null ? "сейчас" : ago(t)}: ${parts.join(" · ")}`;
+    if (clientX !== null) {
+      const ctx = canvas.getContext("2d");
+      const xx = p.x(t);
+      ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue("--soft").trim();
+      ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(xx, p.top); ctx.lineTo(xx, p.top + p.plotH); ctx.stroke();
+    }
+  }
+
+  ["plotTemp", "plotRate", "plotMain", "plotMedia"].forEach((id) => {
+    const canvas = $(id);
+    const move = (event) => {
+      // Курсор рисуется поверх свежей картинки: сначала перерисовать график целиком.
+      if (state) renderCharts(state, true);
+      readout(canvas, event.clientX);
+    };
+    canvas.addEventListener("pointermove", move);
+    canvas.addEventListener("pointerdown", move);
+    canvas.addEventListener("pointerleave", () => { if (state) renderCharts(state, true); });
+  });
+
+  // Скорость изменения температуры платы, °C/мин: разница с точкой примерно 5 минут назад.
+  function boardRate(t, board) {
+    const out = [];
+    let j = 0;
+    for (let i = 0; i < t.length; i++) {
+      while (j < i && t[i] - t[j] > 300) j++;
+      const span = t[i] - t[j];
+      out.push(span >= 240 && board[i] !== null && board[j] !== null ? (board[i] - board[j]) / span * 60 : null);
+    }
+    return out;
+  }
+
+  function spreadText(values) {
+    const list = values.filter((v) => v !== null && v !== undefined);
+    if (list.length < 2) return "";
+    return "размах " + Math.round(Math.max(...list) - Math.min(...list)) + " отсч.";
+  }
+
+  function renderCharts(s, quiet) {
+    $("ranges").innerHTML = RANGES.map(([seconds, title]) =>
+      `<button class="${seconds === chartRange ? "on" : ""}" data-range="${seconds}">${title}</button>`).join("");
+    if (!$("tab-charts").classList.contains("on")) return;
+    const history = s.history || {};
+    const chamber = (s.climate || {}).history || {};
+    const t = history.t || [], ct = chamber.t || [];
+    const board = history.board || [];
+    const rate = boardRate(t, board);
+    const inRange = (times, values) => values.filter((v, i) => times[i] >= -chartRange);
+
+    plot("plotTemp", "readTemp", [
+      { name: "камера", t: ct, v: chamber.actual || [], color: "--chamber" },
+      { name: "уставка", t: ct, v: chamber.setpoint || [], color: "--chamber", dash: [6, 4], alpha: 0.5, width: 1.2 },
+      { name: "плата", t, v: board, color: "--board" },
+    ], { digits: 1, minSpan: 2 });
+    plot("plotRate", "readRate", [{ name: "плата", t, v: rate, color: "--board" }],
+         { digits: 3, minSpan: 0.2, lines: [{ v: 0.05, color: "--ok" }, { v: -0.05, color: "--ok" }] });
+    plot("plotMain", "readMain", [{ name: "основной", t, v: history.main || [], color: "--main" }], { digits: 0, minSpan: 4 });
+    plot("plotMedia", "readMedia", [{ name: "вид топлива", t, v: history.media || [], color: "--media" }], { digits: 0, minSpan: 4 });
+
+    if (quiet) return;
+    const last = (values) => { for (let i = values.length - 1; i >= 0; i--) if (values[i] !== null) return values[i]; return null; };
+    const lastRate = last(rate);
+    $("tempNow").textContent = last(board) === null ? "" : "плата " + fmt(last(board), 1);
+    $("rateNow").innerHTML = lastRate === null ? "" : `<span class="${Math.abs(lastRate) <= 0.05 ? "ok" : "warn"}">${fmt(lastRate, 3)}</span>`;
+    $("mainSpread").textContent = spreadText(inRange(t, history.main || []));
+    $("mediaSpread").textContent = spreadText(inRange(t, history.media || []));
+  }
+
+  $("ranges").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-range]");
+    if (!button) return;
+    chartRange = Number(button.dataset.range);
+    try { localStorage.setItem("chamberChartRange", String(chartRange)); } catch (e) { /* только на этот раз */ }
+    haptic("light");
+    if (state) renderCharts(state);
+  });
 
   function drawChart(history, chamber) {
     const canvas = $("chart");
@@ -491,44 +807,276 @@
     $("files").innerHTML = (s.files || []).slice(0, 25).map((f, i) =>
       `<li class="row"><div><div>${esc(f.name)}</div><div class="soft">${esc(f.folder)} · ${sizeText(f.size)} · ` +
       `${esc(new Date(f.mtime * 1000).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }))}</div></div>` +
-      `<button class="light" data-file="${i}">В чат</button></li>`).join("")
+      (inTelegram ? `<button class="light" data-file="${i}">В чат</button>`
+                  : `<a class="button light" href="${esc(f.url)}" download>Скачать</a>`) + `</li>`).join("")
       || `<li class="soft">Журналов пока нет.</li>`;
   }
 
+  // Уведомления: в Telegram - подписка и свои настройки; в браузере - как подписаться в боте.
   function renderSettings(s) {
-    const me = s.me || {};
-    $("meName").textContent = me.name || "";
-    $("levels").innerHTML = LEVELS.map(([key, title, hint]) =>
-      `<button class="${me.level === key ? "on" : ""}" data-level="${key}">${title}<small>${hint}</small></button>`).join("");
-    $("toggles").innerHTML = OPTIONS.map(([key, title, hint]) =>
-      `<label class="switch"><div><div>${title}</div><div class="soft">${hint}</div></div>` +
-      `<input type="checkbox" data-option="${key}" ${me[key] ? "checked" : ""} ${me.level === "off" ? "disabled" : ""}></label>`).join("");
+    const me = s.me;
+    const bot = s.bot || {};
+    const botName = bot.username ? "@" + bot.username : "боту наблюдения";
+    const subscribed = !!(me && me.subscribed);
+    $("meName").textContent = subscribed ? (me.name || "") : "";
+    $("mySettings").hidden = !(inTelegram && subscribed);
+    if (!inTelegram) {
+      $("subscribe").innerHTML = `<div class="soft">Чтобы получать уведомления о прогоне, напишите ${esc(botName)} команду /start; `
+        + `что присылать - команда /settings.</div>`
+        + (bot.link ? `<div class="buttons"><a class="button" href="${esc(bot.link)}" target="_blank" rel="noopener">Открыть ${esc(botName)}</a></div>` : "");
+    } else if (!subscribed) {
+      $("subscribe").innerHTML = `<div class="soft">Вы не подписаны: уведомления о прогоне не приходят.</div>`
+        + `<div class="buttons"><button data-sub="1">Подписаться</button></div>`;
+    } else {
+      $("subscribe").innerHTML = "";
+      $("levels").innerHTML = LEVELS.map(([key, title, hint]) =>
+        `<button class="${me.level === key ? "on" : ""}" data-level="${key}">${title}<small>${hint}</small></button>`).join("");
+      $("toggles").innerHTML = OPTIONS.map(([key, title, hint]) =>
+        `<label class="switch"><div><div>${title}</div><div class="soft">${hint}</div></div>` +
+        `<input type="checkbox" data-option="${key}" ${me[key] ? "checked" : ""} ${me.level === "off" ? "disabled" : ""}></label>`).join("");
+    }
+    $("siteLink").textContent = siteUrl;
+    $("siteButtons").innerHTML = (inTelegram ? `<button data-site="open">Открыть в браузере</button>` : "")
+      + `<button class="light" data-site="copy">Копировать адрес</button>`;
+  }
 
+  // ------------------------------------------------------------------ управление
+
+  const canControl = (s) => !!(s && s.me && s.me.canControl);
+  let stepsDraft = null;   // правка шагов, пока не применена: обновление раз в 5 с её не затирает
+
+  function renderControl(s) {
+    const show = canControl(s);
+    $("controlCard").hidden = !show;
+    if (!show) return;
+    const climate = s.climate || {};
+    const run = climate.run || {};
+    const control = climate.control || {};
+    $("controlWho").textContent = `${s.me.name || ""} · ${s.me.roleTitle || ""}`;
+    $("ctlModes").innerHTML = (control.modes || []).map((m) =>
+      `<button class="light" data-ctl="mode" data-mode="${esc(m.key)}">${esc(m.title)}</button>`).join("")
+      || `<span class="soft">камера не подключена</span>`;
+    const buttons = [];
+    if (!run.active) buttons.push(`<button data-ctl="run_start">Старт прогона</button>`);
+    else {
+      buttons.push(run.paused ? `<button data-ctl="run_resume">Продолжить</button>` : `<button class="light" data-ctl="run_pause">Пауза</button>`);
+      if (run.operator) buttons.push(`<button data-ctl="run_operator">Эталоны переключены</button>`);
+      buttons.push(`<button class="light" data-ctl="step_next">Следующий шаг</button>`);
+      buttons.push(`<button class="danger" data-ctl="run_stop">Стоп прогона</button>`);
+    }
+    $("ctlRun").innerHTML = buttons.join("");
+  }
+
+  // Шаги: пройденные серые, идущий выделен; кто управляет - правит текущий и будущие, переходит к шагу.
+  function renderSteps(s) {
+    // Пока человек печатает в поле шага, таблица не перерисовывается: иначе ввод потеряется.
+    const focused = document.activeElement;
+    if (focused && focused.tagName === "INPUT" && $("stepsTable").contains(focused)) return;
+    const climate = s.climate || {};
+    const index = climate.runIndex ?? -1;
+    const edit = canControl(s);
+    const steps = edit && stepsDraft ? stepsDraft : (climate.steps || []);
+    $("stepsHint").textContent = index >= 0 ? `идёт шаг ${index + 1} из ${steps.length}` : "прогон не идёт";
+    const head = `<tr><th>№</th><th>°C</th><th>Выдержка, мин</th><th>Точка</th><th></th></tr>`;
+    $("stepsTable").innerHTML = head + steps.map((step, i) => {
+      const done = index >= 0 && i < index, now = i === index;
+      const editable = edit && !done;
+      const status = done ? "пройден" : now ? "идёт" : "";
+      const cells = editable
+        ? `<td><input type="text" inputmode="decimal" data-step="${i}" data-key="temp" value="${esc(String(step.temp).replace(".", ","))}"></td>` +
+          `<td><input type="text" inputmode="decimal" data-step="${i}" data-key="hold_min" value="${esc(String(step.hold_min || 0).replace(".", ","))}"></td>` +
+          `<td><input type="checkbox" data-step="${i}" data-key="capture" ${step.capture !== false ? "checked" : ""}></td>`
+        : `<td>${esc((step.temp > 0 ? "+" : "") + String(step.temp).replace(".", ","))}</td><td>${esc(String(step.hold_min || 0))}</td>` +
+          `<td>${step.capture !== false ? "да" : "—"}</td>`;
+      const actions = [];
+      if (edit && index >= 0 && !now && !stepsDraft) actions.push(`<button class="light" data-goto="${i}" title="Перейти к этому шагу">→</button>`);
+      if (edit && (index < 0 ? steps.length > 1 : i > index)) actions.push(`<button class="danger" data-remove="${i}" title="Убрать шаг">✕</button>`);
+      return `<tr class="${done ? "done" : now ? "now" : ""}"><td>${i + 1}</td>${cells}<td>${status ? `<span class="soft">${status}</span> ` : ""}${actions.join(" ")}</td></tr>`;
+    }).join("");
+    $("stepsButtons").innerHTML = edit
+      ? `<button class="light" data-steps="add">+ Шаг</button>` +
+        (stepsDraft ? `<button data-steps="apply">Применить изменения</button><button class="light" data-steps="cancel">Отменить</button>` : "")
+      : "";
+  }
+
+  function renderActions(s) {
+    const log = ((s.climate || {}).control || {}).log || [];
+    $("actions").innerHTML = log.map((a) =>
+      `<li><span class="soft">${esc(a.time)}</span> <b>${esc(a.who)}</b> <span class="soft">(${esc(a.channel)})</span><br>` +
+      `<span class="${a.ok ? "" : "warn"}">${esc(a.action)}${a.details ? ": " + esc(a.details) : ""}</span>` +
+      `<div class="soft">${esc(a.result)}</div></li>`).join("") || `<li class="soft">Действий пока не было.</li>`;
+  }
+
+  // Права и вход: кто я, ссылка входа, а админу - раздача права управлять.
+  function renderAccess(s) {
+    const me = s.me;
+    const bot = s.bot || {};
+    const botName = bot.username ? "@" + bot.username : "боту наблюдения";
+    let html;
+    if (me && me.canControl) {
+      $("roleTitle").textContent = me.roleTitle || "";
+      html = `<div class="soft">Вы можете управлять камерой и прогоном. Все действия записываются в журнал с вашим именем.</div>`;
+      html += inTelegram
+        ? `<div class="buttons"><button class="light" data-login="open">Открыть сайт с правом управления</button></div>`
+        : `<div class="buttons"><button class="light" data-login="renew">Новая ссылка входа</button><button class="danger" data-login="logout">Выйти</button></div>`;
+    } else {
+      $("roleTitle").textContent = me && me.subscribed ? "наблюдатель" : "";
+      html = `<div class="soft">Управлять камерой могут только админ и назначенные им люди. Смотреть можно всем.</div>` +
+        (inTelegram ? "" : `<div class="soft" style="margin-top:4px">Если вам дали право - войдите по ссылке: напишите ${esc(botName)} команду /login.</div>`);
+    }
+    $("access").innerHTML = html;
     const users = s.users;
-    $("usersCard").hidden = !users;
+    $("rightsCard").hidden = !users;
     if (!users) return;
-    $("users").innerHTML = users.map((u) => {
-      const state = u.admin ? "администратор" : (u.approved ? u.levelTitle : "<span class=warn>ждёт одобрения</span>");
-      const self = u.id === me.id;
-      const buttons = [];
-      if (!u.approved) buttons.push(`<button data-user="${esc(u.id)}" data-action="ok">Одобрить</button>`);
-      if (!self) {
-        buttons.push(`<button class="light" data-user="${esc(u.id)}" data-action="ad">${u.admin ? "Снять админа" : "Сделать админом"}</button>`);
-        buttons.push(`<button class="danger" data-user="${esc(u.id)}" data-action="rm">Убрать</button>`);
-      }
-      return `<li><div>${esc(u.name || u.id)}${u.username ? ` <span class="soft">@${esc(u.username)}</span>` : ""}${self ? " <span class=soft>(вы)</span>" : ""}</div>` +
-        `<div class="soft">${state} · с ${esc(u.since)}</div>` +
-        (buttons.length ? `<div class="buttons">${buttons.join("")}</div>` : "") + `</li>`;
+    $("rights").innerHTML = users.map((u) => {
+      const button = u.role === "admin" ? `<span class="soft">админ</span>`
+        : u.role === "operator" ? `<button class="danger" data-role="viewer" data-user="${esc(u.id)}">Снять право</button>`
+        : `<button class="light" data-role="operator" data-user="${esc(u.id)}">Дать право</button>`;
+      return `<li class="row"><div><div>${esc(u.name)}${u.username ? ` <span class="soft">@${esc(u.username)}</span>` : ""}</div>` +
+        `<div class="soft">${esc(u.roleTitle)}</div></div>${button}</li>`;
     }).join("");
   }
 
   function render(s) {
     state = s;
     renderNow(s);
+    renderControl(s);
     renderRun(s);
+    renderSteps(s);
     renderEvents(s);
-    if (!busy) renderSettings(s);
+    renderActions(s);
+    renderCharts(s);
+    if (!busy) { renderSettings(s); renderAccess(s); }
   }
+
+  // Действие управления: подтверждение опасного, ответ программы - во всплывающей строке.
+  async function control(body, confirmText) {
+    const run = async () => {
+      haptic("heavy");
+      try {
+        const answer = await api("api/control", body);
+        toast((answer.ok ? "✅ " : "❌ ") + answer.text);
+        refresh();
+      } catch (error) {
+        toast("Не выполнено: " + error.message);
+      }
+    };
+    if (confirmText) confirmDo(confirmText, run); else run();
+  }
+
+  $("controlCard").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-ctl]");
+    if (!button) return;
+    const action = button.dataset.ctl;
+    if (action === "estop") control({ action }, "ЭКСТРЕННО ОСТАНОВИТЬ КАМЕРУ? Автопрогон тоже остановится.");
+    else if (action === "mode") control({ action, mode: button.dataset.mode }, `Переключить камеру в режим «${button.textContent}»?`);
+    else if (action === "setpoint") {
+      const value = $("ctlSetpoint").value.trim();
+      if (!value) { toast("Впишите уставку, °C"); return; }
+      control({ action, value }, `Задать камере ${value} °C?`);
+    }
+    else if (action === "run_stop") control({ action }, "Остановить автопрогон? Уставка камеры останется как есть.");
+    else if (action === "run_start") control({ action }, "Запустить автопрогон по текущему сценарию?");
+    else if (action === "step_next") control({ action }, "Перейти к следующему шагу, не дожидаясь точек текущего?");
+    else control({ action });
+  });
+
+  function draftSteps() {
+    if (!stepsDraft) stepsDraft = JSON.parse(JSON.stringify((state.climate || {}).steps || []));
+    return stepsDraft;
+  }
+
+  $("stepsTable").addEventListener("change", (event) => {
+    const input = event.target.closest("input[data-step]");
+    if (!input || !state) return;
+    const steps = draftSteps();
+    const step = steps[Number(input.dataset.step)];
+    if (input.dataset.key === "capture") step.capture = input.checked;
+    else step[input.dataset.key] = Number(String(input.value).replace(",", "."));
+    renderSteps(state);
+  });
+
+  $("stepsTable").addEventListener("click", (event) => {
+    const go = event.target.closest("button[data-goto]");
+    if (go) {
+      const index = Number(go.dataset.goto);
+      control({ action: "step_goto", index }, `Перейти к шагу ${index + 1}? Точки текущего шага сняты не будут.`);
+      return;
+    }
+    const remove = event.target.closest("button[data-remove]");
+    if (remove) {
+      draftSteps().splice(Number(remove.dataset.remove), 1);
+      renderSteps(state);
+    }
+  });
+
+  $("stepsButtons").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-steps]");
+    if (!button || !state) return;
+    const act = button.dataset.steps;
+    if (act === "add") {
+      const steps = draftSteps();
+      const last = steps.length ? steps[steps.length - 1] : { temp: 25 };
+      steps.push({ temp: last.temp, hold_min: 0, settle_min: null, settle_rate: null, reach_tolerance_c: null, capture: true, note: "" });
+      renderSteps(state);
+    } else if (act === "cancel") {
+      stepsDraft = null;
+      renderSteps(state);
+    } else if (act === "apply") {
+      const steps = stepsDraft;
+      if (steps.some((step) => isNaN(step.temp) || isNaN(step.hold_min))) { toast("Температура и выдержка - числа"); return; }
+      confirmDo("Применить изменения шагов" + (((state.climate || {}).runIndex ?? -1) >= 0 ? " к идущему прогону?" : "?"), async () => {
+        try {
+          const answer = await api("api/control", { action: "scenario_steps", steps });
+          toast((answer.ok ? "✅ " : "❌ ") + answer.text);
+          if (answer.ok) stepsDraft = null;
+          refresh();
+        } catch (error) {
+          toast("Не выполнено: " + error.message);
+        }
+      });
+    }
+  });
+
+  $("access").addEventListener("click", async (event) => {
+    const button = event.target.closest("button[data-login]");
+    if (!button) return;
+    const act = button.dataset.login;
+    if (act === "logout") {
+      confirmDo("Выйти? Управлять снова можно будет по ссылке из бота (/login).", () => { storeLogin(""); window.location.reload(); });
+      return;
+    }
+    const go = async () => {
+      try {
+        const answer = await api("api/login", { renew: act === "renew" });
+        if (!answer.url) { toast("Не получилось: " + answer.text); return; }
+        if (act === "open") { tg.openLink(answer.url); return; }
+        loginKey = new URLSearchParams(new URL(answer.url).hash.slice(1)).get("login") || loginKey;
+        storeLogin(loginKey);
+        try { await navigator.clipboard.writeText(answer.url); toast("Новая ссылка скопирована, прежние больше не работают"); }
+        catch (e) { toast("Новая ссылка готова, прежние больше не работают"); }
+      } catch (error) {
+        toast("Не получилось: " + error.message);
+      }
+    };
+    if (act === "renew") confirmDo("Выдать новую ссылку входа? Все прежние перестанут работать.", go); else go();
+  });
+
+  $("rights").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-role]");
+    if (!button) return;
+    const role = button.dataset.role;
+    confirmDo(role === "operator" ? "Дать этому человеку право управлять камерой?" : "Снять право управлять камерой?", async () => {
+      try {
+        const answer = await api("api/role", { id: button.dataset.user, role });
+        state.users = answer.users;
+        renderAccess(state);
+        toast((answer.ok ? "✅ " : "❌ ") + answer.text);
+      } catch (error) {
+        toast("Не получилось: " + error.message);
+      }
+    });
+  });
 
   // ------------------------------------------------------------------ действия
 
@@ -549,9 +1097,9 @@
     haptic("light");
     try {
       const answer = await api("api/settings", change);
-      state.me = Object.assign({}, state.me, answer.me);
+      state.me = answer.me;
       renderSettings(state);
-      toast("Сохранено");
+      toast(change.subscribed === true ? "Вы подписаны" : change.subscribed === false ? "Вы отписаны" : "Сохранено");
     } catch (error) {
       toast("Не сохранилось: " + error.message);
     } finally {
@@ -569,67 +1117,55 @@
     try {
       toast((await api("api/sendfile", { folder: file.folder, name: file.name })).text);
     } catch (error) {
-      toast("Не отправлено: " + error.message);
+      toast("Не получилось: " + error.message);
     }
     setTimeout(() => { button.disabled = false; }, 3000);
   });
 
-  $("users").addEventListener("click", async (event) => {
-    const button = event.target.closest("button[data-action]");
-    if (!button) return;
-    const run = async () => {
-      haptic("medium");
-      try {
-        const answer = await api("api/users", { action: button.dataset.action, id: button.dataset.user });
-        state.users = answer.users;
-        renderSettings(state);
-        toast(answer.text);
-      } catch (error) {
-        toast("Не получилось: " + error.message);
-      }
-    };
-    if (button.dataset.action === "rm" && tg && tg.showConfirm) {
-      tg.showConfirm("Убрать пользователя из наблюдения?", (yes) => { if (yes) run(); });
-    } else {
-      run();
+  $("tab-settings").addEventListener("click", async (event) => {
+    const sub = event.target.closest("button[data-sub]");
+    if (sub) {
+      if (sub.dataset.sub === "1") await saveSettings({ subscribed: true });
+      else confirmDo("Отписаться от уведомлений о прогоне?", () => saveSettings({ subscribed: false }));
+      return;
     }
+    const site = event.target.closest("button[data-site]");
+    if (!site) return;
+    if (site.dataset.site === "open") { tg.openLink(siteUrl); return; }
+    try { await navigator.clipboard.writeText(siteUrl); toast("Адрес сайта скопирован"); }
+    catch (e) { toast("Скопируйте адрес вручную: " + siteUrl); }
   });
 
   // ------------------------------------------------------------------ обновление
 
-  function blocked(title, text) {
-    $("blocked").hidden = false;
-    $("blocked").innerHTML = `<b>${esc(title)}</b>${esc(text)}`;
-    document.querySelectorAll(".tab").forEach((tab) => { tab.hidden = true; });
-    $("nav").hidden = true;
-  }
-
   async function refresh() {
     if (document.hidden) return;
     try {
-      render(await api("api/state"));
+      const fresh = await api("api/state");
+      if (!inTelegram && loginKey && !fresh.me) {
+        // Ссылку входа заменили новой или право сняли: дальше - только просмотр.
+        storeLogin("");
+        loginKey = "";
+        toast("Ссылка входа больше не действует: получите новую в боте командой /login");
+      }
+      render(fresh);
       lastOk = Date.now();
       $("link").innerHTML = `<span class="dot" style="background:var(--ok)"></span>${esc(state.time ? state.time.slice(-8) : "на связи")}`;
     } catch (error) {
-      if (error.status === 401) {
-        blocked("Нет доступа", " Напишите боту /start и дождитесь, пока администратор одобрит заявку.");
-        clearInterval(timer);
-        return;
-      }
       const silent = lastOk ? Math.round((Date.now() - lastOk) / 1000) + " с" : "";
       $("link").innerHTML = `<span class="dot" style="background:var(--bad)"></span>нет связи ${silent}`;
     }
   }
 
-  let timer = null;
-  if (!initData) {
-    blocked("Откройте через Telegram", " Это мини-приложение бота наблюдения: нажмите в боте кнопку «Камера» или команду /app.");
-  } else {
-    refresh();
-    timer = setInterval(refresh, 5000);
-    document.addEventListener("visibilitychange", refresh);
-    window.addEventListener("resize", () => state && drawChart(state.history || {}, (state.climate || {}).history || {}));
-  }
+  if (!inTelegram) $("filesHint").textContent = "скачать на этот компьютер";
+  refresh();
+  setInterval(refresh, 5000);
+  document.addEventListener("visibilitychange", refresh);
+  window.addEventListener("resize", () => {
+    if (!state) return;
+    drawChart(state.history || {}, (state.climate || {}).history || {});
+    renderCharts(state);
+  });
 </script>
 </body>
 </html>

@@ -524,6 +524,32 @@ Card {
                     wrapMode: Text.WordWrap
                 }
 
+                // Экстренная остановка: прогон останавливается, камера переходит в «Стоп». Действие - в журнале.
+                FancyButton {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 40
+                    visible: root.climate.driver !== "none"
+                    fontPixelSize: 15
+                    text: "⛔  ЭКСТРЕННАЯ ОСТАНОВКА КАМЕРЫ"
+                    tone: "#dc2626"; toneHover: "#b91c1c"; tonePressed: "#991b1b"
+                    toolTipText: "Останавливает автопрогон и переводит камеру в «Стоп». Работает и во время прогона."
+                    onClicked: estopConfirm.open()
+                }
+
+                Dialog {
+                    id: estopConfirm
+                    anchors.centerIn: Overlay.overlay
+                    modal: true
+                    title: "Экстренная остановка"
+                    standardButtons: Dialog.Yes | Dialog.No
+                    Text {
+                        text: "Остановить камеру? Автопрогон тоже остановится."
+                        font.pixelSize: 13
+                        font.family: "Bahnschrift"
+                    }
+                    onAccepted: if (root.appController) root.appController.emergencyStopClimate()
+                }
+
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 8
@@ -548,28 +574,28 @@ Card {
                         fontPixelSize: 12
                         text: "Задать"
                         tone: "#0284c7"; toneHover: "#0369a1"; tonePressed: "#075985"
-                        enabled: root.climate.canSet === true && !root.run.active && setpointField.text.length > 0
+                        enabled: root.climate.canSet === true && setpointField.text.length > 0
+                        toolTipText: root.run.active ? "Во время прогона ручная уставка ставит прогон на паузу" : ""
                         onClicked: if (root.appController) root.appController.setClimateSetpoint(setpointField.text)
                     }
 
-                    FancyButton {
-                        Layout.preferredWidth: 80
-                        Layout.preferredHeight: 30
-                        fontPixelSize: 12
-                        text: "Пуск"
-                        tone: "#16a34a"; toneHover: "#15803d"; tonePressed: "#166534"
-                        enabled: root.climate.canRun === true
-                        onClicked: if (root.appController) root.appController.setClimateRunning(true)
-                    }
+                    // Режимы камеры (ESPEC: пуск, стоп, выключить). Во время прогона ставят его на паузу.
+                    Repeater {
+                        model: (root.climate.control || {}).modes || []
 
-                    FancyButton {
-                        Layout.preferredWidth: 80
-                        Layout.preferredHeight: 30
-                        fontPixelSize: 12
-                        text: "Стоп"
-                        tone: "#ef4444"; toneHover: "#dc2626"; tonePressed: "#b91c1c"
-                        enabled: root.climate.canRun === true
-                        onClicked: if (root.appController) root.appController.setClimateRunning(false)
+                        FancyButton {
+                            required property var modelData
+                            Layout.preferredWidth: 90
+                            Layout.preferredHeight: 30
+                            fontPixelSize: 12
+                            text: modelData.title
+                            tone: modelData.key === "constant" || modelData.key === "run" ? "#16a34a"
+                                  : modelData.key === "off" ? "#64748b" : "#ef4444"
+                            toneHover: "#334155"
+                            tonePressed: "#1e293b"
+                            toolTipText: root.run.active ? "Во время прогона переключение режима ставит прогон на паузу" : ""
+                            onClicked: if (root.appController) root.appController.setClimateMode(modelData.key)
+                        }
                     }
 
 
@@ -694,7 +720,7 @@ Card {
                             Layout.preferredWidth: 190
                             Layout.preferredHeight: 30
                             fontPixelSize: 12
-                            text: root.run.active ? "Сценарий (просмотр)…" : "Сценарий прогона…"
+                            text: root.run.active ? "Сценарий (правка на ходу)…" : "Сценарий прогона…"
                             tone: "#0284c7"; toneHover: "#0369a1"; tonePressed: "#075985"
                             onClicked: scenarioDialog.open()
                         }

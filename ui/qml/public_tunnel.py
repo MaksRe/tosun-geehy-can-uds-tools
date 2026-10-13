@@ -48,11 +48,16 @@ REGISTER_WAIT_S = 40.0
 CLOUDFLARE_URL = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
 CLOUDFLARE_REGISTERED = "Registered tunnel connection"
 NGROK_ERROR_CODE = re.compile(r"ERR_NGROK_\d+")
+# ngrok повторяет присланный токен в тексте ошибки: его нельзя показывать в окне и писать в журнал.
+TOKEN_ECHO = re.compile(r"(Your authtoken:\s*)\S+", re.IGNORECASE)
 # Частые ошибки ngrok - словами, что делать.
 NGROK_ERRORS = {
-    "ERR_NGROK_4018": "ngrok не знает вашу учётную запись: впишите токен ngrok (ngrok.com - Your Authtoken)",
-    "ERR_NGROK_105": "токен ngrok неверный: скопируйте его заново на ngrok.com (Your Authtoken)",
-    "ERR_NGROK_107": "токен ngrok неверный или отозван: скопируйте его заново на ngrok.com",
+    "ERR_NGROK_4018": "ngrok не знает вашу учётную запись: впишите в поле «Токен ngrok» Authtoken со страницы "
+                      "dashboard.ngrok.com/get-started/your-authtoken",
+    "ERR_NGROK_105": "это не Authtoken: нужен именно Authtoken (не API Key и не Access Key) со страницы "
+                     "dashboard.ngrok.com/get-started/your-authtoken",
+    "ERR_NGROK_107": "Authtoken ngrok неверный или отозван: скопируйте его заново со страницы "
+                     "dashboard.ngrok.com/get-started/your-authtoken",
     "ERR_NGROK_108": "с этой учётной записью ngrok уже работает другой агент (бесплатно - только один): "
                      "закройте ngrok на другом компьютере",
     "ERR_NGROK_334": "этот адрес ngrok уже занят другим запущенным агентом: закройте его",
@@ -223,6 +228,12 @@ class TunnelProcess:
         """Разбор строки вывода: заполняет state["url"], ["ready"], ["error"], ["rate_limited"]."""
         raise NotImplementedError
 
+    def redact(self, text: str) -> str:
+        """Строка без секретов (токен ngrok): для журнала и окна."""
+        text = TOKEN_ECHO.sub(r"\1***", str(text))
+        secret = str(self._options.get("authtoken", "") or "").strip()
+        return text.replace(secret, "***") if len(secret) >= 8 else text
+
     def no_connection_text(self, state: dict) -> str:
         """Адрес выдан, а соединения нет: что сказать оператору."""
         return f"{self.NAME}: адрес выдан, но соединения нет. Последняя ошибка: {state.get('error') or 'нет'}"
@@ -271,7 +282,7 @@ class TunnelProcess:
                 line = raw.decode("utf-8", errors="replace").rstrip()
                 if log is not None:
                     try:
-                        log.write(line + "\n")
+                        log.write(self.redact(line) + "\n")
                         log.flush()
                     except OSError:
                         pass
@@ -345,11 +356,20 @@ class NgrokTunnel(TunnelProcess):
                 state["ready"] = True
             problem = str(data.get("err") or "")
             if data.get("lvl") in ("eror", "crit") and problem and problem != "<nil>":
-                state["error"] = self._explain(problem)
+                self._note_error(state, problem)
             return
-        # Без JSON ngrok пишет только тяжёлые ошибки (например, «ERROR: authentication failed»).
-        if "ERR_NGROK_" in line or line.startswith("ERROR"):
-            state["error"] = self._explain(line)
+        # Без JSON ngrok повторяет тяжёлую ошибку строками «ERROR: ...»; пустые и хвостовые не затирают причину.
+        if line.startswith("ERROR"):
+            text = line[len("ERROR:"):].strip() if line.startswith("ERROR:") else line
+            if text:
+                self._note_error(state, text)
+
+    def _note_error(self, state: dict, text: str):
+        """Запоминает причину: ошибка с кодом ngrok важнее любой строки без кода, первая - важнее следующих."""
+        known = bool(NGROK_ERROR_CODE.search(text))
+        if not state["error"] or (known and not state.get("error_known")):
+            state["error"] = self.redact(self._explain(text))
+            state["error_known"] = known
 
     @staticmethod
     def _explain(text: str) -> str:

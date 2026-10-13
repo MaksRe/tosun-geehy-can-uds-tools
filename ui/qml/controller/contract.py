@@ -242,7 +242,6 @@ class AppControllerContract:
     _chamber_live_section: Any
     _remote_lock: Any
     _remote_incoming: Any
-    _remote_found_chat: Any
     _remote_settings: Any
     _remote_events: Any
     _remote_history: Any
@@ -266,6 +265,14 @@ class AppControllerContract:
     _remote_timer: Any
     _remote_users: Any
     _remote_tunnels: Any
+    _control_log: Any
+    _climate_run_offset: Any
+    _climate_run_board_attempts: Any
+    _climate_run_board_since: Any
+    _control_lock: Any
+    _control_pending: Any
+    _control_thread: Any
+    _control_timer: Any
     _remote_tunnel_status: Any
     _remote_tunnel_ok: Any
     _remote_public_url: Any

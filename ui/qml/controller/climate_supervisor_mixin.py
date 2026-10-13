@@ -163,6 +163,9 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             "steps": [dict(step) for step in getattr(self, "_climate_run_steps", []) or []],
             "scenario": str((getattr(self, "_climate_scenario", None) or {}).get("name", "")),
             "index": int(self._climate_run_index),
+            # Доводка платы на текущем шаге: сдвиг уставки и сколько попыток уже было.
+            "offset": float(getattr(self, "_climate_run_offset", 0.0)),
+            "board_attempts": int(getattr(self, "_climate_run_board_attempts", 0)),
             "labels": list(self._climate_run_labels),
             "done": list(self._climate_run_done),
             "stage": self._climate_run_stage,
@@ -288,10 +291,12 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             if auto_write else "Автозапись профиля выключена: в конце профиль придётся записать вручную", "warn")
 
         remote = getattr(self, "_remote_settings", {}) or {}
+        users = getattr(self, "_remote_users", None)
         telegram = bool(remote.get("telegram_enabled")) and bool(remote.get("telegram_token")) \
-            and bool(remote.get("telegram_chat"))
-        add("telegram", telegram, "Telegram включён: события будут приходить в чат" if telegram
-            else "Telegram не настроен: о бедах узнаете только у камеры («Удалённое наблюдение»)", "warn")
+            and users is not None and bool(users.all())
+        add("telegram", telegram, "Telegram включён: события будут приходить подписчикам бота" if telegram
+            else "Telegram не настроен или никто не подписан (/start в боте): о бедах узнаете только у камеры",
+            "warn")
 
         try:
             directory = self._climate_logs_directory()
@@ -478,15 +483,16 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             self._climate_auto_alert("stopped", False, "", cleared="камера снова работает.")
             self._climate_auto_alert("stopped_hard", False, "")
 
-        # Уставку сменили на пульте: вернуть узел, не вышло - проблема.
+        # Уставку сменили на пульте: вернуть узел, не вышло - проблема. Сдвиг доводкой платы - не ошибка.
+        target = self._climate_run_setpoint() if hasattr(self, "_climate_run_setpoint") else node
         setpoint = getattr(reading, "setpoint_c", None)
-        wrong = setpoint is not None and abs(float(setpoint) - node) > self.AUTO_SETPOINT_TOLERANCE_C
+        wrong = setpoint is not None and abs(float(setpoint) - target) > self.AUTO_SETPOINT_TOLERANCE_C
         wrong_s = self._climate_auto_since("setpoint_since", wrong, now)
         if wrong_s >= self.AUTO_SETPOINT_RESEND_S and not self._climate_auto_watch.get("setpoint_resent"):
             self._climate_auto_watch["setpoint_resent"] = True
-            self._climate_event(f"уставка камеры {_c(setpoint)} не совпадает с узлом {_c(node)}: задаю узел снова.",
+            self._climate_event(f"уставка камеры {_c(setpoint)} не совпадает с узлом {_c(target)}: задаю узел снова.",
                                 "warn")
-            self._climate_send_setpoint(node)
+            self._climate_send_setpoint(target)
         self._climate_auto_alert(
             "setpoint", wrong_s >= self.AUTO_SETPOINT_ALERT_S,
             f"уставка камеры {_c(setpoint)} так и не стала {_c(node)}: её меняют с пульта или камера отказывает.",
@@ -495,7 +501,7 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         actual = getattr(reading, "actual_c", None)
         tolerance = self._climate_run_param("reach_tolerance_c")
         if actual is not None:
-            distance = abs(float(actual) - node)
+            distance = abs(float(actual) - target)
             # Камера не идёт к уставке: за 20 минут расстояние почти не сократилось.
             if stage == "reach":
                 step = 10.0 / speed
@@ -697,6 +703,9 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         self._climate_run_steps = ([dict(step) for step in steps] if len(steps) == len(self._climate_run_nodes)
                                    else [{"temp": node} for node in self._climate_run_nodes])
         self._climate_run_index = int(saved["index"])
+        # Доводка платы на этом шаге продолжается с того же сдвига уставки.
+        self._climate_run_offset = float(saved.get("offset", 0.0) or 0.0)
+        self._climate_run_board_attempts = int(saved.get("board_attempts", 0) or 0)
         self._climate_run_labels = list(saved.get("labels") or []) or [str(self._chamber_label).strip()]
         self._climate_run_done = [float(node) for node in saved.get("done") or []]
         self._climate_run_connected = str(self._chamber_label).strip()

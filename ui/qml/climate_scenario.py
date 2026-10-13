@@ -42,6 +42,11 @@ DEFAULTS = {
     "settle_rate": 0.05,
     "reach_timeout_min": 120.0,
     "settle_timeout_min": 180.0,
+    # Доводка платы: плата должна устояться у температуры шага с этим допуском; если нет -
+    # уставка камеры сдвигается не дальше чем на board_max_shift_c, не больше board_attempts раз.
+    "board_tolerance_c": 1.0,
+    "board_max_shift_c": 10.0,
+    "board_attempts": 3.0,
 }
 
 # Поля шага, которые могут переопределять общие: (ключ, наименьшее, наибольшее).
@@ -57,6 +62,9 @@ GENERAL_LIMITS = {
     "settle_rate": (0.001, 5.0),
     "reach_timeout_min": (1.0, 10000.0),
     "settle_timeout_min": (1.0, 10000.0),
+    "board_tolerance_c": (0.2, 10.0),
+    "board_max_shift_c": (0.0, 30.0),
+    "board_attempts": (0.0, 10.0),
 }
 TEMP_LIMITS = (-100.0, 200.0)
 
@@ -248,3 +256,74 @@ def summary(scenario: dict) -> str:
     points = sum(1 for step in steps if step.get("capture"))
     mode = "только плата" if scenario.get("board_only") else "эталоны и трубка"
     return f"{len(steps)} шагов ({temps} °C), точки в {points}, {mode}"
+
+
+# Поля для журнала изменений: ключ - как назвать по-русски, единицы.
+DIFF_GENERAL = (
+    ("name", "название", ""),
+    ("board_only", "одна плата", ""),
+    ("single_model", "уход платы", ""),
+    ("labels", "пометки", ""),
+    ("auto_write", "запись профиля", ""),
+    ("reach_tolerance_c", "допуск выхода на уставку", " °C"),
+    ("settle_min", "окно устойчивости", " мин"),
+    ("settle_rate", "скорость устойчивости", " °C/мин"),
+    ("reach_timeout_min", "предупредить, если не вышла на уставку за", " мин"),
+    ("settle_timeout_min", "предупредить, если не устоялась за", " мин"),
+    ("board_tolerance_c", "допуск платы к шагу", " °C"),
+    ("board_max_shift_c", "наибольший сдвиг уставки при доводке", " °C"),
+    ("board_attempts", "попыток доводки", ""),
+    ("finish_setpoint", "уставка в конце", " °C"),
+    ("finish_stop", "остановить камеру в конце", ""),
+)
+DIFF_STEP = (
+    ("temp", "температура", " °C"),
+    ("hold_min", "выдержка", " мин"),
+    ("capture", "точка", ""),
+    ("reach_tolerance_c", "допуск", " °C"),
+    ("settle_min", "окно", " мин"),
+    ("settle_rate", "скорость", " °C/мин"),
+    ("note", "примечание", ""),
+)
+
+
+def _shown(value, unit: str = "") -> str:
+    """Значение для журнала: да/нет, «общее» для пустого, числа без лишних нулей."""
+    if value is None or value == "":
+        return "общее" if unit else "—"
+    if isinstance(value, bool):
+        return "да" if value else "нет"
+    if isinstance(value, (int, float)):
+        text = f"{value:+g}" if unit == " °C" else f"{value:g}"
+        return text.replace(".", ",") + unit
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value) or "—"
+    return f"{value}{unit}"
+
+
+def diff(old: dict, new: dict) -> list[str]:
+    """Что изменилось в сценарии, строками «что: было → стало» - для журнала действий."""
+    old = old or {}
+    new = new or {}
+    lines = []
+    for key, title, unit in DIFF_GENERAL:
+        if old.get(key) != new.get(key):
+            lines.append(f"{title}: {_shown(old.get(key), unit)} → {_shown(new.get(key), unit)}")
+    if (old.get("description") or "") != (new.get("description") or ""):
+        lines.append("описание изменено")
+    old_steps = old.get("steps") or []
+    new_steps = new.get("steps") or []
+    for index in range(max(len(old_steps), len(new_steps))):
+        number = index + 1
+        if index >= len(old_steps):
+            lines.append(f"добавлен шаг {number}: {_shown(new_steps[index].get('temp'), ' °C')}")
+            continue
+        if index >= len(new_steps):
+            lines.append(f"убран шаг {number}: {_shown(old_steps[index].get('temp'), ' °C')}")
+            continue
+        changes = [f"{title} {_shown(old_steps[index].get(key), unit)} → {_shown(new_steps[index].get(key), unit)}"
+                   for key, title, unit in DIFF_STEP
+                   if old_steps[index].get(key) != new_steps[index].get(key)]
+        if changes:
+            lines.append(f"шаг {number}: " + ", ".join(changes))
+    return lines

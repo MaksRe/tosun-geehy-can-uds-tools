@@ -3355,23 +3355,58 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot(str)
     def setClimateSetpoint(self, text):
-        """Цель функции в задании уставки камере, затем камера идёт к новой температуре."""
-        self._climate_set_setpoint_text(str(text))
+        """Цель функции в задании уставки камере, затем камера идёт к новой температуре; действие в журнале."""
+        self._control_gui("setpoint", {"value": str(text).replace("°", "").replace("C", "").strip()})
 
     @Slot(str)
     def sendClimateRaw(self, text):
         """Цель функции в отправке строки камере как есть, затем её ответ виден в журнале обмена."""
-        self._climate_send_raw(str(text))
+        from .climate_control_mixin import is_setting_command
+
+        ok = self._climate_send_raw(str(text))
+        if is_setting_command(str(text)):
+            self._control_note("строка камере", str(text).strip(), bool(ok), self._climate_command_status)
 
     @Slot(bool)
     def setClimateRunning(self, on):
-        """Цель функции в пуске или остановке камеры из программы."""
-        self._climate_send_run(bool(on))
+        """Цель функции в пуске или остановке камеры из программы; действие в журнале."""
+        espec = self._climate_settings.get("driver") == "espec"
+        self._control_gui("mode", {"mode": ("constant" if on else "standby") if espec else ("run" if on else "stop")})
 
     @Slot(str, str)
     def sendClimateCommand(self, key, values_json):
         """Цель функции в отправке команды ESPEC из каталога, затем её ответ словами виден в журнале обмена."""
-        self._climate_send_espec(str(key), str(values_json))
+        from .climate_control_mixin import is_setting_command
+
+        ok = self._climate_send_espec(str(key), str(values_json))
+        sent = str(self._climate_command_status).replace("Отправляю «", "").rstrip(".»")
+        if ok and is_setting_command(sent):
+            self._control_note("команда камере", sent, True)
+
+    @Slot()
+    def emergencyStopClimate(self):
+        """Цель функции в экстренной остановке: прогон останавливается, камера переходит в «Стоп»."""
+        self._control_gui("estop")
+
+    @Slot(str)
+    def setClimateMode(self, mode):
+        """Цель функции в переключении режима камеры (пуск, стоп, выключить); прогон при этом встаёт на паузу."""
+        self._control_gui("mode", {"mode": str(mode)})
+
+    @Slot(int)
+    def gotoClimateStep(self, index):
+        """Цель функции в переходе идущего прогона к шагу сценария с этим номером (с нуля)."""
+        self._control_gui("step_goto", {"index": int(index)})
+
+    @Slot(str)
+    def applyClimateScenarioLive(self, text):
+        """Цель функции в применении правок сценария к идущему прогону; пройденные шаги не меняются."""
+        self._control_gui("scenario", {"scenario": str(text)})
+
+    @Slot(str, str)
+    def setRemoteUserRole(self, chat_id, role):
+        """Цель функции в выдаче или снятии права управлять камерой подписчику бота; действие в журнале."""
+        self._control_gui("role", {"id": str(chat_id), "role": str(role)})
 
     @Slot()
     def refreshClimatePorts(self):
@@ -3386,22 +3421,25 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
     @Slot(str)
     def updateClimateScenario(self, text):
         """Цель функции в приёме правки сценария из формы целиком, затем он проверяется и запоминается."""
-        self._climate_scenario_update(str(text))
+        self._control_gui_scenario_update(str(text))
 
     @Slot(str)
     def newClimateScenario(self, kind):
         """Цель функции в создании сценария: «board_cycle» - испытание платы за один цикл, иначе пустой."""
-        self._climate_scenario_new(str(kind))
+        if self._climate_scenario_new(str(kind)):
+            self._control_note("новый сценарий", self._climate_scenario.get("name", ""), True)
 
     @Slot(str)
     def saveClimateScenario(self, path):
         """Цель функции в сохранении сценария: пустой путь - в свой файл или в папку сценариев по названию."""
-        self._climate_scenario_save(self._to_local_path(path) if str(path).strip() else "")
+        if self._climate_scenario_save(self._to_local_path(path) if str(path).strip() else ""):
+            self._control_note("сценарий сохранён", self._climate_scenario_path, True)
 
     @Slot(str)
     def loadClimateScenario(self, path):
         """Цель функции в загрузке сценария из файла, затем прогон пойдёт по нему."""
-        self._climate_scenario_load(self._to_local_path(path))
+        if self._climate_scenario_load(self._to_local_path(path)):
+            self._control_note("сценарий загружен", self._climate_scenario_path, True)
 
     @Slot()
     def refreshClimateScenarios(self):
@@ -3418,11 +3456,14 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
     def resumeClimateRun(self):
         """Цель функции в продолжении прогона, прерванного перезапуском программы, с того же узла."""
         self._climate_auto_resume_now()
+        self._control_note("продолжение прогона после перезапуска", "", bool(self._climate_run_stage),
+                           self._climate_run_status)
 
     @Slot()
     def discardClimateRun(self):
         """Цель функции в отказе от прерванного прогона, затем его файл состояния удаляется."""
         self._climate_auto_discard_resume()
+        self._control_note("отказ от прерванного прогона", "", True)
 
     @Slot()
     def runClimateSelftest(self):
@@ -3446,23 +3487,23 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot()
     def startClimateRun(self):
-        """Цель функции в запуске автоматического прогона, затем узлы проходятся сами."""
-        self._climate_run_start()
+        """Цель функции в запуске автоматического прогона, затем узлы проходятся сами; действие в журнале."""
+        self._control_gui("run_start")
 
     @Slot()
     def stopClimateRun(self):
         """Цель функции в остановке автоматического прогона, затем уставка камеры остаётся как есть."""
-        self._climate_run_stop()
+        self._control_gui("run_stop")
 
     @Slot(bool)
     def pauseClimateRun(self, paused):
         """Цель функции в паузе прогона, затем он ждёт, не переходя к следующему шагу."""
-        self._climate_run_pause(bool(paused))
+        self._control_gui("run_pause" if paused else "run_resume")
 
     @Slot()
     def continueClimateRun(self):
         """Цель функции в подтверждении, что эталоны переключены, затем прогон снимает следующую точку."""
-        self._climate_run_continue()
+        self._control_gui("run_operator")
 
     @Slot(str, str)
     def setRemoteSetting(self, key, value):
@@ -3474,20 +3515,10 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         """Цель функции в включении части наблюдения, затем страница, бот или копия начинают работать."""
         self._remote_set(str(key), bool(enabled))
 
-    @Slot()
-    def newRemoteServerKey(self):
-        """Цель функции в новом ключе доступа к странице, затем открыть её можно только по адресу с ключом."""
-        self._remote_new_key()
-
-    @Slot()
-    def newRemoteAccessCode(self):
-        """Цель функции в новом коде доступа к боту, затем «/start КОД» подключает без одобрения."""
-        self._remote_new_access_code()
-
-    @Slot(str, str)
-    def remoteUserAction(self, chat_id, action):
-        """Цель функции в управлении пользователями бота, затем человек одобрен, убран или стал администратором."""
-        self._remote_user_action(str(chat_id), str(action))
+    @Slot(str)
+    def removeRemoteUser(self, chat_id):
+        """Цель функции в отписке подписчика из окна программы, затем уведомления ему больше не приходят."""
+        self._remote_user_remove(str(chat_id))
 
     @Slot(str, str)
     def setRemoteUserLevel(self, chat_id, level):
@@ -3498,11 +3529,6 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
     def setRemoteUserFlag(self, chat_id, key, enabled):
         """Цель функции в переключателях пользователя (точки, сводки, файлы), затем рассылка их учитывает."""
         self._remote_user_set(str(chat_id), str(key), bool(enabled))
-
-    @Slot()
-    def findRemoteTelegramChat(self):
-        """Цель функции в поиске номера чата, затем его не нужно узнавать вручную."""
-        self._remote_find_chat()
 
     @Slot()
     def sendRemoteTelegramTest(self):

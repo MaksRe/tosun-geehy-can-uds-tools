@@ -31,6 +31,7 @@ from .controller import (
     AppControllerChamberMixin,
     AppControllerChamberTestMixin,
     AppControllerClimateChamberMixin,
+    AppControllerClimateControlMixin,
     AppControllerClimateScenarioMixin,
     AppControllerClimateSupervisorMixin,
     AppControllerTrialMixin,
@@ -73,6 +74,7 @@ class AppController(
     AppControllerChamberTestMixin,
     AppControllerRemoteMonitorMixin,
     AppControllerClimateChamberMixin,
+    AppControllerClimateControlMixin,
     AppControllerClimateScenarioMixin,
     AppControllerClimateSupervisorMixin,
     AppControllerTrialMixin,
@@ -624,5 +626,7 @@ class AppController(
         self._init_remote_monitor_state()
         # Связь с климатической камерой сообщает о себе наблюдению, поэтому идёт после него.
         self._init_climate_state()
+        # Управление камерой с правами и журналом: опирается на камеру, прогон и бота.
+        self._init_control_state()
 
         self._rebuild_can_traffic_view()

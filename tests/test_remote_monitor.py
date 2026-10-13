@@ -2,12 +2,13 @@
 
 Рабочее место далеко от камеры, и наблюдение - единственный способ узнать, что
 там происходит. Тесты закрепляют:
-- мини-приложение отдаёт данные только одобренным пользователям бота по
-  подписи Telegram; отладочный снимок закрыт без ключа; журналы скачиваются,
-  а файлы вне разрешённых папок - нет;
+- сайт открыт по адресу без ключей; журналы скачиваются, а файлы вне
+  разрешённых папок - нет; свои уведомления и файл в чат - только из Telegram
+  по подписи;
 - копия журнала доходит до сетевой папки целиком;
-- бот: заявки и одобрение, код доступа, уровни уведомлений и переключатели
-  у каждого пользователя, кнопки настроек; неудача отправки называется;
+- бот: /start подписывает, /stop отписывает, уровни уведомлений и
+  переключатели у каждого подписчика, кнопки настроек; неудача отправки
+  называется, заблокировавший бота отписывается сам;
 - «плата устоялась» объявляется один раз по правилу прогона, а «пошла» - когда
   камера сменила температуру;
 - молчание прибора и его возвращение сообщаются по одному разу;
@@ -61,8 +62,6 @@ def server(tmp_path: Path):
     (tmp_path / "secret.txt").write_text("нельзя", encoding="utf-8")
     instance.set_folders({"прогон": folder})
     instance.set_snapshot({"run": {"points": 7}})
-    # Снимок и файлы для отладки в сети - только по ключу; наблюдение идёт через мини-приложение.
-    instance.set_key("k")
     assert instance.start(0) == ""
     yield instance
     instance.stop()
@@ -73,43 +72,31 @@ def _get(server, path):
         return answer.status, answer.read()
 
 
-def test_page_and_status_are_served(server):
+def test_page_and_status_are_open_without_any_key(server):
+    """Сайт - максимально просто: адрес открывается в любом браузере без входа и ключей."""
     status, body = _get(server, "/")
     assert status == 200 and "страница" in body.decode("utf-8")
 
-    status, body = _get(server, "/status.json?key=k")
+    status, body = _get(server, "/api/state")
     payload = json.loads(body.decode("utf-8"))
     assert payload["run"]["points"] == 7
     assert payload["files"][0]["name"] == "chamber_1.csv"
+    assert "me" not in payload
 
 
 def test_journal_can_be_downloaded(server):
-    status, body = _get(server, "/" + json.loads(_get(server, "/status.json?key=k")[1])["files"][0]["url"] + "&key=k")
+    status, body = _get(server, "/" + json.loads(_get(server, "/api/state")[1])["files"][0]["url"])
     assert status == 200
     assert body.decode("utf-8").startswith("Время")
 
 
 def test_files_outside_allowed_folders_are_refused(server):
     allowed = quote("прогон")
-    for path in (f"/file?folder={allowed}&name=../secret.txt", f"/file?folder={quote('чужая')}&name=secret.txt",
-                 f"/file?folder={allowed}&name=..%5Csecret.txt", f"/file?folder={allowed}&name=..%2Fsecret.txt"):
+    for path in (f"/api/file?folder={allowed}&name=../secret.txt", f"/api/file?folder={quote('чужая')}&name=secret.txt",
+                 f"/api/file?folder={allowed}&name=..%5Csecret.txt", f"/api/file?folder={allowed}&name=..%2Fsecret.txt"):
         with pytest.raises(urllib.error.HTTPError) as error:
-            _get(server, path + "&key=k")
+            _get(server, path)
         assert error.value.code == 404
-
-
-def test_key_protects_the_page(server):
-    # Без ключа отладочный снимок закрыт совсем.
-    server.set_key("")
-    with pytest.raises(urllib.error.HTTPError) as error:
-        _get(server, "/status.json")
-    assert error.value.code == 403
-    server.set_key("abc123")
-    with pytest.raises(urllib.error.HTTPError) as error:
-        _get(server, "/status.json")
-    assert error.value.code == 403
-    status, _body = _get(server, "/status.json?key=abc123")
-    assert status == 200
 
 
 def test_page_file_ships_with_the_program():
@@ -192,7 +179,7 @@ def bot(tmp_path: Path):
     """Бот без сети: потоки остановлены, отправки копятся в очереди."""
     instance = TelegramBot(TelegramUsers(tmp_path / "telegram_users.json"))
     instance.close()
-    instance.configure(TOKEN, "1", "", {"level": "important", "points": True, "summaries": True, "files": True})
+    instance.configure(TOKEN, {"level": "important", "points": True, "summaries": True, "files": True})
     _drain(instance)
     return instance
 
@@ -206,53 +193,45 @@ def _press(chat_id, data, message_id=10):
 
 
 def test_levels_decide_who_gets_what():
-    user = {"approved": True, "level": "important", "points": True, "summaries": False, "files": True}
+    user = {"level": "important", "points": True, "summaries": False, "files": True}
     assert not wants(user, "info") and wants(user, "ok") and wants(user, "bad")
     assert wants(user, "ok", "point") and not wants(user, "info", "summary") and wants(user, "info", "file")
     assert not wants(dict(user, level="alarms"), "warn") and wants(dict(user, level="alarms"), "bad")
     assert not wants(dict(user, level="alarms"), "ok", "point")
     assert wants(dict(user, level="all"), "info")
     assert not wants(dict(user, level="off"), "bad")
-    assert not wants(dict(user, approved=False), "bad")
 
 
-def test_admin_is_approved_by_the_settings(bot):
-    admin = bot.users.get("1")
-    assert admin["approved"] and admin["admin"] and admin["level"] == "all"
-
-
-def test_new_user_waits_for_approval(bot):
+def test_start_subscribes_at_once_and_stop_unsubscribes(bot):
+    """Никаких заявок и одобрений: /start - и уведомления идут."""
     bot.handle_update(_message(5, "/start"))
-    sent = _messages(bot)
-    assert not bot.users.get("5")["approved"]
-    assert any(chat == "5" and "Заявка" in text for chat, text, _markup in sent)
-    request = [markup for chat, text, markup in sent if chat == "1"]
-    assert request and request[0]["inline_keyboard"][0][0]["callback_data"] == "ok:5"
-
-    # Без одобрения ни статуса, ни уведомлений.
-    bot.handle_update(_message(5, "/status"))
-    assert "Доступа пока нет" in _messages(bot)[0][1]
+    assert bot.users.get("5")["name"] == "Иван" and bot.users.get("5")["level"] == "important"
+    assert "подписаны" in _messages(bot)[0][1]
     bot.notify("АВАРИЯ", "bad")
-    assert [chat for chat, _text, _markup in _messages(bot)] == ["1"]
+    assert [chat for chat, _text, _markup in _messages(bot)] == ["5"]
 
-    # Администратор нажимает «Одобрить» прямо в чате.
-    bot.handle_update(_press(1, "ok:5"))
-    assert bot.users.get("5")["approved"]
-    assert any(chat == "5" and "одобрен" in text for chat, text, _markup in _messages(bot))
+    bot.handle_update(_message(5, "/start"))
+    assert "уже подписаны" in _messages(bot)[0][1]
 
-
-def test_access_code_connects_at_once(bot):
-    bot.configure(TOKEN, "1", "K7Q", None)
-    bot.handle_update(_message(6, "/start неверный"))
-    assert not bot.users.get("6")["approved"]
-    bot.handle_update(_message(7, "/start K7Q"))
-    assert bot.users.get("7")["approved"] and bot.users.get("7")["level"] == "important"
+    bot.handle_update(_message(5, "/stop"))
+    assert bot.users.get("5") is None
+    assert "отписаны" in _messages(bot)[0][1]
+    bot.notify("АВАРИЯ", "bad")
+    assert _messages(bot) == []
 
 
-def test_each_user_gets_messages_by_own_level(bot):
-    bot.users.upsert("2", approved=True, level="all", points=False)
-    bot.users.upsert("3", approved=True, level="alarms")
-    bot.users.upsert("4", approved=True, level="off")
+def test_anyone_can_ask_for_status(bot):
+    bot.set_status_text("Плата +25,0 °C")
+    _drain(bot)
+    bot.handle_update(_message(9, "/status"))
+    assert _messages(bot)[0][:2] == ("9", "Плата +25,0 °C")
+
+
+def test_each_subscriber_gets_messages_by_own_level(bot):
+    bot.users.upsert("1", level="all")
+    bot.users.upsert("2", level="all", points=False)
+    bot.users.upsert("3", level="alarms")
+    bot.users.upsert("4", level="off")
     _drain(bot)
 
     def to(level, kind="event"):
@@ -269,8 +248,8 @@ def test_each_user_gets_messages_by_own_level(bot):
 
 
 def test_settings_buttons_change_own_level(bot):
-    bot.users.upsert("2", approved=True, level="important", points=True)
     bot.handle_update(_message(2, "/settings"))
+    assert bot.users.get("2") is not None
     buttons = [button["callback_data"] for row in _messages(bot)[0][2]["inline_keyboard"] for button in row]
     assert "lvl:alarms" in buttons and "tog:points" in buttons
 
@@ -278,34 +257,33 @@ def test_settings_buttons_change_own_level(bot):
     bot.handle_update(_press(2, "tog:points"))
     user = bot.users.get("2")
     assert user["level"] == "alarms" and user["points"] is False
-    bot.handle_update(_message(2, "/stop"))
-    assert bot.users.get("2")["level"] == "off"
-
-
-def test_only_admin_manages_users(bot):
-    bot.users.upsert("2", approved=True)
-    bot.users.upsert("5", approved=False)
-    bot.handle_update(_press(2, "ok:5"))
-    assert not bot.users.get("5")["approved"]
-    assert bot.admin_action("rm", "1") == "Администратора убрать нельзя"
-    bot.admin_action("rm", "5")
-    assert bot.users.get("5") is None
 
 
 def test_users_survive_a_restart(bot, tmp_path: Path):
-    bot.users.upsert("2", approved=True, level="alarms", files=False)
+    bot.users.upsert("2", level="alarms", files=False)
     restored = TelegramUsers(tmp_path / "telegram_users.json")
     assert restored.get("2")["level"] == "alarms" and restored.get("2")["files"] is False
 
 
-def test_chat_is_found_by_the_last_message(bot):
-    found = []
-    bot.find_chat(lambda chat, note: found.append((chat, note)))
-    assert found[0][0] == "" and "напишите" in found[0][1]
-    bot.handle_update(_message(222, "/start", name="Оператор"))
-    found.clear()
-    bot.find_chat(lambda chat, note: found.append((chat, note)))
-    assert found == [("222", "найден чат «Оператор»")]
+def test_blocked_bot_unsubscribes_the_chat(monkeypatch, tmp_path: Path):
+    """Человек заблокировал бота - он больше не подписчик, и ошибки не копятся."""
+    results = []
+    monkeypatch.setattr(telegram_bot, "RETRY_PAUSE_S", 0.0)
+    instance = TelegramBot(TelegramUsers(None), lambda text, ok: results.append((text, ok)))
+    try:
+        def call(method, data, timeout=None):
+            if method in ("getUpdates", "getMe"):
+                time.sleep(0.05)
+                return {"ok": True, "result": [] if method == "getUpdates" else {"username": "camera_bot"}}
+            raise RuntimeError("Forbidden: bot was blocked by the user")
+        instance._call = call
+        instance.users.upsert("7")
+        instance.configure(TOKEN)
+        instance.send_to("7", "проверка")
+        assert _wait(lambda: instance.users.get("7") is None)
+        assert _wait(lambda: instance.username == "camera_bot")
+    finally:
+        instance.close()
 
 
 def test_menu_button_opens_the_miniapp(bot):
@@ -326,7 +304,7 @@ def test_send_failure_is_named(monkeypatch, tmp_path: Path):
                 return {"ok": True, "result": []}
             raise RuntimeError("нет сети")
         instance._call = broken
-        instance.configure(TOKEN, "1")
+        instance.configure(TOKEN)
         instance.send_to("1", "проверка")
         assert _wait(lambda: any("нет сети" in text for text, _ok in results))
         assert not [ok for text, ok in results if "нет сети" in text][0]
@@ -361,30 +339,29 @@ def _api(server, path, chat_id=None, body=None):
         return json.loads(answer.read().decode("utf-8"))
 
 
-def test_miniapp_shows_data_only_to_approved_users(server, bot):
+def test_miniapp_knows_who_opened_it(server, bot):
+    """В Telegram страница знает человека: его уведомления видны и меняются; в браузере - нет."""
     server.set_access(MiniAppAccess(bot, server._resolve_file))
-    bot.users.upsert("2", approved=True, level="important")
-    bot.users.upsert("5", approved=False)
-
     state = _api(server, "/api/state", 2)
-    assert state["run"]["points"] == 7 and state["me"]["id"] == "2" and "users" not in state
-    assert state["files"][0]["name"] == "chamber_1.csv"
-    for chat_id in (None, 5, 999):
+    assert state["me"]["subscribed"] is False and state["me"]["canControl"] is False and state["run"]["points"] == 7
+    assert "me" not in _api(server, "/api/state")
+
+    me = _api(server, "/api/settings", 2, {"subscribed": True})["me"]
+    assert me["subscribed"] and bot.users.get("2") is not None
+    me = _api(server, "/api/settings", 2, {"level": "alarms", "points": False})["me"]
+    assert me["level"] == "alarms" and me["points"] is False
+    assert _api(server, "/api/settings", 2, {"subscribed": False})["me"]["subscribed"] is False
+    assert bot.users.get("2") is None
+
+    # Без подписи Telegram менять нечего: неизвестно, чьи это настройки.
+    for chat_id in (None,):
         with pytest.raises(urllib.error.HTTPError) as error:
-            _api(server, "/api/state", chat_id)
-        assert error.value.code == 401
-
-    # Администратор видит пользователей.
-    assert {user["id"] for user in _api(server, "/api/state", 1)["users"]} == {"1", "2", "5"}
+            _api(server, "/api/settings", chat_id, {"level": "all"})
+        assert error.value.code == 403
 
 
-def test_miniapp_changes_own_settings_and_sends_files(server, bot):
+def test_miniapp_sends_a_journal_to_own_chat(server, bot):
     server.set_access(MiniAppAccess(bot, server._resolve_file))
-    bot.users.upsert("2", approved=True, level="important", points=True)
-
-    me = _api(server, "/api/settings", 2, {"level": "alarms", "points": False, "admin": True})["me"]
-    assert me["level"] == "alarms" and me["points"] is False and me["admin"] is False
-
     answer = _api(server, "/api/sendfile", 2, {"folder": "прогон", "name": "chamber_1.csv"})
     assert "отправлен" in answer["text"]
     documents = [payload for kind, payload in _drain(bot) if kind == "document"]
@@ -392,21 +369,19 @@ def test_miniapp_changes_own_settings_and_sends_files(server, bot):
     assert _api(server, "/api/sendfile", 2, {"folder": "прогон", "name": "../x"})["text"] == "файл не найден"
 
 
-def test_only_admin_manages_users_in_miniapp(server, bot):
+def test_forged_signature_is_ignored(server, bot):
     server.set_access(MiniAppAccess(bot, server._resolve_file))
-    bot.users.upsert("2", approved=True)
-    bot.users.upsert("5", approved=False)
-    with pytest.raises(urllib.error.HTTPError) as error:
-        _api(server, "/api/users", 2, {"action": "ok", "id": "5"})
-    assert error.value.code == 404
-    answer = _api(server, "/api/users", 1, {"action": "ok", "id": "5"})
-    assert "одобрен" in answer["text"] and bot.users.get("5")["approved"]
+    forged = sign_init_data({"auth_date": str(int(time.time())), "user": json.dumps({"id": 2})}, "999:OTHER")
+    request = urllib.request.Request(f"http://127.0.0.1:{server.port}/api/state",
+                                     headers={"X-Telegram-Init-Data": forged})
+    with urllib.request.urlopen(request, timeout=5) as answer:
+        assert "me" not in json.loads(answer.read().decode("utf-8"))
 
-
-# ------------------------------------------------------------------ события и устойчивость
 
 class _FakeBot:
     """Бот без сети: запоминает, что и с какой важностью ушло бы пользователям."""
+
+    username = ""
 
     def __init__(self):
         self.sent = []
@@ -451,7 +426,6 @@ class _RemoteStub(AppControllerRemoteMonitorMixin, _TestStub):
         self.remoteMonitorChanged = _Signal()
         self._remote_lock = __import__("threading").Lock()
         self._remote_incoming = []
-        self._remote_found_chat = None
         self._remote_settings = self._remote_default_settings()
         self._remote_settings.update({"telegram_enabled": True, "server_enabled": True, "sync_enabled": True})
         self._remote_events = deque(maxlen=self.REMOTE_EVENTS_KEPT)
@@ -559,14 +533,15 @@ def test_point_goes_out_as_a_point(tmp_path: Path):
 
 def test_view_lists_bot_users(tmp_path: Path):
     stub = _RemoteStub(tmp_path)
-    stub._remote_users.upsert("1", approved=True, admin=True, name="Админ")
-    stub._remote_users.upsert("5", name="Новый")
+    stub._remote_users.upsert("1", name="Первый", since="2026-10-10 09:00")
+    stub._remote_users.upsert("5", name="Новый", since="2026-10-12 09:00")
     view = stub._remote_view()
     assert [user["id"] for user in view["users"]] == ["1", "5"]
     assert view["users"][1]["levelTitle"] == "Важные"
     assert stub._remote_user_set("5", "level", "alarms") and stub._remote_users.get("5")["level"] == "alarms"
     assert not stub._remote_user_set("5", "level", "громко")
     assert stub._remote_user_set("5", "files", False) and stub._remote_users.get("5")["files"] is False
+    assert stub._remote_user_remove("5") and stub._remote_users.get("5") is None
 
 
 def test_complete_tables_are_announced_once(tmp_path: Path):
@@ -579,13 +554,13 @@ def test_complete_tables_are_announced_once(tmp_path: Path):
 def test_settings_survive_a_restart(tmp_path: Path):
     stub = _RemoteStub(tmp_path)
     stub._remote_apply_all = lambda: None
-    assert stub._remote_set("telegram_chat", "777")
+    assert stub._remote_set("telegram_default_level", "alarms")
     assert stub._remote_set("server_port", "9000")
     assert not stub._remote_set("server_port", "99999")
 
     restored = _RemoteStub(tmp_path)
     loaded = restored._remote_load_settings()
-    assert loaded["telegram_chat"] == "777"
+    assert loaded["telegram_default_level"] == "alarms"
     assert loaded["server_port"] == 9000
 
 
@@ -771,7 +746,7 @@ def test_ngrok_errors_are_explained(monkeypatch):
     state = {"url": "", "ready": False, "error": "", "rate_limited": False}
     public_tunnel.NgrokTunnel(lambda _u: None, lambda _t, _o: None).parse_line(
         "ERROR:  authentication failed: Usage of ngrok requires a verified account and authtoken. ERR_NGROK_4018", state)
-    assert "токен ngrok" in state["error"]
+    assert "Authtoken" in state["error"] and "ERR_NGROK_4018" in state["error"]
 
 
 def test_tool_is_found_in_a_configured_folder(tmp_path: Path):
@@ -780,4 +755,38 @@ def test_tool_is_found_in_a_configured_folder(tmp_path: Path):
     (tmp_path / "ngrok.exe").write_bytes(b"")
     assert find_ngrok(str(tmp_path)) == str(tmp_path / "ngrok.exe")
     assert find_ngrok(f'"{tmp_path / "ngrok.exe"}"') == str(tmp_path / "ngrok.exe")
+
+
+NGROK_WRONG_KEY_OUTPUT = [
+    '{"err":"authentication failed: The authtoken you specified does not look like a proper ngrok authtoken.\\n'
+    'Your authtoken: ak_2wrongAccessKeyValue123456\\nInstructions to install your authtoken are on your ngrok '
+    'dashboard:\\nhttps://dashboard.ngrok.com/get-started/your-authtoken\\r\\n\\r\\nERR_NGROK_105\\r\\n",'
+    '"lvl":"crit","msg":"command failed","t":"2026-10-13T10:26:00+03:00"}',
+    "ERROR:  authentication failed: The authtoken you specified does not look like a proper ngrok authtoken.",
+    "ERROR:  Your authtoken: ak_2wrongAccessKeyValue123456",
+    "ERROR:  ERR_NGROK_105",
+    "ERROR:  https://ngrok.com/docs/errors/err_ngrok_105",
+    "ERROR:  ",
+]
+
+
+def test_wrong_kind_of_ngrok_key_is_named_and_not_shown(monkeypatch, tmp_path: Path):
+    """Вписали Access Key или API Key: в окне - что нужен Authtoken; сам ключ не виден ни в окне, ни в журнале."""
+    from ui.qml import public_tunnel
+
+    statuses = []
+    monkeypatch.setattr(public_tunnel.subprocess, "Popen",
+                        lambda command, **_kwargs: _FakeProcess(list(NGROK_WRONG_KEY_OUTPUT)))
+    tunnel = public_tunnel.NgrokTunnel(lambda _url: None, lambda text, ok: statuses.append((text, ok)),
+                                       tmp_path / "ngrok.log")
+    tunnel.start(8765, "ngrok.exe", authtoken="ak_2wrongAccessKeyValue123456", domain="")
+    try:
+        assert _wait(lambda: any("Повтор через" in text for text, _ok in statuses))
+        text = [text for text, _ok in statuses if "Повтор через" in text][0]
+        assert "не API Key и не Access Key" in text and "ERR_NGROK_105" in text
+        assert all("ak_2wrong" not in text for text, _ok in statuses)
+    finally:
+        tunnel.stop()
+    log = (tmp_path / "ngrok.log").read_text(encoding="utf-8")
+    assert "ERR_NGROK_105" in log and "ak_2wrong" not in log
 
