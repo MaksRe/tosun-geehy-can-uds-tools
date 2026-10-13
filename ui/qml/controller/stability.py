@@ -103,3 +103,38 @@ def predict_final(samples, start: float, now: float, chunks: int = 6, min_change
     if fit < min_fit:
         return None
     return final, tau_s
+
+
+def fit_board_model(pairs, min_span_c: float = 10.0, gain_range=(0.5, 1.2)):
+    """Модель «воздух камеры → где устоится плата»: плата ≈ k × воздух + b.
+
+    Зачем: плата отстаёт от воздуха не на постоянную величину - её тянет к комнате
+    (тепло по кабелю, через оснастку) и греет собственный ток. По парам «уставка
+    камеры - где устоялась плата» прогон сразу ставит уставку, при которой плата
+    придёт к температуре шага.
+
+    pairs - пары (воздух, плата), °C. Одна пара или узкий размах воздуха - только
+    сдвиг (k = 1). Наклон вне разумных пределов - тоже только сдвиг: такая прямая
+    скорее шум, чем свойство установки. Возвращает (k, b, число пар) или None.
+    """
+    points = [(float(air), float(board)) for air, board in pairs]
+    if not points:
+        return None
+    count = float(len(points))
+    mean_air = sum(air for air, _ in points) / count
+    mean_board = sum(board for _, board in points) / count
+    offset_only = (1.0, mean_board - mean_air, len(points))
+    airs = [air for air, _ in points]
+    if len(points) < 2 or max(airs) - min(airs) < min_span_c:
+        return offset_only
+    sxx = sum((air - mean_air) ** 2 for air in airs)
+    gain = sum((air - mean_air) * (board - mean_board) for air, board in points) / sxx
+    if not (gain_range[0] <= gain <= gain_range[1]):
+        return offset_only
+    return gain, mean_board - gain * mean_air, len(points)
+
+
+def air_for_board(model, target_c: float) -> float:
+    """Какой нужен воздух камеры, чтобы плата устоялась при target_c."""
+    gain, offset, _count = model
+    return (float(target_c) - offset) / gain

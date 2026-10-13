@@ -750,6 +750,7 @@
         `<div class="chips" style="margin:8px 0">${nodes}</div>` +
         `<div style="color:${esc(run.color)}">${esc(run.status)}</div>` +
         (auto.nodesText ? `<div class="soft" style="margin-top:4px">По узлам: ${esc(auto.nodesText)}</div>` : "") +
+        (auto.boardModel ? `<div class="soft" style="margin-top:4px">Плата и воздух: ${esc(auto.boardModel)}</div>` : "") +
         (auto.problems ? `<div class="warn" style="margin-top:4px">Проблем за прогон: ${auto.problems}</div>` : "");
     } else if (auto.resume) {
       $("auto").innerHTML = `<div class="warn">${esc(auto.resume.text)}</div>`;

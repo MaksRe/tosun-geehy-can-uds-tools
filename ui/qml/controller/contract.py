@@ -269,6 +269,8 @@ class AppControllerContract:
     _climate_run_offset: Any
     _climate_run_board_attempts: Any
     _climate_run_board_since: Any
+    _climate_run_board_pairs: Any
+    _climate_run_board_preset_done: Any
     _control_lock: Any
     _control_pending: Any
     _control_thread: Any

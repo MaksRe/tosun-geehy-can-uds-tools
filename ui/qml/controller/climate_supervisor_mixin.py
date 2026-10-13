@@ -170,6 +170,7 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             # Доводка платы на текущем шаге: сдвиг уставки и сколько попыток уже было.
             "offset": float(getattr(self, "_climate_run_offset", 0.0)),
             "board_attempts": int(getattr(self, "_climate_run_board_attempts", 0)),
+            "board_pairs": list(getattr(self, "_climate_run_board_pairs", []) or []),
             "labels": list(self._climate_run_labels),
             "done": list(self._climate_run_done),
             "stage": self._climate_run_stage,
@@ -719,6 +720,8 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         # Доводка платы на этом шаге продолжается с того же сдвига уставки.
         self._climate_run_offset = float(saved.get("offset", 0.0) or 0.0)
         self._climate_run_board_attempts = int(saved.get("board_attempts", 0) or 0)
+        self._climate_run_board_pairs = [dict(pair) for pair in saved.get("board_pairs") or []
+                                         if isinstance(pair, dict) and {"air", "board", "step", "attempt"} <= set(pair)]
         self._climate_run_labels = list(saved.get("labels") or []) or [str(self._chamber_label).strip()]
         self._climate_run_done = [float(node) for node in saved.get("done") or []]
         self._climate_run_connected = str(self._chamber_label).strip()
@@ -853,4 +856,6 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             "finishing": bool(self._climate_auto_finishing),
             "resume": resume_view,
             "pausedBy": self._climate_auto_paused_by,
+            # Как плата отстаёт от воздуха в этом прогоне: по ней упреждение и доводка.
+            "boardModel": self._climate_run_board_model_text() if hasattr(self, "_climate_run_board_model_text") else "",
         }

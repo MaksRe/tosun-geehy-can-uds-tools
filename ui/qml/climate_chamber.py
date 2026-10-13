@@ -573,6 +573,8 @@ class SimulatedChamber(ChamberDriver):
         self.running = False
         # Самонагрев изделия: плата устаивается не на воздухе камеры, а выше на столько градусов.
         self.self_heating_c = 0.0
+        # Утечка тепла снаружи (кабель, оснастка): доля, с которой изделие тянется к комнате.
+        self.leak = 0.0
         self._last = clock()
 
     def advance(self, minutes: float):
@@ -586,7 +588,7 @@ class SimulatedChamber(ChamberDriver):
             wanted = (target - self.air_c) * (1.0 - math.exp(-dt / self.AIR_TAU_MIN))
             limit = self.RAMP_C_PER_MIN * dt
             self.air_c += max(-limit, min(limit, wanted))
-            target_product = self.air_c + self.self_heating_c
+            target_product = self.air_c + self.self_heating_c + self.leak * (self.AMBIENT_C - self.air_c)
             self.product_c += (target_product - self.product_c) * (1.0 - math.exp(-dt / self.PRODUCT_TAU_MIN))
             remaining -= dt
 

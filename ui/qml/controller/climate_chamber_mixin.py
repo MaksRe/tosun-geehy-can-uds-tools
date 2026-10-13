@@ -61,7 +61,7 @@ from ui.qml.climate_diag import ChamberDiagLog, environment_info, moxa_registry_
 from ui.qml.climate_scenario import DEFAULTS as SCENARIO_DEFAULTS
 
 from .contract import AppControllerContract
-from .stability import is_stable, predict_final, rate_and_spread
+from .stability import air_for_board, fit_board_model, is_stable, predict_final, rate_and_spread
 
 DRIVERS = (DRIVER_NONE, DRIVER_ESPEC, DRIVER_SIMCON, DRIVER_SIMULATOR, DRIVER_MODBUS_TCP, DRIVER_MODBUS_RTU)
 
@@ -258,6 +258,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         self._climate_run_attempts = 0
         self._climate_run_retry_at = 0.0
         self._climate_run_done: list[float] = []
+        # Пары «уставка камеры - где устоялась плата» за прогон: из них модель «воздух → плата».
+        self._climate_run_board_pairs: list[dict] = []
         self._climate_run_reset_board()
         self._climate_run_status = "Автоматический прогон не идёт."
         self._climate_run_color = "#64748b"
@@ -919,16 +921,85 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         self._climate_run_offset = 0.0
         self._climate_run_board_attempts = 0
         self._climate_run_board_since = 0.0
+        self._climate_run_board_preset_done = False
+
+    def _climate_run_note_pair(self, board: float):
+        """Где плата при этой уставке камеры (замер или прогноз): пара для модели «воздух → плата».
+
+        На одну попытку шага - одна пара, последняя: прогноз уточняется, потом его сменяет замер.
+        """
+        key = (int(self._climate_run_index), int(self._climate_run_board_attempts))
+        pairs = [pair for pair in self._climate_run_board_pairs if (pair["step"], pair["attempt"]) != key]
+        pairs.append({"step": key[0], "attempt": key[1], "air": round(self._climate_run_setpoint(), 2),
+                      "board": round(float(board), 2)})
+        self._climate_run_board_pairs = pairs[-40:]
+
+    def _climate_run_board_model(self):
+        """Модель «плата ≈ k × воздух + b» по парам этого прогона или None."""
+        return fit_board_model([(pair["air"], pair["board"]) for pair in self._climate_run_board_pairs])
+
+    def _climate_run_board_model_text(self) -> str:
+        model = self._climate_run_board_model()
+        if model is None:
+            return ""
+        gain, offset, count = model
+        return (f"плата ≈ {gain:.2f} × воздух {offset:+.1f} °C по {count} "
+                f"{'точке' if count == 1 else 'точкам'}").replace(".", ",")
+
+    def _climate_run_wanted_offset(self, node: float, fallback: float) -> float:
+        """Сдвиг уставки, при котором плата придёт к шагу: по модели, а без неё - fallback."""
+        model = self._climate_run_board_model()
+        return air_for_board(model, node) - node if model is not None else fallback
+
+    def _climate_run_clamp_offset(self, node: float, offset: float) -> float:
+        """Сдвиг в пределах «сдвигать уставку до» и пределов уставки камеры."""
+        max_shift = self._climate_run_param("board_max_shift_c")
+        low, high = float(self._climate_settings["min_c"]), float(self._climate_settings["max_c"])
+        offset = max(-max_shift, min(max_shift, offset))
+        return round(max(low, min(high, node + offset)) - node, 1)
+
+    def _climate_run_board_preset(self):
+        """Упреждение: новый шаг сразу с поправленной уставкой - по опыту прошлых шагов этого прогона.
+
+        Плата отстаёт от воздуха одинаково от шага к шагу (самонагрев, утечка тепла по
+        кабелю), поэтому модель «воздух → плата» с прошлых шагов говорит, какой воздух
+        нужен сейчас. Так доводка почти не нужна, а шаг короче на часы. Шаг без точки -
+        как задан.
+        """
+        if self._climate_run_board_preset_done:
+            return
+        self._climate_run_board_preset_done = True
+        if self._climate_run_offset or self._climate_run_board_attempts:
+            return
+        if not bool(self._climate_run_step().get("capture", True)) or self._climate_run_param("board_max_shift_c") <= 0:
+            return
+        model = self._climate_run_board_model()
+        if model is None:
+            return
+        node = self._climate_run_node()
+        # Плата и без поправки придёт к шагу в пределах допуска - уставку не трогаем: поправка на шум не нужна.
+        gain, base, _count = model
+        if abs(gain * node + base - node) <= self._climate_run_param("board_tolerance_c"):
+            return
+        offset = self._climate_run_clamp_offset(node, air_for_board(model, node) - node)
+        if abs(offset) < 0.3:
+            return
+        self._climate_run_offset = offset
+        text = (f"упреждение по прошлым шагам ({self._climate_run_board_model_text()}): уставка камеры сразу "
+                f"{_c(self._climate_run_setpoint())} вместо {_c(node)}, чтобы плата пришла к {_c(node)}.")
+        self._climate_event(text, "info")
+        self._climate_run_board_note(f"шаг {self._climate_run_index + 1} ({_c(node)})", True, text,
+                                     "упреждение уставки")
 
     def _climate_run_setpoint(self) -> float:
         """Уставка камеры на этом шаге: температура шага плюс сдвиг доводки платы."""
         return self._climate_run_node() + self._climate_run_offset
 
-    def _climate_run_board_note(self, details: str, ok: bool, result: str):
-        """Доводка платы - в журнал действий: её делает программа, но меняет уставку камеры."""
+    def _climate_run_board_note(self, details: str, ok: bool, result: str, title: str = "доводка платы"):
+        """Доводка платы и упреждение - в журнал действий: их делает программа, но меняют уставку камеры."""
         log = getattr(self, "_control_log", None)
         if log is not None:
-            log.add("программа (автопрогон)", "автопрогон", "доводка платы", details, ok, result)
+            log.add("программа (автопрогон)", "автопрогон", title, details, ok, result)
 
     # Прогноз предела платы: не раньше чем через столько минут устаивания, и сверка с прогнозом 5 минут назад.
     CLIMATE_FORECAST_MIN_S = 20 * 60.0
@@ -970,26 +1041,31 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         if self._climate_run_board_attempts >= attempts or self._climate_run_param("board_max_shift_c") <= 0:
             return False
         board = self._climate_board[-1][1] if self._climate_board else final
+        self._climate_run_note_pair(final)
         return self._climate_run_board_shift(now, node, node - final,
                                              f"плата сейчас {_c(board)} и по прогнозу устоится при {_c(final)}")
 
     def _climate_run_board_shift(self, now: float, node: float, miss: float, measured: str) -> bool:
-        """Сдвиг уставки камеры на промах платы (в пределах сдвига и уставки). True - сдвинута."""
+        """Сдвиг уставки камеры, чтобы плата пришла к шагу. True - сдвинута.
+
+        Сдвиг - по модели «воздух → плата» (плата проходит лишь часть изменения воздуха,
+        поэтому сдвиг больше промаха), без модели - на промах. В пределах «сдвигать
+        уставку до» и пределов уставки камеры.
+        """
         attempts = int(round(self._climate_run_param("board_attempts")))
-        max_shift = self._climate_run_param("board_max_shift_c")
         tolerance = self._climate_run_param("board_tolerance_c")
-        low, high = float(self._climate_settings["min_c"]), float(self._climate_settings["max_c"])
-        offset = max(-max_shift, min(max_shift, self._climate_run_offset + miss))
-        setpoint = max(low, min(high, node + offset))
-        offset = round(setpoint - node, 1)
+        offset = self._climate_run_clamp_offset(
+            node, self._climate_run_wanted_offset(node, self._climate_run_offset + miss))
         if abs(offset - self._climate_run_offset) < 0.1:
             return False
         before = self._climate_run_setpoint()
         self._climate_run_board_attempts += 1
         self._climate_run_offset = offset
         self._climate_run_board_since = now
+        model = self._climate_run_board_model_text()
         text = (f"{measured}, а шаг {_c(node)} (допуск ±{tolerance:g} °C): довожу - уставка камеры {_c(before)} → "
-                f"{_c(self._climate_run_setpoint())}, попытка {self._climate_run_board_attempts} из {attempts}.")
+                f"{_c(self._climate_run_setpoint())}, попытка {self._climate_run_board_attempts} из {attempts}"
+                + (f" ({model})" if model else "") + ".")
         self._climate_event(text, "warn")
         self._climate_run_board_note(f"шаг {self._climate_run_index + 1} ({_c(node)})", True, text)
         self._climate_run_enter("setpoint", now)
@@ -1009,6 +1085,9 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         и по прогнозу дойдёт: ждать.
         """
         node = self._climate_run_node()
+        if board is not None:
+            # Где плата при этой уставке - опыт для модели, даже на шаге без точки.
+            self._climate_run_note_pair(final if final is not None else board)
         if board is None or not bool(self._climate_run_step().get("capture", True)):
             return True
         tolerance = self._climate_run_param("board_tolerance_c")
@@ -1152,6 +1231,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         where = f"{self._climate_run_index + 1} из {len(self._climate_run_nodes)}, {_c(node)}"
 
         if stage == "setpoint":
+            self._climate_run_board_preset()
             setpoint = self._climate_run_setpoint()
             if self._climate_send_setpoint(setpoint):
                 if self._climate_link.driver.can_run and not getattr(self._climate_reading, "running", True):

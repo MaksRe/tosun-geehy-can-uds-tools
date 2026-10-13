@@ -775,6 +775,18 @@ Card {
                             font.family: "Bahnschrift"
                             wrapMode: Text.WordWrap
                         }
+
+                        // Как плата отстаёт от воздуха в этом прогоне: по этому упреждение и доводка уставки.
+                        Text {
+                            Layout.fillWidth: true
+                            visible: (root.auto.boardModel || "").length > 0
+                            text: "Плата и воздух: " + (root.auto.boardModel || "")
+                                  + " - уставка шагов ставится с этой поправкой"
+                            color: root.textSoft
+                            font.pixelSize: 12
+                            font.family: "Bahnschrift"
+                            wrapMode: Text.WordWrap
+                        }
                     }
 
                     // Текущие проблемы: каждая видна, пока не прошла.

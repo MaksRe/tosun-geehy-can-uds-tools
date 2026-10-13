@@ -11,7 +11,10 @@
 - шаг без точки не доводится;
 - у инертной платы (τ - десятки минут) предел считается по кривой заранее, и
   доводка начинается по прогнозу, не дожидаясь часами её «устаивания»;
-- «плата не догоняет воздух» - только если плата почти не движется к нему.
+- «плата не догоняет воздух» - только если плата почти не движется к нему;
+- модель «воздух → плата» по ходу прогона: доводка ставит уставку сразу по ней
+  (плата проходит лишь часть изменения воздуха), а следующие шаги начинаются с
+  упреждённой уставки и доводка им не нужна.
 """
 
 from __future__ import annotations
@@ -27,7 +30,7 @@ import math
 import random
 
 from tests.test_climate_supervisor import _ready, _walk
-from ui.qml.controller.stability import predict_final
+from ui.qml.controller.stability import air_for_board, fit_board_model, predict_final
 from ui.qml.control_log import ControlLog
 
 
@@ -133,3 +136,32 @@ def test_board_far_and_still_is_reported(tmp_path: Path):
     assert stub._climate_run_start()
     _walk(stub, limit=20000)
     assert any("не догоняет" in text for _level, text in stub.events)
+
+
+def test_board_model_from_the_stand():
+    """Числа со стенда: при +25 плата +30, при -40 около -27, при -50 - -35,7."""
+    model = fit_board_model([(25.0, 30.0), (-40.0, -27.0), (-50.0, -35.7)])
+    assert abs(model[0] - 0.876) < 0.01
+    assert abs(air_for_board(model, -40.0) - (-54.9)) < 0.3
+    single = fit_board_model([(25.0, 30.0)])
+    assert single[0] == 1.0 and air_for_board(single, -40.0) == -45.0, "одна точка - только сдвиг"
+    assert fit_board_model([(25.0, 30.0), (26.0, 10.0)])[0] == 1.0, "узкий размах - наклону не верим"
+
+
+def test_leaky_board_needs_no_bringing_after_the_model_is_known(tmp_path: Path):
+    """Плату тянет к комнате на 12 % (кабель): после первого холодного шага остальные - сразу с нужной уставкой."""
+    stub = _ready(tmp_path, "25, -40, -20, 85")
+    stub._climate_settings.update({"min_c": -70.0, "max_c": 120.0})
+    stub.sim.leak = 0.12
+    stub.sim.self_heating_c = 2.0
+    assert stub._climate_run_start()
+    _walk(stub, limit=30000)
+    boards = _boards(stub)
+    assert all(abs(board - node) <= 1.0 for board, node in zip(boards, (25.0, -40.0, -20.0, 85.0))), boards
+    texts = [text for _level, text in stub.events]
+    presets = [text for text in texts if text.startswith("упреждение")]
+    assert any("вместо -20,0 °C" in text for text in presets) and any("вместо +85,0 °C" in text for text in presets)
+    brought = [text for text in texts if "довожу" in text]
+    assert not any("шаг -20,0 °C" in text or "шаг +85,0 °C" in text for text in brought), brought
+    # Доводка на холодном шаге - по модели, с запасом на неполную передачу: одной попытки хватает.
+    assert sum("шаг -40,0 °C" in text for text in brought) == 1, brought

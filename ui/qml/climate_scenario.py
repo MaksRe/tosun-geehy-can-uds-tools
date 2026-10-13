@@ -45,7 +45,7 @@ DEFAULTS = {
     # Доводка платы: плата должна устояться у температуры шага с этим допуском; если нет -
     # уставка камеры сдвигается не дальше чем на board_max_shift_c, не больше board_attempts раз.
     "board_tolerance_c": 1.0,
-    "board_max_shift_c": 10.0,
+    "board_max_shift_c": 20.0,
     "board_attempts": 3.0,
 }
 
