@@ -296,22 +296,26 @@ Card {
 
                             Text {
                                 text: root.live.levelText || "—"
-                                color: root.live.levelFresh ? (root.live.levelWarn ? "#b45309" : "#166534") : "#94a3b8"
-                                font.pixelSize: 30
+                                color: root.live.levelBoardOnly ? "#94a3b8"
+                                       : (root.live.levelFresh ? (root.live.levelWarn ? "#b45309" : "#166534") : "#94a3b8")
+                                font.pixelSize: root.live.levelBoardOnly ? 22 : 30
                                 font.bold: true
                                 font.family: "Bahnschrift"
                             }
 
+                            // «Только плата»: почему уровня нет; иначе - уровень в кадре J1939.
                             Text {
                                 Layout.fillWidth: true
-                                text: root.live.levelJ1939Text || ""
+                                text: root.live.levelBoardOnly ? (root.live.levelNote || "") : (root.live.levelJ1939Text || "")
                                 color: root.textSoft
                                 font.pixelSize: 11
                                 font.family: "Bahnschrift"
-                                elide: Text.ElideRight
+                                wrapMode: root.live.levelBoardOnly ? Text.WordWrap : Text.NoWrap
+                                elide: root.live.levelBoardOnly ? Text.ElideNone : Text.ElideRight
                             }
 
                             TrendMiniature {
+                                visible: !root.live.levelBoardOnly
                                 Layout.fillWidth: true
                                 trend: root.trendOf("level")
                                 textSoft: root.textSoft

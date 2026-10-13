@@ -124,6 +124,16 @@ def test_level_card_shows_what_the_device_calculates():
     assert view["levelWarn"] is True, "уровень за пределами шкалы подсвечивается"
 
 
+def test_board_only_level_is_not_shown_as_level():
+    """Только плата: к входам подключены эталоны, а не трубка - уровень смысла не имеет и не пугает минусом."""
+    stub = _NodeStub()
+    stub._chamber_board_only = True
+    _answer(stub, UdsData.raw_fuel_level, _u16(-433))
+    view = stub._node_live_view()
+    assert view["levelText"] == "не считается" and view["levelWarn"] is False and view["levelBoardOnly"] is True
+    assert "эталоны" in view["levelNote"] and "-43,3 %" in view["levelNote"]
+
+
 def test_counts_and_temperatures_are_decoded():
     stub = _NodeStub()
     _answer(stub, UdsData.curr_fuel_tank, _u16(4821))

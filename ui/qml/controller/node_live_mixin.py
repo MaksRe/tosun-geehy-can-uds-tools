@@ -499,6 +499,15 @@ class AppControllerNodeLiveMixin(AppControllerContract):
         level = live["level"]
         level_text = "—" if level is None else _decimal(int(level) / 10.0, 1) + " %"
         level_out_of_range = level is not None and not (0 <= int(level) <= 1000)
+        # «Только плата»: к входам подключены эталонные конденсаторы, а не трубка. Уровень считается по
+        # отметкам трубки и смысла не имеет (обычно уходит в минус) - показывать его как уровень незачем.
+        board_only = bool(getattr(self, "_chamber_board_only", False))
+        level_note = ""
+        if board_only:
+            level_note = ("только плата: подключены эталоны, а не трубка"
+                          + ("" if level is None else f" (прибор считает {level_text})"))
+            level_text = "не считается"
+            level_out_of_range = False
 
         if self._node_live_j1939_seen and now - self._node_live_j1939_seen <= 5.0:
             j1939_text = ("J1939: нет данных у прибора" if self._node_live_j1939 is None
@@ -521,6 +530,8 @@ class AppControllerNodeLiveMixin(AppControllerContract):
             "levelFresh": self._node_live_fresh("level", now),
             "levelWarn": level_out_of_range,
             "levelJ1939Text": j1939_text,
+            "levelBoardOnly": board_only,
+            "levelNote": level_note,
             "mainRaw": number("main_raw"),
             "mainComp": number("main_comp"),
             "media": number("media"),
