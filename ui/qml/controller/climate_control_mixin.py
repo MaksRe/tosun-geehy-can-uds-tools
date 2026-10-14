@@ -4,7 +4,7 @@
 Камерой управляют не только у пульта: из окна программы, с сайта и из
 Telegram. Чтобы это было безопасно и прозрачно:
 - управлять (экстренная остановка, режим камеры, уставка, старт, пауза и стоп
-  прогона, переход по шагам, правка сценария на ходу) могут только админ и
+  прогона, переход по шагам, правка сценария на ходу, ручная точка) могут только админ и
   те, кому он дал право; смотреть может любой;
 - каждое действие пишется в журнал logs/control вместе с именем человека,
   откуда пришло действие, подробностями «было → стало» и итогом;
@@ -39,10 +39,13 @@ import pathlib
 import threading
 import time
 
+import chamber_fit
+
 from PySide6.QtCore import QTimer
 
 from ui.qml import climate_scenario
-from ui.qml.climate_chamber import DRIVER_ESPEC, espec_is_setting
+from ui.qml.climate_chamber import (DRIVER_ESPEC, ESPEC_COMMANDS, ESPEC_COMMANDS_BY_KEY, ChamberError,
+                                   build_espec_command, espec_is_setting)
 from ui.qml.control_log import ControlLog
 from ui.qml.telegram_bot import ROLE_TITLES, ROLES
 
@@ -63,6 +66,17 @@ ACTION_TITLES = {
     "run_resume": "продолжение автопрогона",
     "run_stop": "остановка автопрогона",
     "run_operator": "эталоны переключены",
+    "capture": "запись точки вручную",
+    "scenario_rules": "правила сценария",
+    "scenario_load": "загрузка сценария",
+    "scenario_new": "новый сценарий",
+    "scenario_save": "сохранение сценария",
+    "limits": "пределы уставки камеры",
+    "espec_command": "команда камере",
+    "resume_saved": "продолжение прерванного прогона",
+    "discard_saved": "отказ от прерванного прогона",
+    "label": "пометка точки",
+    "send_file": "файл в чат",
     "step_next": "следующий шаг сценария",
     "step_goto": "переход к шагу сценария",
     "scenario": "изменение сценария",
@@ -71,8 +85,23 @@ ACTION_TITLES = {
 }
 # Кого будить сообщением: важность события для подписчиков бота.
 NOTIFY_LEVEL = {"estop": "bad", "mode": "warn", "setpoint": "warn", "run_start": "ok", "run_pause": "warn",
-                "run_resume": "ok", "run_stop": "warn", "run_operator": "info", "step_next": "warn",
-                "step_goto": "warn", "scenario": "warn", "scenario_steps": "warn", "role": "info"}
+                "run_resume": "ok", "run_stop": "warn", "run_operator": "info", "capture": "ok", "step_next": "warn",
+                "step_goto": "warn", "scenario": "warn", "scenario_steps": "warn", "role": "info",
+                "scenario_rules": "warn", "scenario_load": "info", "scenario_new": "info", "limits": "warn",
+                "espec_command": "warn", "resume_saved": "ok", "discard_saved": "warn", "label": "info"}
+# Общие правила сценария, которые можно менять удалённо: ключ - (подпись, единицы).
+SCENARIO_RULES = {
+    "reach_tolerance_c": ("камера вышла на уставку, если воздух отличается не больше чем на", "°C"),
+    "settle_min": ("плата устоялась, если за последние", "мин"),
+    "settle_rate": ("менялась медленнее", "°C/мин"),
+    "reach_timeout_min": ("предупредить, если камера не вышла на уставку за", "мин"),
+    "settle_timeout_min": ("решать по текущему среднему, если плата не устоялась за", "мин"),
+    "board_tolerance_c": ("плата должна дойти до шага с допуском", "°C"),
+    "board_max_shift_c": ("сдвигать уставку при доводке до", "°C"),
+    "board_attempts": ("попыток доводки", ""),
+    "finish_setpoint": ("в конце задать камере", "°C"),
+    "finish_stop": ("в конце остановить камеру", ""),
+}
 
 
 def _temp(value) -> str:
@@ -312,6 +341,172 @@ class AppControllerClimateControlMixin(AppControllerContract):
         self._climate_run_continue()
         return True, "прогон снимает следующую точку.", ""
 
+    def _control_do_capture(self, actor: dict, params: dict):
+        """Точка по текущим средним - когда её снимают вручную (например, плату довели до узла вручную).
+
+        Прогон при этом не трогается: если он на паузе, дальше - «Следующий шаг» и «Продолжить».
+        """
+        label = str(params.get("label") or "").strip()
+        if label and label != str(self._chamber_label).strip():
+            self._chamber_label = label
+            self.chamberChanged.emit()
+        label = str(self._chamber_label).strip()
+        if not label:
+            return False, "не задано, что подключено к прибору (пометка точки, для одной платы - 0/0)", ""
+        if self._chamber_busy or self._chamber_capture_waiting:
+            return False, "точка уже записывается", f"«{label}»"
+        if not (self._can.is_connect and self._can.is_trace):
+            return False, "адаптер CAN не подключён или трассировка выключена: прибор не опрашивается", f"«{label}»"
+        board = self._chamber_live_stats("board_temp")
+        board_text = "—" if board is None else _temp(board["mean"] / 10.0)
+        node = None if board is None else chamber_fit.nearest_node(int(round(board["mean"])))
+        where = chamber_fit.node_text(node) if node is not None else "вне узлов сетки"
+        details = f"«{label}», плата {board_text}, узел {where}"
+        before = len(self._chamber_points)
+        self._chamber_capture_from_average()
+        if len(self._chamber_points) > before:
+            point = self._chamber_points[-1]
+            media = "—" if point.get("media") is None else point["media"]
+            return True, (f"точка записана: плата {_temp(point['board_temp_x10'] / 10.0)}, узел {where}, "
+                          f"основной {point['main']}, вид топлива {media}. Всего точек: {len(self._chamber_points)}."), details
+        if self._chamber_capture_waiting:
+            return True, "среднее ещё набирается: точка запишется сама через несколько секунд.", details
+        return False, str(getattr(self, "_chamber_status", "") or "точка не записана"), details
+
+    # ------------------------------------------------------------------ сценарий: правила и файлы
+
+    def _control_do_scenario_rules(self, actor: dict, params: dict):
+        """Общие правила сценария (допуски, окна, доводка, конец) - и во время прогона."""
+        base = copy.deepcopy(getattr(self, "_climate_scenario", None) or climate_scenario.empty_scenario())
+        changed = False
+        for key in SCENARIO_RULES:
+            if key not in params:
+                continue
+            value = params[key]
+            if key == "finish_stop":
+                value = value in (True, "true", "1", 1, "да")
+            elif key == "finish_setpoint" and str(value).strip() in ("", "none", "нет"):
+                value = None
+            else:
+                try:
+                    value = float(str(value).replace(",", ".").strip())
+                except ValueError:
+                    return False, f"«{SCENARIO_RULES[key][0]}» - это число", ""
+            base[key] = value
+            changed = True
+        if not changed:
+            return False, "нет правил для изменения", ""
+        return self._control_apply_scenario(base)
+
+    def _control_no_run(self, what: str) -> str:
+        if self._climate_run_stage:
+            return (f"идёт прогон: {what} - после него. Шаги и правила идущего прогона можно менять "
+                    "(«Шаги сценария», «Правила сценария»)")
+        return ""
+
+    def _control_do_scenario_load(self, actor: dict, params: dict):
+        busy = self._control_no_run("загрузить другой сценарий")
+        if busy:
+            return False, busy, ""
+        wanted = str(params.get("file") or params.get("name") or "").strip()
+        self._climate_scenario_refresh_files()
+        found = [item for item in self._climate_scenario_files
+                 if wanted and wanted in (item["file"], item["name"], pathlib.Path(item["path"]).stem)]
+        if not found:
+            return False, f"сценарий «{wanted}» не найден в папке сценариев", wanted
+        ok = self._climate_scenario_load(found[0]["path"])
+        return ok, (f"загружен сценарий «{found[0]['name']}»: {climate_scenario.summary(self._climate_scenario)}."
+                    if ok else self._climate_scenario_status or "не загрузился"), found[0]["file"]
+
+    def _control_do_scenario_new(self, actor: dict, params: dict):
+        busy = self._control_no_run("создать новый сценарий")
+        if busy:
+            return False, busy, ""
+        kind = "board_cycle" if str(params.get("kind", "board_cycle")) == "board_cycle" else "empty"
+        ok = self._climate_scenario_new(kind)
+        return ok, f"новый сценарий «{self._climate_scenario.get('name', '')}»." if ok else "не создан", kind
+
+    def _control_do_scenario_save(self, actor: dict, params: dict):
+        ok = self._climate_scenario_save("")
+        name = pathlib.Path(self._climate_scenario_path).name if self._climate_scenario_path else ""
+        return ok, f"сценарий сохранён в {name}." if ok else (self._climate_scenario_status or "не сохранён"), name
+
+    # ------------------------------------------------------------------ камера: пределы, команды ESPEC
+
+    def _control_do_limits(self, actor: dict, params: dict):
+        """Пределы уставки: за них программа не задаст уставку ни сама, ни по команде."""
+        try:
+            low = float(str(params.get("min", self._climate_settings["min_c"])).replace(",", "."))
+            high = float(str(params.get("max", self._climate_settings["max_c"])).replace(",", "."))
+        except ValueError:
+            return False, "пределы - числа, °C", ""
+        if not (-100.0 <= low < high <= 200.0):
+            return False, "нижний предел должен быть меньше верхнего, в пределах -100...+200 °C", ""
+        before = f"{self._climate_settings['min_c']:+g}...{self._climate_settings['max_c']:+g} °C"
+        self._climate_settings["min_c"], self._climate_settings["max_c"] = low, high
+        self._climate_save_settings()
+        after = f"{low:+g}...{high:+g} °C"
+        return True, f"пределы уставки: {after}.", f"{before} → {after}"
+
+    def _control_do_espec_command(self, actor: dict, params: dict):
+        """Команда камере ESPEC из каталога (как в окне программы). Настройка во время прогона ставит его на паузу."""
+        if self._climate_settings.get("driver") != DRIVER_ESPEC or self._climate_link is None:
+            return False, "камера ESPEC не подключена", ""
+        key = str(params.get("key", ""))
+        item = ESPEC_COMMANDS_BY_KEY.get(key)
+        if item is None:
+            return False, "нет такой команды в каталоге", key
+        values = params.get("values") if isinstance(params.get("values"), dict) else {}
+        try:
+            command = build_espec_command(key, values)
+        except ChamberError as error:
+            return False, str(error), item["title"]
+        paused = self._control_hold_run() if espec_is_setting(command) else ""
+        ok = self._climate_send_espec(key, json.dumps(values, ensure_ascii=False))
+        return ok, (self._climate_command_status or "отправлено") + paused, f"{item['title']}: «{command}»"
+
+    # ------------------------------------------------------------------ прерванный прогон, пометка
+
+    def _control_do_resume_saved(self, actor: dict, params: dict):
+        if getattr(self, "_climate_auto_resume", None) is None:
+            return False, "прерванного прогона нет", ""
+        ok = self._climate_auto_resume_now()
+        return bool(ok), self._climate_run_status, ""
+
+    def _control_do_discard_saved(self, actor: dict, params: dict):
+        if getattr(self, "_climate_auto_resume", None) is None:
+            return False, "прерванного прогона нет", ""
+        self._climate_auto_discard_resume()
+        return True, "прерванный прогон забыт.", ""
+
+    def _control_do_send_file(self, actor: dict, params: dict):
+        """Файл в чат того, кто попросил: отчёт диагностики, журнал точек или ход прогона."""
+        which = str(params.get("which", ""))
+        if which == "report":
+            path, title = self._climate_save_report(), "отчёт диагностики камеры"
+        elif which == "journal":
+            path, title = str(getattr(self, "_chamber_file_path", "") or ""), "журнал точек прогона"
+        elif which == "trace":
+            path, title = str(getattr(self, "_climate_trace_path", "") or ""), "ход прогона по времени"
+        else:
+            return False, "какой файл: report, journal или trace", which
+        telegram = getattr(self, "_remote_telegram", None)
+        if not path or not pathlib.Path(path).is_file():
+            return False, f"{title}: файла пока нет", which
+        if telegram is None or not actor.get("id"):
+            return False, "файл можно прислать только в чат Telegram", which
+        telegram.send_document(path, title, [actor["id"]])
+        return True, f"{title} - {pathlib.Path(path).name} - отправлен в чат.", pathlib.Path(path).name
+
+    def _control_do_label(self, actor: dict, params: dict):
+        label = str(params.get("label", "")).strip()
+        if not label:
+            return False, "пометка не может быть пустой (для одной платы - 0/0)", ""
+        before = str(self._chamber_label)
+        self._chamber_label = label
+        self.chamberChanged.emit()
+        return True, f"пометка точки: «{label}».", f"«{before}» → «{label}»"
+
     def _climate_run_goto(self, index: int):
         """Прогон переходит к шагу index: уставка шага задаётся заново, точки шага снимаются с начала."""
         now = time.monotonic()
@@ -464,7 +659,25 @@ class AppControllerClimateControlMixin(AppControllerContract):
     def _control_view(self) -> dict:
         """Режимы камеры и журнал действий для окна, сайта и мини-приложения."""
         log = getattr(self, "_control_log", None)
+        scenario = getattr(self, "_climate_scenario", None) or {}
+        espec = self._climate_settings.get("driver") == DRIVER_ESPEC
         return {
+            "rules": [{"key": key, "title": title, "unit": unit, "value": scenario.get(key)}
+                      for key, (title, unit) in SCENARIO_RULES.items()],
+            "scenarioFiles": [{"file": item["file"], "name": item["name"]}
+                              for item in getattr(self, "_climate_scenario_files", []) or []],
+            "scenarioFile": pathlib.Path(self._climate_scenario_path).name if getattr(self, "_climate_scenario_path", "") else "",
+            "scenarioDirty": bool(getattr(self, "_climate_scenario_dirty", False)),
+            "label": str(getattr(self, "_chamber_label", "")),
+            "commands": [{"key": item["key"], "group": item["group"], "title": item["title"],
+                          "hint": item.get("hint", ""), "danger": bool(item.get("danger")),
+                          "params": [{"name": p["name"], "label": p["label"], "default": p.get("default", "")}
+                                     for p in item.get("params", [])]}
+                         for item in ESPEC_COMMANDS if espec and not item.get("new_only")],
+            # Последние обмены с камерой (свежие первыми): ответы на команды видны и издалека.
+            "answers": [{"time": item.get("time", ""), "sent": item.get("sent", ""), "answer": item.get("answer", ""),
+                         "explain": item.get("explain", ""), "ok": bool(item.get("ok"))}
+                        for item in list(getattr(self, "_climate_raw_log", []) or [])[:12] if isinstance(item, dict)],
             "modes": self._control_modes(),
             "espec": self._climate_settings.get("driver") == DRIVER_ESPEC,
             "limits": {"min": float(self._climate_settings["min_c"]), "max": float(self._climate_settings["max_c"])},

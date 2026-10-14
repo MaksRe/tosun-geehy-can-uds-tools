@@ -52,6 +52,9 @@ class _Bot:
     def send_to(self, chat_id, text, markup=None):
         self.sent.append((str(chat_id), text))
 
+    def send_document(self, path, caption="", chat_ids=None):
+        self.sent.append((",".join(chat_ids or []), f"файл {path}: {caption}"))
+
 
 class _ControlStub(AppControllerClimateControlMixin, _ScnStub):
     """Камера, прогон, сценарий и управление без Qt."""
@@ -199,6 +202,90 @@ def test_only_admin_grants_rights(tmp_path: Path):
     assert ok and stub._remote_users.get("3")["role"] == "admin"
 
 
+def _live(stub, board_x10=-400):
+    """Средние прибора за окно: оба контура и обе температуры."""
+    now = time.monotonic()
+    for key in ("main", "media", "board_temp", "fuel_temp"):
+        stub._chamber_live_recent[key] = []
+    for index in range(4):
+        for key, value in (("main", 10955), ("media", 6441), ("board_temp", board_x10), ("fuel_temp", board_x10)):
+            stub._chamber_live_note(key, value, now - 1 + index * 0.2)
+
+
+def test_manual_point_is_captured_and_logged(tmp_path: Path):
+    """Плату довели до узла вручную: точку записывает тот, у кого есть право, - с именем в журнале."""
+    stub = _started(tmp_path)
+    stub._control_submit(_as(stub, "2"), "run_pause", {})
+    _live(stub, -402)
+    ok, text = stub._control_submit(_as(stub, "3"), "capture", {})
+    assert not ok and not stub._chamber_points, "наблюдатель точку не пишет"
+    ok, text = stub._control_submit(_as(stub, "2", "сайт"), "capture", {})
+    assert ok and "точка записана" in text and len(stub._chamber_points) == 1, text
+    assert stub._chamber_points[0]["board_temp_x10"] == -402
+    row = _log_rows(stub)[-1]
+    assert row[1] == "Борис (@boris)" and row[3] == "запись точки вручную" and "узел -40 °C" in row[4], row
+    assert stub._climate_run_paused, "ручная точка прогон не трогает"
+
+
+def test_manual_point_needs_a_label(tmp_path: Path):
+    stub = _started(tmp_path)
+    stub._chamber_label = ""
+    _live(stub)
+    ok, text = stub._control_submit(_as(stub, "2"), "capture", {})
+    assert not ok and "пометка" in text and not stub._chamber_points
+    ok, _text = stub._control_submit(_as(stub, "2"), "capture", {"label": "0/0"})
+    assert ok and stub._chamber_points[-1]["note"] == "0/0"
+
+
+def test_full_remote_control_of_scenario_and_chamber(tmp_path: Path):
+    """С сайта и из мини-приложения - всё, что в окне: правила, файлы сценария, пределы, пометка, команды ESPEC."""
+    stub = _started(tmp_path, espec=True)
+    ok, _text = stub._control_submit(_as(stub, "2"), "scenario_rules", {"board_max_shift_c": "25", "finish_stop": True})
+    assert ok and stub._climate_scenario["board_max_shift_c"] == 25.0 and stub._climate_scenario["finish_stop"] is True
+    assert "наибольший сдвиг уставки при доводке: +20 °C → +25 °C" in _log_rows(stub)[-1][4]
+
+    ok, text = stub._control_submit(_as(stub, "2"), "scenario_load", {"file": "любой.json"})
+    assert not ok and "идёт прогон" in text
+    ok, text = stub._control_submit(_as(stub, "2"), "scenario_new", {"kind": "empty"})
+    assert not ok and "идёт прогон" in text
+
+    ok, _text = stub._control_submit(_as(stub, "2"), "limits", {"min": "-60", "max": "110"})
+    assert ok and stub._climate_settings["min_c"] == -60.0 and stub._climate_settings["max_c"] == 110.0
+    ok, _text = stub._control_submit(_as(stub, "2"), "limits", {"min": "50", "max": "10"})
+    assert not ok
+
+    ok, _text = stub._control_submit(_as(stub, "2"), "label", {"label": "68/22"})
+    assert ok and stub._chamber_label == "68/22"
+
+    # Настройка камеры во время прогона ставит его на паузу; команда уходит как из окна.
+    ok, text = stub._control_submit(_as(stub, "2"), "espec_command", {"key": "set_ref", "values": {"ref": "1"}})
+    assert ok and stub._climate_run_paused, text
+    assert stub._climate_link.commands[-1][0] == "raw" and "SET, REF" in stub._climate_link.commands[-1][1]
+    view = stub._control_view()
+    assert any(command["key"] == "set_ref" for command in view["commands"])
+    assert [rule["key"] for rule in view["rules"]][:2] == ["reach_tolerance_c", "settle_min"]
+
+
+def test_scenario_files_can_be_loaded_remotely_between_runs(tmp_path: Path):
+    stub = _ControlStub(tmp_path)
+    stub._climate_scenario_set(cs.board_cycle_scenario(), dirty=False)
+    assert stub._control_submit(_as(stub, "2"), "scenario_save", {})[0]
+    ok, _text = stub._control_submit(_as(stub, "2"), "scenario_new", {"kind": "empty"})
+    assert ok and len(stub._climate_scenario["steps"]) <= 1
+    files = stub._control_view()["scenarioFiles"]
+    ok, text = stub._control_submit(_as(stub, "2"), "scenario_load", {"file": files[0]["file"]})
+    assert ok and len(stub._climate_scenario["steps"]) == 7, text
+
+
+def test_files_are_sent_to_the_asking_chat(tmp_path: Path):
+    stub = _started(tmp_path)
+    ok, text = stub._control_submit(_as(stub, "2"), "send_file", {"which": "trace"})
+    assert ok, text
+    assert stub._remote_telegram.sent[-1][0] == "2" and "run_" in stub._remote_telegram.sent[-1][1]
+    ok, text = stub._control_submit(_as(stub, "2"), "send_file", {"which": "что-то"})
+    assert not ok
+
+
 def test_chamber_settings_changes_are_logged(tmp_path: Path):
     """Пределы уставки влияют на камеру и доводку: их смена - в журнал с именем оператора."""
     stub = _ControlStub(tmp_path)
@@ -313,3 +400,10 @@ def test_bot_estop_asks_for_confirmation(tmp_path: Path):
     assert confirm == "ctl!estop" and done == []
     bot.handle_update({"callback_query": {"id": "q", "data": confirm, "message": {"chat": {"id": 2}, "message_id": 5}}})
     assert done == [("2", "estop")]
+
+    drain()
+    # «Записать точку» из панели /control - тоже с подтверждением.
+    bot.handle_update({"callback_query": {"id": "q", "data": "ctl:capture", "message": {"chat": {"id": 2}, "message_id": 6}}})
+    assert drain()[0]["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == "ctl!capture" and len(done) == 1
+    bot.handle_update({"callback_query": {"id": "q", "data": "ctl!capture", "message": {"chat": {"id": 2}, "message_id": 7}}})
+    assert done[-1] == ("2", "capture")

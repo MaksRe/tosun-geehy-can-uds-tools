@@ -34,6 +34,11 @@ from ui.qml.controller.stability import air_for_board, fit_board_model, predict_
 from ui.qml.control_log import ControlLog
 
 
+def _target(node: float) -> float:
+    """Цель доводки: у края шкалы датчика платы (-40, +85) - на полградуса внутрь."""
+    return min(max(node, -39.5), 84.5)
+
+
 def _boards(stub) -> list[float]:
     return [point["board_temp_x10"] / 10.0 for point in stub._chamber_points]
 
@@ -124,7 +129,7 @@ def test_slow_board_is_brought_by_forecast(tmp_path: Path):
     _walk(stub, limit=20000)
     texts = [text for _level, text in stub.events]
     assert any("по прогнозу устоится" in text and "довожу" in text for text in texts), texts
-    assert all(abs(board - node) <= 1.0 for board, node in zip(_boards(stub), (-40.0, 25.0))), _boards(stub)
+    assert all(abs(board - _target(node)) <= 1.0 for board, node in zip(_boards(stub), (-40.0, 25.0))), _boards(stub)
     assert not any("не догоняет" in text for text in texts), "инертная плата идёт к воздуху - это не беда"
 
 
@@ -157,7 +162,7 @@ def test_leaky_board_needs_no_bringing_after_the_model_is_known(tmp_path: Path):
     assert stub._climate_run_start()
     _walk(stub, limit=30000)
     boards = _boards(stub)
-    assert all(abs(board - node) <= 1.0 for board, node in zip(boards, (25.0, -40.0, -20.0, 85.0))), boards
+    assert all(abs(board - _target(node)) <= 1.0 for board, node in zip(boards, (25.0, -40.0, -20.0, 85.0))), boards
     texts = [text for _level, text in stub.events]
     presets = [text for text in texts if text.startswith("упреждение")]
     assert any("вместо -20,0 °C" in text for text in presets) and any("вместо +85,0 °C" in text for text in presets)

@@ -347,7 +347,7 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             for key in ("progress", "drift", "gap", "setpoint", "stopped", "stopped_hard"):
                 self._climate_auto_alert(key, False, "")
         self._climate_diag_event("RUN", f"этап {stage}, узел {self._climate_run_index + 1}")
-        if self._climate_run_stage:
+        if self._climate_run_stage and self._climate_run_stage != "finish":
             self._climate_auto_save(now)
 
     def _climate_auto_on_node_done(self, node: float, now: float):
@@ -387,6 +387,9 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         if self._climate_auto_finishing:
             self._climate_auto_follow_finish(now)
         if not self._climate_run_stage:
+            return
+        # Возврат камеры после последнего шага: шагов больше нет - сторожить и сохранять нечего.
+        if self._climate_run_stage == "finish":
             return
         self._climate_auto_watchdog(now)
         self._climate_auto_maybe_report(now)
@@ -435,7 +438,8 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         """Сторож прогона: связь, авария, камера стоит, уставка, нет хода, уход, плата, зависание."""
         speed = self._climate_speed()
         stage = self._climate_run_stage
-        node = self._climate_run_nodes[self._climate_run_index] if self._climate_run_nodes else None
+        index = self._climate_run_index
+        node = self._climate_run_nodes[index] if 0 <= index < len(self._climate_run_nodes) else None
         fresh = self._climate_fresh(now)
         reading = self._climate_reading if fresh else None
         settings = self._climate_settings

@@ -136,6 +136,11 @@
   .steps tr.now td { background: rgba(36, 129, 204, .10); }
   .steps button { padding: 4px 8px; font-size: 12px; }
   .log li b { font-weight: 600; }
+  .form { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; align-items: center; font-size: 13px; }
+  .form input[type=text], .ctlrow select, .form select { font: inherit; border: 1px solid var(--line); border-radius: 8px;
+      padding: 5px 8px; background: var(--bg); color: var(--text); width: 90px; }
+  .ctlrow select { width: auto; max-width: 100%; }
+  .answers { font: 12px/1.35 ui-monospace, Consolas, monospace; white-space: pre-wrap; color: var(--soft); margin-top: 8px; }
   a.button { display: inline-block; text-decoration: none; border-radius: 10px; padding: 8px 12px;
              background: var(--accent); color: var(--accent-text); }
   a.button.light { background: var(--bg); color: var(--link); }
@@ -171,7 +176,22 @@
       <div class="ctlrow"><span class="soft">Уставка</span><input id="ctlSetpoint" type="text" inputmode="decimal" placeholder="°C">
         <button class="light" data-ctl="setpoint">Задать</button></div>
       <div class="ctlrow"><span class="soft">Прогон</span><span class="buttons" style="margin:0" id="ctlRun"></span></div>
+      <div class="ctlrow"><span class="soft">Точка</span><button class="light" data-ctl="capture">Записать точку</button>
+        <span class="soft" id="ctlCaptureHint"></span></div>
+      <div class="ctlrow"><span class="soft">Пометка</span><input id="ctlLabel" type="text" placeholder="0/0">
+        <button class="light" data-ctl="label">Задать</button></div>
+      <div class="ctlrow"><span class="soft">Пределы</span><input id="ctlMin" type="text" inputmode="decimal" placeholder="мин">
+        <input id="ctlMax" type="text" inputmode="decimal" placeholder="макс"><button class="light" data-ctl="limits">Задать</button>
+        <span class="soft" id="ctlLimitsHint"></span></div>
       <div class="soft" style="margin-top:8px">Ручной режим или уставка во время прогона ставят его на паузу. Все действия записываются в журнал с вашим именем.</div>
+    </div>
+    <div class="card wide" id="commandsCard" hidden>
+      <h2>Команды камеры ESPEC <span>как в окне программы</span></h2>
+      <div class="ctlrow"><select id="cmdSelect"></select></div>
+      <div class="soft" id="cmdHint" style="margin-top:4px"></div>
+      <div class="ctlrow" id="cmdParams"></div>
+      <div class="buttons"><button data-cmd="send">Отправить</button></div>
+      <div class="answers" id="cmdAnswers"></div>
     </div>
     <div class="card">
       <h2>Камера <span id="chamberName"></span></h2>
@@ -213,6 +233,21 @@
     <div class="card">
       <h2>Автопрогон <span id="scenarioName"></span></h2>
       <div id="auto"></div>
+    </div>
+    <div class="card" id="resumeCard" hidden>
+      <h2>Прерванный прогон</h2>
+      <div id="resumeText"></div>
+      <div class="buttons" id="resumeButtons"></div>
+    </div>
+    <div class="card">
+      <h2>Сценарий <span id="scenarioFile"></span></h2>
+      <ul class="list" id="scenarioFiles"></ul>
+      <div class="buttons" id="scenarioButtons"></div>
+    </div>
+    <div class="card">
+      <h2>Правила сценария <span>для всех шагов</span></h2>
+      <div class="form" id="rulesForm"></div>
+      <div class="buttons" id="rulesButtons"></div>
     </div>
     <div class="card">
       <h2>Шаги сценария <span id="stepsHint"></span></h2>
@@ -866,6 +901,12 @@
       buttons.push(`<button class="danger" data-ctl="run_stop">Стоп прогона</button>`);
     }
     $("ctlRun").innerHTML = buttons.join("");
+    if (!typing("controlCard")) {
+      if (!$("ctlLabel").value) $("ctlLabel").value = control.label || "";
+      $("ctlLimitsHint").textContent = control.limits ? `сейчас ${control.limits.min} … ${control.limits.max} °C` : "";
+    }
+    const board = ((s.live || {}).boardTemp || {}).avg || ((s.live || {}).boardTemp || {}).now || "—";
+    $("ctlCaptureHint").textContent = `пометка «${(s.run || {}).label || "—"}», плата ${board}`;
   }
 
   // Шаги: пройденные серые, идущий выделен; кто управляет - правит текущий и будущие, переходит к шагу.
@@ -898,6 +939,70 @@
       ? `<button class="light" data-steps="add">+ Шаг</button>` +
         (stepsDraft ? `<button data-steps="apply">Применить изменения</button><button class="light" data-steps="cancel">Отменить</button>` : "")
       : "";
+  }
+
+  // Поле ввода в фокусе внутри блока - блок не перерисовывается, чтобы не потерять ввод.
+  const typing = (id) => { const el = document.activeElement; return el && el.tagName !== "BUTTON" && $(id).contains(el); };
+
+  function renderRules(s) {
+    if (typing("rulesForm")) return;
+    const control = (s.climate || {}).control || {};
+    const edit = canControl(s);
+    $("rulesForm").innerHTML = (control.rules || []).map((r) => {
+      const value = r.value === null || r.value === undefined ? "" : (typeof r.value === "boolean" ? r.value : String(r.value).replace(".", ","));
+      const field = !edit ? `<span>${esc(typeof value === "boolean" ? (value ? "да" : "нет") : (value || "—"))} ${esc(r.unit)}</span>`
+        : r.key === "finish_stop" ? `<input type="checkbox" data-rule="${r.key}" ${value ? "checked" : ""}>`
+        : `<span><input type="text" inputmode="decimal" data-rule="${r.key}" value="${esc(value)}"> ${esc(r.unit)}</span>`;
+      return `<span class="soft">${esc(r.title)}</span>${field}`;
+    }).join("");
+    $("rulesButtons").innerHTML = edit ? `<button data-rules="apply">Применить правила</button>` : "";
+  }
+
+  function renderScenarios(s) {
+    const control = (s.climate || {}).control || {};
+    const run = (s.climate || {}).run || {};
+    const edit = canControl(s);
+    $("scenarioFile").textContent = (control.scenarioFile || "не сохранён в файл") + (control.scenarioDirty ? " · есть изменения" : "");
+    $("scenarioFiles").innerHTML = (control.scenarioFiles || []).map((f) =>
+      `<li class="row"><div><div>${esc(f.name)}</div><div class="soft">${esc(f.file)}</div></div>` +
+      (edit && !run.active ? `<button class="light" data-load="${esc(f.file)}">Загрузить</button>` : "") + `</li>`).join("")
+      || `<li class="soft">Сохранённых сценариев нет.</li>`;
+    $("scenarioButtons").innerHTML = !edit ? "" :
+      (run.active ? "" : `<button class="light" data-scn="board_cycle">Новый: цикл платы</button><button class="light" data-scn="empty">Пустой</button>`) +
+      `<button data-scn="save">Сохранить</button>`;
+    const auto = run.auto || {};
+    $("resumeCard").hidden = !auto.resume;
+    if (auto.resume) {
+      $("resumeText").innerHTML = `<div class="warn">${esc(auto.resume.text)}</div>`;
+      $("resumeButtons").innerHTML = edit ? `<button data-resume="resume_saved">Продолжить</button><button class="danger" data-resume="discard_saved">Забыть</button>` : "";
+    }
+  }
+
+  function renderCommands(s) {
+    const control = (s.climate || {}).control || {};
+    const commands = control.commands || [];
+    $("commandsCard").hidden = !(canControl(s) && commands.length);
+    if ($("commandsCard").hidden) return;
+    $("cmdAnswers").textContent = (control.answers || []).map((a) =>
+      `${a.time}  ${a.sent}  →  ${a.answer}${a.explain ? "  (" + a.explain + ")" : ""}`).join("\n");
+    if (typing("commandsCard") && $("cmdSelect").options.length) return;
+    if ($("cmdSelect").options.length !== commands.length) {
+      let group = "";
+      $("cmdSelect").innerHTML = commands.map((c, i) => {
+        const head = c.group !== group ? (group ? "</optgroup>" : "") + `<optgroup label="${esc(c.group)}">` : "";
+        group = c.group;
+        return head + `<option value="${i}">${esc(c.title)}${c.danger ? " ⚠" : ""}</option>`;
+      }).join("") + "</optgroup>";
+      renderCommandParams();
+    }
+  }
+
+  function renderCommandParams() {
+    const c = (((state || {}).climate || {}).control || {}).commands?.[Number($("cmdSelect").value)];
+    if (!c) return;
+    $("cmdHint").textContent = c.hint || "";
+    $("cmdParams").innerHTML = c.params.map((p) =>
+      `<span class="soft">${esc(p.label)}</span><input type="text" data-param="${esc(p.name)}" value="${esc(String(p.default).replace(".", ","))}">`).join("");
   }
 
   function renderActions(s) {
@@ -944,6 +1049,9 @@
     renderControl(s);
     renderRun(s);
     renderSteps(s);
+    renderRules(s);
+    renderScenarios(s);
+    renderCommands(s);
     renderEvents(s);
     renderActions(s);
     renderCharts(s);
@@ -979,6 +1087,17 @@
     else if (action === "run_stop") control({ action }, "Остановить автопрогон? Уставка камеры останется как есть.");
     else if (action === "run_start") control({ action }, "Запустить автопрогон по текущему сценарию?");
     else if (action === "step_next") control({ action }, "Перейти к следующему шагу, не дожидаясь точек текущего?");
+    else if (action === "label") control({ action, label: $("ctlLabel").value.trim() });
+    else if (action === "limits") {
+      const min = $("ctlMin").value.trim(), max = $("ctlMax").value.trim();
+      if (!min && !max) { toast("Впишите нижний и/или верхний предел"); return; }
+      const body = { action };
+      if (min) body.min = min;
+      if (max) body.max = max;
+      control(body, `Пределы уставки камеры: ${min || "как есть"} … ${max || "как есть"} °C?`);
+    }
+    else if (action === "capture") control({ action }, `Записать точку сейчас (${$("ctlCaptureHint").textContent})? `
+      + "Прогон при этом не меняется: если он на паузе - дальше «Следующий шаг» и «Продолжить».");
     else control({ action });
   });
 
@@ -1037,6 +1156,43 @@
         }
       });
     }
+  });
+
+  $("rulesButtons").addEventListener("click", () => {
+    const body = { action: "scenario_rules" };
+    document.querySelectorAll("#rulesForm [data-rule]").forEach((input) => {
+      body[input.dataset.rule] = input.type === "checkbox" ? input.checked : input.value.trim();
+    });
+    control(body, "Применить правила сценария" + (((state.climate || {}).run || {}).active ? " к идущему прогону?" : "?"));
+  });
+
+  $("scenarioFiles").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-load]");
+    if (button) control({ action: "scenario_load", file: button.dataset.load }, `Загрузить сценарий ${button.dataset.load}? Несохранённые изменения текущего пропадут.`);
+  });
+
+  $("scenarioButtons").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-scn]");
+    if (!button) return;
+    if (button.dataset.scn === "save") control({ action: "scenario_save" });
+    else control({ action: "scenario_new", kind: button.dataset.scn }, "Создать новый сценарий? Несохранённые изменения текущего пропадут.");
+  });
+
+  $("resumeButtons").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-resume]");
+    if (!button) return;
+    control({ action: button.dataset.resume }, button.dataset.resume === "resume_saved"
+      ? "Продолжить прерванный прогон с того же шага?" : "Забыть прерванный прогон? Продолжить его будет нельзя.");
+  });
+
+  $("cmdSelect").addEventListener("change", renderCommandParams);
+  $("commandsCard").addEventListener("click", (event) => {
+    if (!event.target.closest("button[data-cmd]")) return;
+    const c = (((state || {}).climate || {}).control || {}).commands?.[Number($("cmdSelect").value)];
+    if (!c) return;
+    const values = {};
+    document.querySelectorAll("#cmdParams [data-param]").forEach((input) => { values[input.dataset.param] = input.value.trim(); });
+    control({ action: "espec_command", key: c.key, values }, `Отправить камере «${c.title}»?` + (c.danger ? " Команда опасная - проверьте камеру." : ""));
   });
 
   $("access").addEventListener("click", async (event) => {
@@ -1139,10 +1295,21 @@
 
   // ------------------------------------------------------------------ обновление
 
+  // История графиков приходит раз в 30 с (каждый 6-й опрос): между ними - прежняя. Так трафик в разы меньше.
+  let polls = 0;
+  let lastHistory = null;
   async function refresh() {
     if (document.hidden) return;
     try {
-      const fresh = await api("api/state");
+      const full = polls % 6 === 0 || !lastHistory;
+      polls += 1;
+      const fresh = await api(full ? "api/state?full=1" : "api/state");
+      if (full) {
+        lastHistory = { board: fresh.history, chamber: (fresh.climate || {}).history };
+      } else {
+        fresh.history = lastHistory.board;
+        if (fresh.climate) fresh.climate.history = lastHistory.chamber;
+      }
       if (!inTelegram && loginKey && !fresh.me) {
         // Ссылку входа заменили новой или право сняли: дальше - только просмотр.
         storeLogin("");

@@ -422,8 +422,8 @@ Card {
                              + "события, журналы. Открывается по адресу в любом браузере (без входа) и кнопкой «Камера» "
                              + "в боте.<br><br>"
                              + "Telegram открывает мини-приложение только по адресу https:// из интернета:<br>"
-                             + "<b>ngrok</b> - основной: бесплатная учётная запись, постоянный адрес, работает по обычному "
-                             + "https и проходит почти любую сеть;<br>"
+                             + "<b>Tailscale</b> - рекомендуется: бесплатно, постоянный адрес, без месячного лимита запросов;<br>"
+                             + "<b>ngrok</b> - бесплатно 20 000 запросов в месяц: при открытом мини-приложении хватает на сутки;<br>"
                              + "<b>Cloudflare</b> - без регистрации, но адрес меняется при каждом запуске, нужен порт 7844, "
                              + "а при частых запусках Cloudflare временно отказывает (429);<br>"
                              + "<b>Свой адрес</b> - если есть сервер с https, проксирующий на порт этой программы.<br><br>"
@@ -432,8 +432,8 @@ Card {
                     Item { Layout.fillWidth: true }
 
                     Repeater {
-                        model: [{ "mode": "ngrok", "title": "ngrok" }, { "mode": "tunnel", "title": "Cloudflare" },
-                                { "mode": "manual", "title": "Свой адрес" }]
+                        model: [{ "mode": "tailscale", "title": "Tailscale" }, { "mode": "ngrok", "title": "ngrok" },
+                                { "mode": "tunnel", "title": "Cloudflare" }, { "mode": "manual", "title": "Свой адрес" }]
 
                         FancyButton {
                             required property var modelData
@@ -450,6 +450,31 @@ Card {
 
                     Caption { text: "Порт" }
                     SettingField { key: "serverPort"; Layout.preferredWidth: 70; horizontalAlignment: TextInput.AlignHCenter; settingKey: "server_port" }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: root.remote.miniappMode === "tailscale"
+                    spacing: 8
+
+                    Caption { text: "tailscale" }
+                    SettingField {
+                        key: "tailscalePath"
+                        Layout.fillWidth: true
+                        placeholderText: root.remote.tailscaleFound ? "найден: " + root.remote.tailscaleFound
+                                                                     : "не найден - установите Tailscale (tailscale.com/download)"
+                        settingKey: "tailscale_path"
+                    }
+                    InfoMark {
+                        tip: "<b>Tailscale Funnel</b> - рекомендуется: бесплатно (план Personal), постоянный адрес вида "
+                             + "https://компьютер.сеть.ts.net, без месячного лимита запросов (у ngrok бесплатно 20 000 "
+                             + "запросов в месяц - мини-приложение выбирает их за сутки).<br><br>"
+                             + "<b>Как подключить</b><br>1. Установите Tailscale на этот компьютер (tailscale.com/download) "
+                             + "и войдите (Google, Microsoft или GitHub).<br>"
+                             + "2. Выберите здесь «Tailscale» и включите «Сайт и мини-приложение».<br>"
+                             + "3. В первый раз Tailscale попросит разрешить Funnel: ссылка появится в строке состояния - "
+                             + "откройте её и нажмите «Enable». Дальше программа включает Funnel сама."
+                    }
                 }
 
                 RowLayout {

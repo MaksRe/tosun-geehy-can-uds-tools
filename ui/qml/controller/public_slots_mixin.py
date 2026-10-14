@@ -3275,7 +3275,9 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
     @Slot()
     def captureChamberPoint(self):
         """Цель функции в снятии одной точки прогона, затем она сразу кладёт в журнал средние из живых показаний."""
-        self._chamber_capture_from_average()
+        ok, text = self._control_gui("capture")
+        if not ok:
+            self.infoMessage.emit("Прогон в камере", text[:1].upper() + text[1:] + ".")
 
     @Slot(bool)
     def setChamberLiveEnabled(self, enabled):

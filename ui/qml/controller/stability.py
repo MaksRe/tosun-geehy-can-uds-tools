@@ -105,30 +105,40 @@ def predict_final(samples, start: float, now: float, chunks: int = 6, min_change
     return final, tau_s
 
 
-def fit_board_model(pairs, min_span_c: float = 10.0, gain_range=(0.5, 1.2)):
-    """Модель «воздух камеры → где устоится плата»: плата ≈ k × воздух + b.
+def fit_board_model(pairs, near: float | None = None, scale_c: float = 10.0, min_span_c: float = 3.0,
+                    gain_range=(0.3, 1.2)):
+    """Модель «воздух камеры → где устоится плата»: плата ≈ k × воздух + b - около нужной температуры.
 
     Зачем: плата отстаёт от воздуха не на постоянную величину - её тянет к комнате
-    (тепло по кабелю, через оснастку) и греет собственный ток. По парам «уставка
-    камеры - где устоялась плата» прогон сразу ставит уставку, при которой плата
-    придёт к температуре шага.
+    (тепло по кабелю, через оснастку), греет собственный ток, а у края шкалы датчика
+    показание ещё и «сплющивается». На стенде 13.10 на тепле k ≈ 0,98, на холоде ≈ 0,81,
+    у -40 - около 0,55: одна прямая на всё ошибается до 4 °C. Поэтому прямая строится
+    по точкам с весом: чем ближе плата в точке к нужной температуре near, тем больше
+    вес (1 / (1 + (Δ / scale_c)²)). near None - все точки поровну.
 
-    pairs - пары (воздух, плата), °C. Одна пара или узкий размах воздуха - только
-    сдвиг (k = 1). Наклон вне разумных пределов - тоже только сдвиг: такая прямая
-    скорее шум, чем свойство установки. Возвращает (k, b, число пар) или None.
+    pairs - пары (воздух, плата), °C. Одна точка или узкий размах воздуха - только
+    сдвиг (k = 1) по ближайшим точкам. Наклон вне разумных пределов - тоже только
+    сдвиг: такая прямая скорее шум, чем свойство установки. Возвращает (k, b, число
+    пар) или None.
     """
     points = [(float(air), float(board)) for air, board in pairs]
     if not points:
         return None
-    count = float(len(points))
-    mean_air = sum(air for air, _ in points) / count
-    mean_board = sum(board for _, board in points) / count
+    if near is None:
+        weights = [1.0] * len(points)
+    else:
+        weights = [1.0 / (1.0 + ((board - float(near)) / scale_c) ** 2) for _air, board in points]
+    total = sum(weights)
+    mean_air = sum(w * air for w, (air, _b) in zip(weights, points)) / total
+    mean_board = sum(w * board for w, (_a, board) in zip(weights, points)) / total
     offset_only = (1.0, mean_board - mean_air, len(points))
     airs = [air for air, _ in points]
     if len(points) < 2 or max(airs) - min(airs) < min_span_c:
         return offset_only
-    sxx = sum((air - mean_air) ** 2 for air in airs)
-    gain = sum((air - mean_air) * (board - mean_board) for air, board in points) / sxx
+    sxx = sum(w * (air - mean_air) ** 2 for w, (air, _b) in zip(weights, points))
+    if sxx <= 1e-9:
+        return offset_only
+    gain = sum(w * (air - mean_air) * (board - mean_board) for w, (air, board) in zip(weights, points)) / sxx
     if not (gain_range[0] <= gain <= gain_range[1]):
         return offset_only
     return gain, mean_board - gain * mean_air, len(points)

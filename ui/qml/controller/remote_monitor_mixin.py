@@ -41,7 +41,8 @@ from PySide6.QtCore import QTimer
 
 import chamber_fit
 from ui.qml.remote_file_sync import MODE_FOLDER, MODE_SFTP, FileSyncConfig, RemoteFileSync
-from ui.qml.public_tunnel import CloudflareTunnel, NgrokTunnel, find_cloudflared, find_ngrok, ngrok_config_has_token
+from ui.qml.public_tunnel import (CloudflareTunnel, NgrokTunnel, TailscaleFunnel, find_cloudflared, find_ngrok,
+                                  find_tailscale, ngrok_config_has_token)
 from ui.qml.remote_status_server import RemoteStatusServer
 from ui.qml.telegram_bot import (LEVEL_TITLES, LEVELS, OPTIONS, ROLE_TITLES, TelegramBot, TelegramUsers, can_control,
                                  public_user, validate_init_data)
@@ -50,9 +51,9 @@ from .contract import AppControllerContract
 from .stability import is_stable, rate_and_spread
 
 # Откуда адрес https мини-приложения: ngrok (основной), туннель Cloudflare или свой сервер.
-MINIAPP_MODES = ("ngrok", "tunnel", "manual")
+MINIAPP_MODES = ("tailscale", "ngrok", "tunnel", "manual")
 # Режимы, в которых адрес даёт туннель, запущенный программой.
-TUNNEL_MODES = ("ngrok", "tunnel")
+TUNNEL_MODES = ("tailscale", "ngrok", "tunnel")
 
 
 class MiniAppAccess:
@@ -216,7 +217,8 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             return kind(lambda url: self._remote_queue_status(f"tunnel_url:{mode}", url, True),
                         lambda text, ok: self._remote_queue_status(f"tunnel:{mode}", text, ok),
                         root / "logs" / log_name)
-        self._remote_tunnels = {"ngrok": tunnel(NgrokTunnel, "ngrok", "ngrok.log"),
+        self._remote_tunnels = {"tailscale": tunnel(TailscaleFunnel, "tailscale", "tailscale.log"),
+                                "ngrok": tunnel(NgrokTunnel, "ngrok", "ngrok.log"),
                                 "tunnel": tunnel(CloudflareTunnel, "tunnel", "cloudflared.log")}
         self._remote_sync = RemoteFileSync(lambda text, ok: self._remote_queue_status("sync", text, ok))
 
@@ -240,11 +242,13 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             "telegram_default_level": "important",
             "telegram_summaries": True,
             # Мини-приложение: адрес https от туннеля Cloudflare или свой.
-            "miniapp_mode": "ngrok",
+            "miniapp_mode": "tailscale",
             "miniapp_url": "",
             "cloudflared_path": "",
             # ngrok: путь, токен учётной записи (пусто - из настроек ngrok) и свой адрес (пусто - выданный).
             "ngrok_path": "",
+            # Tailscale Funnel: путь к tailscale.exe (пусто - стандартная установка или PATH).
+            "tailscale_path": "",
             "ngrok_authtoken": "",
             "ngrok_domain": "",
             "sync_enabled": False,
@@ -296,7 +300,7 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
                     raise ValueError
             else:
                 value = str(value).strip() if key not in ("sync_password",) else str(value)
-                if key in ("cloudflared_path", "ngrok_path"):
+                if key in ("cloudflared_path", "ngrok_path", "tailscale_path"):
                     value = value.strip('"')
         except (TypeError, ValueError):
             self._remote_event("Порт задаётся числом от 1 до 65535.", "bad", telegram=False)
@@ -426,7 +430,12 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         self._remote_tunnel_ok = False
         if not active:
             return
-        if active == "ngrok":
+        if active == "tailscale":
+            exe = find_tailscale(settings["tailscale_path"])
+            missing = ("Не найден Tailscale: установите его с tailscale.com/download, войдите в учётную запись "
+                       "(бесплатный план Personal) и включите программу снова.")
+            options = {}
+        elif active == "ngrok":
             exe = find_ngrok(settings["ngrok_path"])
             missing = ("Не найден ngrok.exe: скачайте его с ngrok.com/download и положите рядом с программой "
                        "(или в папку tools) или укажите путь.")
@@ -557,6 +566,10 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             if self._remote_server.running:
                 self._remote_server.set_snapshot(snapshot)
             self._remote_telegram.set_status_text(self._remote_status_text(snapshot))
+            # Отчёты бота (/status, /steps, /points...) - по тому же снимку, что видит мини-приложение.
+            set_snapshot = getattr(self._remote_telegram, "set_snapshot", None)
+            if set_snapshot is not None:
+                set_snapshot(snapshot)
             changed = True
         if changed:
             self.remoteMonitorChanged.emit()
@@ -726,6 +739,8 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             "stability": {"text": self._remote_stable_text, "ok": self._remote_stable_ok},
             "run": {
                 "points": len(self._chamber_points),
+                # Что подключено к прибору: с этой пометкой запишется ручная точка.
+                "label": str(self._chamber_label),
                 "file": pathlib.Path(self._chamber_file_path).name if self._chamber_file_path else "",
                 "status": str(self._chamber_status),
                 "statusColor": str(self._chamber_status_color),
@@ -811,6 +826,8 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             "cloudflaredPath": str(settings["cloudflared_path"]),
             "cloudflaredFound": find_cloudflared(settings["cloudflared_path"]),
             "ngrokPath": str(settings["ngrok_path"]),
+            "tailscalePath": str(settings["tailscale_path"]),
+            "tailscaleFound": find_tailscale(settings["tailscale_path"]),
             "ngrokFound": find_ngrok(settings["ngrok_path"]),
             "ngrokAuthtoken": str(settings["ngrok_authtoken"]),
             "ngrokConfigured": bool(settings["ngrok_authtoken"]) or ngrok_config_has_token(),

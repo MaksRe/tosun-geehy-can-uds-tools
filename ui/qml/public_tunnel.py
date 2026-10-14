@@ -6,7 +6,12 @@ Telegram открывает мини-приложение только по ад
 такой адрес и проводит запросы к нашему маленькому серверу на этом компьютере.
 
 ПОСТАВЩИКИ
-- ngrok (основной). Бесплатная учётная запись на ngrok.com; агенту выдаётся
+- Tailscale Funnel (рекомендуется). Бесплатный план Personal, постоянный адрес
+  https://<компьютер>.<сеть>.ts.net, без месячного лимита запросов. Tailscale
+  ставится на компьютер у камеры один раз; Funnel держит сама служба Tailscale,
+  программа только включает его для своего порта и узнаёт адрес.
+- ngrok. Бесплатно - 20 000 запросов и 1 ГБ в месяц: мини-приложение,
+  открытое на сутки, выбирает это за сутки. Бесплатная учётная запись на ngrok.com; агенту выдаётся
   постоянный адрес вида https://<слова>.ngrok-free.dev - он не меняется при
   перезапуске. Работает по обычному https (TCP 443), поэтому проходит почти
   любую заводскую сеть. В бесплатном тарифе одновременно может работать только
@@ -95,6 +100,15 @@ def find_cloudflared(configured: str = "") -> str:
 def find_ngrok(configured: str = "") -> str:
     """Путь к ngrok. Пусто - не найден."""
     return find_tool(configured, ("ngrok.exe", "ngrok"))
+
+
+def find_tailscale(configured: str = "") -> str:
+    """Путь к tailscale (командная строка Tailscale). Пусто - не найден."""
+    found = find_tool(configured, ("tailscale.exe", "tailscale"))
+    if found:
+        return found
+    standard = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Tailscale" / "tailscale.exe"
+    return str(standard) if standard.is_file() else ""
 
 
 def ngrok_config_has_token() -> bool:
@@ -411,3 +425,141 @@ class CloudflareTunnel(TunnelProcess):
         if state["url"] and not state["ready"]:
             return self.no_connection_text(state)
         return f"Туннель Cloudflare остановился (код {returncode})"
+
+
+class TailscaleFunnel:
+    """Tailscale Funnel: публичный https-адрес компьютера в сети Tailscale для порта программы.
+
+    В отличие от ngrok и Cloudflare, туннель держит сама служба Tailscale: программа
+    включает Funnel («tailscale funnel --bg --https=443 http://127.0.0.1:ПОРТ»), берёт
+    адрес компьютера из «tailscale status --json» и раз в минуту проверяет, что
+    Tailscale на связи. При остановке Funnel выключается. Если Funnel в сети Tailscale
+    ещё не разрешён, tailscale печатает ссылку, по которой его разрешают в один клик, -
+    она показывается в строке состояния.
+    """
+
+    NAME = "Tailscale Funnel"
+    CHECK_EVERY_S = 60.0
+    COMMAND_TIMEOUT_S = 40.0
+    ENABLE_LINK = re.compile(r"https://login\.tailscale\.com/\S+")
+
+    def __init__(self, on_url: Callable[[str], None], on_status: Callable[[str, bool], None],
+                 log_path: Path | None = None):
+        self._on_url = on_url
+        self._on_status = on_status
+        self._log_path = Path(log_path) if log_path is not None else None
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._url = ""
+        self._port = 0
+        self._exe = ""
+        self._options: dict = {}
+
+    @property
+    def url(self) -> str:
+        with self._lock:
+            return self._url
+
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def start(self, port: int, exe: str, **options):
+        """Включает Funnel для порта. Повторный вызов с теми же данными ничего не меняет."""
+        if self.running and port == self._port and exe == self._exe and options == self._options:
+            return
+        self.stop()
+        self._port, self._exe, self._options = int(port), str(exe), dict(options)
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._worker, daemon=True, name="tunnel-tailscale")
+        self._thread.start()
+
+    def stop(self):
+        """Выключает Funnel для порта программы."""
+        was_running = self.running
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=3)
+        self._thread = None
+        had_url = bool(self.url)
+        with self._lock:
+            self._url = ""
+        if was_running and self._exe and self._port:
+            self._run(self._funnel_command() + ["off"])
+        if had_url:
+            self._on_url("")
+
+    def _funnel_command(self) -> list[str]:
+        return [self._exe, "funnel", "--bg", "--https=443", f"http://127.0.0.1:{self._port}"]
+
+    def _run(self, command: list[str]) -> tuple[int, str]:
+        """Команда tailscale: код возврата и вывод (вывод - в журнал)."""
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        try:
+            done = subprocess.run(command, capture_output=True, timeout=self.COMMAND_TIMEOUT_S, creationflags=flags,
+                                  stdin=subprocess.DEVNULL)
+            output = (done.stdout + done.stderr).decode("utf-8", errors="replace")
+            code = done.returncode
+        except (OSError, subprocess.TimeoutExpired) as error:
+            output, code = str(error), -1
+        if self._log_path is not None:
+            try:
+                self._log_path.parent.mkdir(parents=True, exist_ok=True)
+                with self._log_path.open("a", encoding="utf-8") as log:
+                    log.write(f"$ tailscale {' '.join(command[1:])}\n{output.strip()}\n(код {code})\n")
+            except OSError:
+                pass
+        return code, output
+
+    def _address(self) -> tuple[str, str]:
+        """Адрес https компьютера в Tailscale и причина, если его нет."""
+        code, output = self._run([self._exe, "status", "--json"])
+        if code != 0 or "{" not in output:
+            return "", "Tailscale не отвечает: запустите Tailscale и войдите в учётную запись"
+        try:
+            data = json.loads(output[output.index("{"):])
+        except ValueError:
+            return "", "Tailscale ответил непонятно"
+        if data.get("BackendState") != "Running":
+            return "", f"Tailscale не на связи (состояние {data.get('BackendState')}): войдите в учётную запись"
+        name = str((data.get("Self") or {}).get("DNSName") or "").rstrip(".")
+        if not name:
+            return "", "у компьютера нет имени в Tailscale: включите MagicDNS в настройках сети Tailscale"
+        return f"https://{name}/", ""
+
+    def _enable(self) -> bool:
+        """Включает Funnel. False - не вышло (причина уже в строке состояния)."""
+        code, output = self._run(self._funnel_command())
+        link = self.ENABLE_LINK.search(output)
+        if link:
+            self._on_status(f"Funnel в сети Tailscale ещё не разрешён: откройте {link.group(0)} и разрешите - "
+                            "программа включит его сама.", False)
+            return False
+        if code != 0:
+            self._on_status(f"Tailscale Funnel не включился: {' '.join(output.split())[:200]}", False)
+            return False
+        return True
+
+    def _worker(self):
+        self._on_status("Tailscale Funnel: включаю...", True)
+        enabled = False
+        while not self._stop.is_set():
+            if not enabled:
+                enabled = self._enable()
+            if enabled:
+                url, problem = self._address()
+                if url and url != self.url:
+                    with self._lock:
+                        self._url = url
+                    self._on_url(url)
+                    self._on_status(f"Tailscale Funnel работает: {url}", True)
+                elif problem:
+                    if self.url:
+                        with self._lock:
+                            self._url = ""
+                        self._on_url("")
+                    self._on_status(problem, False)
+                    enabled = False
+            self._stop.wait(self.CHECK_EVERY_S)
+

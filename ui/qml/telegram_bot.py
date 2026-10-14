@@ -14,6 +14,14 @@
 Для управления с сайта в обычном браузере команда /login присылает личную
 ссылку входа; /login new - новая, прежние перестают работать.
 
+БОТ - ЗАПАСНАЯ ПАНЕЛЬ
+Бот сам ходит в Telegram и от туннеля сайта не зависит. Если сайт и
+мини-приложение недоступны, всё нужное есть в командах: отчёты таблицами
+(/status, /steps, /points, /events, /log, /rules, /scenarios, /commands,
+/answers) и управление (/setpoint, /mode, /pause, /resume, /next, /goto,
+/capture, /step, /rule, /limits, /label, /load, /save, /new, /cmd, /report,
+/journal, /trace, /estop) - те же действия, с теми же правами и журналом.
+
 УВЕДОМЛЕНИЯ
 Каждый подписчик сам выбирает (/settings), что ему присылать:
 - «Все события» - всё, что пишет программа;
@@ -44,6 +52,8 @@ from urllib import error as urlerror
 from urllib import request as urlrequest
 from urllib.parse import parse_qsl
 
+from ui.qml import telegram_reports as reports
+
 API_ROOT = "https://api.telegram.org"
 REQUEST_TIMEOUT_S = 15.0
 POLL_TIMEOUT_S = 25
@@ -65,13 +75,32 @@ EVENT_RANK = {"info": 0, "ok": 1, "warn": 2, "bad": 3}
 LEVEL_MIN_RANK = {"all": 0, "important": 1, "alarms": 3, "off": 99}
 EVENT_MARK = {"ok": "✅", "warn": "⚠️", "bad": "❌", "info": "ℹ️"}
 OPTIONS = {"points": "Каждая точка", "summaries": "Сводки", "files": "Файлы"}
+# Отчёты бота (всем): команда - функция «снимок → текст».
+VIEW_COMMANDS = {"/status": reports.status_report, "/steps": reports.steps_report, "/points": reports.points_report,
+                 "/events": reports.events_report, "/log": reports.actions_report, "/rules": reports.rules_report,
+                 "/scenarios": reports.scenarios_report, "/commands": reports.commands_report,
+                 "/answers": reports.answers_report}
+# Команды управления текстом (только для назначенных): без параметров - действие и подтверждение.
+SIMPLE_CONTROL = {"/pause": ("run_pause", None), "/resume": ("run_resume", None),
+                  "/start_run": ("run_start", "Запустить автопрогон по текущему сценарию?"),
+                  "/stop_run": ("run_stop", "Остановить автопрогон? Уставка камеры останется как есть."),
+                  "/next": ("step_next", "Перейти к следующему шагу, не дожидаясь точек текущего?"),
+                  "/capture": ("capture", "Записать точку сейчас по текущим средним прибора?"),
+                  "/save": ("scenario_save", None), "/operator": ("run_operator", None)}
+FILE_COMMANDS = {"/report": "report", "/journal": "journal", "/trace": "trace"}
+CONTROL_COMMANDS = set(SIMPLE_CONTROL) | set(FILE_COMMANDS) | {
+    "/setpoint", "/mode", "/goto", "/label", "/limits", "/step", "/rule", "/load", "/new", "/cmd"}
+MODE_WORDS = {"пуск": "start", "start": "start", "run": "start", "constant": "start",
+              "стоп": "stop", "stop": "stop", "standby": "stop", "выкл": "off", "off": "off", "выключить": "off"}
 # Права: наблюдатель только смотрит, «управляет» - может управлять камерой и прогоном, админ - ещё и раздаёт права.
 ROLES = ("viewer", "operator", "admin")
 ROLE_TITLES = {"viewer": "наблюдатель", "operator": "управляет", "admin": "админ"}
 # Панель управления в чате: действие - надпись кнопки. Опасные - с подтверждением.
 CONTROL_BUTTONS = (("estop", "⛔ Экстренная остановка"), ("run_pause", "⏸ Пауза прогона"),
-                   ("run_resume", "▶ Продолжить прогон"), ("step_next", "⏭ Следующий шаг"))
+                   ("run_resume", "▶ Продолжить прогон"), ("capture", "📍 Записать точку"),
+                   ("step_next", "⏭ Следующий шаг"))
 CONFIRM_ACTIONS = {"estop": "Экстренно остановить камеру? Автопрогон тоже остановится.",
+                   "capture": "Записать точку сейчас по текущим средним прибора?",
                    "step_next": "Перейти к следующему шагу сценария, не дожидаясь точек текущего?"}
 # Ответы Telegram, после которых писать в чат бессмысленно: человек заблокировал бота или удалил чат.
 GONE_MARKS = ("chat not found", "bot was blocked", "user is deactivated")
@@ -267,6 +296,9 @@ class TelegramBot:
         self._app_url = ""
         self._defaults = default_user()
         self._status_text = "Данных пока нет."
+        # Снимок состояния (как у мини-приложения) - для отчётов бота; и отложенные подтверждения по чатам.
+        self._snapshot: dict | None = None
+        self._pending: dict[str, tuple[str, dict]] = {}
         self._menu_url_sent = ""
         # Исполнитель действий управления (см. set_control_handler): (номер чата, действие, параметры) -> (успех, текст).
         self._control_handler: Callable[[str, str, dict], tuple[bool, str]] | None = None
@@ -319,6 +351,15 @@ class TelegramBot:
             token = secrets.token_urlsafe(24)
             self.users.upsert(chat_id, web_token=token)
         return f"{base.rstrip('/')}/#login={token}"
+
+    def set_snapshot(self, snapshot: dict):
+        """Свежий снимок состояния для отчётов бота. Вызывается из потока окна раз в секунду."""
+        with self._lock:
+            self._snapshot = snapshot
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return self._snapshot or {}
 
     def set_status_text(self, text: str):
         """Текст для /status. Вызывается из потока окна, читается потоком бота."""
@@ -399,9 +440,11 @@ class TelegramBot:
         for chat_id in targets:
             self._queue.put(("document", (str(chat_id), str(path), str(caption))))
 
-    def send_to(self, chat_id, text: str, markup: dict | None = None):
-        """Сообщение одному чату (ответ на команду, проверка связи)."""
+    def send_to(self, chat_id, text: str, markup: dict | None = None, html: bool = False):
+        """Сообщение одному чату (ответ на команду, проверка связи). html - разметка HTML (таблицы в <pre>)."""
         payload = {"chat_id": str(chat_id), "text": str(text), "disable_web_page_preview": True}
+        if html:
+            payload["parse_mode"] = "HTML"
         if markup:
             payload["reply_markup"] = markup
         self._queue.put(("send", payload))
@@ -537,12 +580,19 @@ class TelegramBot:
                 self.users.remove(chat_id)
                 self.send_to(chat_id, "Вы отписаны: уведомления больше не придут. Подписаться снова - /start.")
             self._emit(f"Telegram: отписался {name}.", True)
-        elif command in ("/login", "/estop", "/control"):
-            self._control_command(chat_id, command, text.partition(" ")[2].strip().lower())
-        elif command == "/status":
-            with self._lock:
-                status = self._status_text
-            self.send_to(chat_id, status, self._app_markup())
+        elif command in ("/login", "/estop", "/control") or command in CONTROL_COMMANDS:
+            self._control_command(chat_id, command, text.partition(" ")[2].strip())
+        elif command in VIEW_COMMANDS:
+            snapshot = self.snapshot()
+            if snapshot:
+                self.send_to(chat_id, VIEW_COMMANDS[command](snapshot), self._app_markup() if command == "/status" else None,
+                             html=True)
+            else:
+                with self._lock:
+                    status = self._status_text
+                self.send_to(chat_id, status, self._app_markup())
+        elif command == "/help":
+            self.send_to(chat_id, self._full_help(self.users.get(chat_id)))
         elif command == "/settings":
             self.subscribe(chat_id, name, username)
             self.send_to(chat_id, self._settings_text(chat_id), self._settings_markup(chat_id))
@@ -561,8 +611,23 @@ class TelegramBot:
             self.send_to(chat_id, "Управлять камерой могут только админ и те, кому он дал право. "
                                   "Смотреть можно без права: /status и /app.")
             return
+        if command in CONTROL_COMMANDS:
+            parsed = self._parse_control(command, argument)
+            if isinstance(parsed, str):
+                self.send_to(chat_id, parsed)
+                return
+            action, params, confirm = parsed
+            if confirm:
+                # Опасное действие - подтверждение кнопкой; параметры ждут в отложенном действии чата.
+                with self._lock:
+                    self._pending[chat_id] = (action, params)
+                self.send_to(chat_id, confirm, {"inline_keyboard": [[{"text": "Да", "callback_data": "ctl!pending"},
+                                                                     {"text": "Отмена", "callback_data": "ctl!cancel"}]]})
+            else:
+                self.send_to(chat_id, self._run_control(chat_id, action, params))
+            return
         if command == "/login":
-            link = self.login_link(chat_id, renew=argument in ("new", "новая", "новый"))
+            link = self.login_link(chat_id, renew=argument.lower() in ("new", "новая", "новый"))
             self.send_to(chat_id, ("Личная ссылка входа на сайт с правом управления:\n" + link
                                    + "\n\nНе пересылайте её. Если ушла не туда - /login new выдаст новую, "
                                      "прежние перестанут работать.") if link
@@ -578,6 +643,82 @@ class TelegramBot:
                 rows.append([app])
             self.send_to(chat_id, "Управление камерой и прогоном. Режимы, уставка и шаги сценария - в мини-приложении.",
                          {"inline_keyboard": rows})
+
+    def _parse_control(self, command: str, argument: str):
+        """Команда управления текстом -> (действие, параметры, текст подтверждения или None) или текст ошибки."""
+        words = argument.split()
+        snapshot = self.snapshot()
+        control = (snapshot.get("climate") or {}).get("control") or {}
+
+        def number(text):
+            try:
+                return float(str(text).replace(",", "."))
+            except ValueError:
+                return None
+
+        if command == "/setpoint":
+            if len(words) != 1 or number(words[0]) is None:
+                return "Пример: /setpoint -40"
+            return "setpoint", {"value": words[0]}, None
+        if command == "/mode":
+            keys = [mode["key"] for mode in control.get("modes") or []]
+            word = words[0].lower() if words else ""
+            wanted = MODE_WORDS.get(word)
+            if wanted is None:
+                return "Пример: /mode пуск | стоп | выкл"
+            key = {"start": "constant", "stop": "standby", "off": "off"}[wanted] if "constant" in keys else \
+                {"start": "run", "stop": "stop"}.get(wanted, "")
+            if key not in keys:
+                return "Этот режим недоступен для подключённой камеры."
+            return "mode", {"mode": key}, None
+        if command in SIMPLE_CONTROL:
+            action, confirm = SIMPLE_CONTROL[command]
+            return action, {}, confirm
+        if command == "/goto":
+            if len(words) != 1 or not words[0].isdigit():
+                return "Пример: /goto 3 - перейти к шагу 3 (номера - в /steps)"
+            return "step_goto", {"index": int(words[0]) - 1}, f"Перейти к шагу {words[0]}? Точки текущего шага сняты не будут."
+        if command == "/label":
+            if not words:
+                return "Пример: /label 0/0"
+            return "label", {"label": argument.strip()}, None
+        if command == "/limits":
+            if len(words) != 2 or number(words[0]) is None or number(words[1]) is None:
+                return "Пример: /limits -60 110 - нижний и верхний пределы уставки, °C"
+            return "limits", {"min": words[0], "max": words[1]}, None
+        if command == "/step":
+            steps = [dict(step) for step in (snapshot.get("climate") or {}).get("steps") or []]
+            if len(words) not in (2, 3) or not words[0].isdigit() or number(words[1]) is None \
+                    or (len(words) == 3 and number(words[2]) is None):
+                return "Пример: /step 2 -40 15 - шаг 2: температура -40 °C, выдержка 15 мин (выдержку можно не писать)"
+            index = int(words[0]) - 1
+            if not 0 <= index < len(steps):
+                return f"Шага {words[0]} нет: шаги - в /steps"
+            steps[index]["temp"] = number(words[1])
+            if len(words) == 3:
+                steps[index]["hold_min"] = number(words[2])
+            return "scenario_steps", {"steps": steps}, None
+        if command == "/rule":
+            if len(words) != 2:
+                return "Пример: /rule board_max_shift_c 20 - ключи и значения в /rules"
+            return "scenario_rules", {words[0]: words[1]}, None
+        if command == "/load":
+            files = control.get("scenarioFiles") or []
+            if len(words) != 1 or not words[0].isdigit() or not 1 <= int(words[0]) <= len(files):
+                return "Пример: /load 1 - номера в /scenarios"
+            item = files[int(words[0]) - 1]
+            return "scenario_load", {"file": item["file"]}, f"Загрузить сценарий «{item['name']}»?"
+        if command == "/new":
+            kind = "empty" if words and words[0].lower().startswith(("пуст", "empty")) else "board_cycle"
+            return "scenario_new", {"kind": kind}, "Создать новый сценарий? Несохранённые изменения текущего пропадут."
+        if command == "/cmd":
+            if not words:
+                return "Пример: /cmd set_ref ref=9 - ключи и параметры в /commands"
+            values = dict(word.split("=", 1) for word in words[1:] if "=" in word)
+            return "espec_command", {"key": words[0], "values": values}, f"Отправить камере команду «{words[0]}»?"
+        if command in FILE_COMMANDS:
+            return "send_file", {"which": FILE_COMMANDS[command]}, None
+        return "Неизвестная команда управления: /help"
 
     def _run_control(self, chat_id: str, action: str, params: dict | None = None) -> str:
         """Действие управления через программу: она проверит права, выполнит и запишет в журнал."""
@@ -598,9 +739,20 @@ class TelegramBot:
         if data.startswith(("ctl:", "ctl!")):
             action = data[4:]
             if action == "cancel":
+                with self._lock:
+                    self._pending.pop(chat_id, None)
                 answer = "Отменено"
             elif not can_control(user):
                 answer = "Нет права управлять камерой"
+            elif action == "pending":
+                with self._lock:
+                    pending = self._pending.pop(chat_id, None)
+                if pending is None:
+                    answer = "Это подтверждение уже не действует"
+                else:
+                    result = self._run_control(chat_id, *pending)
+                    answer = result[:190]
+                    self.send_to(chat_id, result)
             elif data.startswith("ctl:") and action in CONFIRM_ACTIONS:
                 # Опасное действие - сначала подтверждение отдельным сообщением.
                 self.send_to(chat_id, CONFIRM_ACTIONS[action],
@@ -638,10 +790,44 @@ class TelegramBot:
         lines = ["Команды:", "/status - что сейчас с прогоном",
                  "/settings - что присылать", "/app - мини-приложение и сайт с подробностями",
                  "/stop - отписаться"]
+        lines += ["", "Отчёты: /steps /points /events /log /rules /scenarios /answers - полный список: /help"]
         if can_control(user):
             lines += ["", f"Вы {ROLE_TITLES[user['role']]}: можете управлять камерой и прогоном.",
-                      "/control - кнопки управления", "/estop - экстренная остановка камеры",
-                      "/login - ссылка входа на сайт с правом управления"]
+                      "/control - кнопки управления (в том числе «Записать точку»)",
+                      "/estop - экстренная остановка камеры",
+                      "/login - ссылка входа на сайт с правом управления",
+                      "Все команды управления - /help"]
+        return "\n".join(lines)
+
+    @staticmethod
+    def _full_help(user: dict | None = None) -> str:
+        """Полный список команд: бот - запасная панель, если сайт недоступен."""
+        lines = ["Просмотр (всем):",
+                 "/status - камера, плата, контуры, прогон, проблемы",
+                 "/steps - шаги сценария: пройдено, идёт, впереди",
+                 "/points - последние точки журнала",
+                 "/events - последние события",
+                 "/log - журнал действий: кто и что менял",
+                 "/rules - правила сценария (ключи для /rule)",
+                 "/scenarios - сохранённые сценарии (номера для /load)",
+                 "/commands - команды камеры ESPEC (ключи для /cmd)",
+                 "/answers - последние ответы камеры",
+                 "/settings - что присылать вам, /stop - отписаться"]
+        if can_control(user):
+            lines += ["", "Управление (вам можно, всё пишется в журнал):",
+                      "/estop - экстренная остановка камеры",
+                      "/mode пуск|стоп|выкл - режим камеры",
+                      "/setpoint -40 - уставка камеры (прогон встанет на паузу)",
+                      "/limits -60 110 - пределы уставки",
+                      "/start_run, /pause, /resume, /stop_run - автопрогон",
+                      "/next - следующий шаг, /goto 3 - к шагу 3",
+                      "/capture - записать точку сейчас, /label 0/0 - пометка",
+                      "/step 2 -40 15 - шаг 2: -40 °C, выдержка 15 мин",
+                      "/rule ключ значение - правило сценария",
+                      "/load 1, /save, /new цикл|пустой - сценарии",
+                      "/cmd ключ имя=значение - команда ESPEC",
+                      "/report, /journal, /trace - файлы в этот чат",
+                      "/control - кнопки, /login - вход на сайт"]
         return "\n".join(lines)
 
     def _settings_text(self, chat_id: str) -> str:
@@ -680,6 +866,11 @@ class TelegramBot:
         commands = [{"command": "status", "description": "что сейчас с прогоном"},
                     {"command": "settings", "description": "что присылать"},
                     {"command": "app", "description": "мини-приложение и сайт"},
+                    {"command": "steps", "description": "шаги сценария"},
+                    {"command": "points", "description": "последние точки"},
+                    {"command": "events", "description": "последние события"},
+                    {"command": "log", "description": "журнал действий"},
+                    {"command": "help", "description": "все команды"},
                     {"command": "control", "description": "управление (для назначенных)"},
                     {"command": "estop", "description": "экстренная остановка (для назначенных)"},
                     {"command": "login", "description": "вход на сайт с управлением (для назначенных)"},

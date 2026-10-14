@@ -30,6 +30,7 @@ X-Web-Token). Права проверяет и действия записыва
 
 from __future__ import annotations
 
+import gzip
 import json
 import mimetypes
 import threading
@@ -169,6 +170,11 @@ class RemoteStatusServer:
                 return
 
             def _send(self, code: int, body: bytes, content_type: str, extra: dict | None = None):
+                # Сжатие текста: туннели считают трафик, а снимок с историей сжимается в 5-10 раз.
+                if (len(body) > 1024 and content_type.startswith(("application/json", "text/"))
+                        and "gzip" in self.headers.get("Accept-Encoding", "")):
+                    body = gzip.compress(body, 6)
+                    extra = dict(extra or {}, **{"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
                 self.send_response(code)
                 self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(body)))
@@ -254,6 +260,11 @@ class RemoteStatusServer:
                     with owner._lock:
                         text = owner._snapshot_text
                     payload = json.loads(text)
+                    # История графиков - самая тяжёлая часть: только по запросу «full=1» (страница - раз в 30 с).
+                    if parsed.path == "/api/state" and (query.get("full") or [""])[0] != "1":
+                        payload.pop("history", None)
+                        if isinstance(payload.get("climate"), dict):
+                            payload["climate"].pop("history", None)
                     payload["files"] = owner._files_listing()
                     access, chat_id, channel = self._telegram_user()
                     if access is not None:
