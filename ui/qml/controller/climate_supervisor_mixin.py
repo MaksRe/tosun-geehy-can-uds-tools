@@ -122,6 +122,8 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         self._climate_auto_watch: dict = {}
         self._climate_auto_progress: deque = deque(maxlen=2000)
         self._climate_auto_durations: list = []
+        # Шаги, оставленные вручную без точки (кнопка «следующий шаг», переход к шагу): узел и время на нём.
+        self._climate_auto_skipped: list = []
         self._climate_auto_elapsed_before = 0.0
         self._climate_auto_session_start = None
         self._climate_auto_node_start = None
@@ -178,6 +180,7 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             "paused_by": self._climate_auto_paused_by,
             "elapsed_s": round(self._climate_auto_elapsed(now), 1),
             "durations": [[node, round(seconds, 1)] for node, seconds in self._climate_auto_durations],
+            "skipped": [[node, round(seconds, 1)] for node, seconds in self._climate_auto_skipped],
             "problems": list(self._climate_auto_problems[-50:]),
             "chamber": {
                 "board_only": bool(getattr(self, "_chamber_board_only", False)),
@@ -360,6 +363,21 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         tail = f" Осталось примерно {duration_text(left)}." if left is not None else ""
         self._climate_event(f"узел {_c(node)} пройден за {duration_text(seconds)} "
                             f"({len(self._climate_auto_durations)} из {len(self._climate_run_nodes)}).{tail}", "ok")
+
+    def _climate_auto_on_node_left(self, node: float, now: float, who: str = ""):
+        """Шаг оставлен вручную без точки: его время - отдельной строкой, отсчёт следующего шага - с нуля.
+
+        Иначе часы, проведённые на пропущенном шаге, приписывались следующему: на стенде
+        13.10 шаг -20 «шёл» 7:51, хотя 6:47 из них прогон стоял на -40, и оценка
+        оставшегося времени выросла с 2:38 до 21 часа.
+        """
+        started = self._climate_auto_node_start if self._climate_auto_node_start is not None else now
+        seconds = (now - started) * self._climate_speed()
+        self._climate_auto_skipped.append((float(node), seconds))
+        self._climate_auto_node_start = now
+        self._climate_auto_problems.append(
+            f"{time.strftime('%d.%m %H:%M')} шаг {_c(node)} оставлен без точки через {duration_text(seconds)}"
+            + (f" ({who})" if who else ""))
 
     def _climate_auto_on_finish(self, now: float | None = None):
         """Узлы пройдены: дальше ждём запись профиля и присылаем итог."""
@@ -604,14 +622,20 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         if not self._climate_auto_durations or not self._climate_run_nodes:
             return None
         average = sum(seconds for _node, seconds in self._climate_auto_durations) / len(self._climate_auto_durations)
-        remaining = len(self._climate_run_nodes) - len(self._climate_auto_durations)
+        # Осталось: текущий шаг и все после него (переход назад или вперёд меняет это число).
+        remaining = max(0, len(self._climate_run_nodes) - max(0, int(self._climate_run_index)))
         current = 0.0
         if self._climate_auto_node_start is not None and self._climate_run_stage:
             current = min(average, (now - self._climate_auto_node_start) * self._climate_speed())
         return max(0.0, average * remaining - current)
 
     def _climate_auto_nodes_text(self) -> str:
-        return ", ".join(f"{_c(node)} - {duration_text(seconds)}" for node, seconds in self._climate_auto_durations)
+        text = ", ".join(f"{_c(node)} - {duration_text(seconds)}" for node, seconds in self._climate_auto_durations)
+        skipped = getattr(self, "_climate_auto_skipped", None) or []
+        if skipped:
+            text += ". Без точки (оставлены вручную): " + ", ".join(
+                f"{_c(node)} - {duration_text(seconds)}" for node, seconds in skipped)
+        return text
 
     def _climate_auto_summary_text(self, now: float) -> str:
         """Сводка для Telegram: где прогон, камера, плата, точки, время."""
@@ -730,6 +754,7 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         self._climate_run_done = [float(node) for node in saved.get("done") or []]
         self._climate_run_connected = str(self._chamber_label).strip()
         self._climate_auto_durations = [(float(node), float(seconds)) for node, seconds in saved.get("durations") or []]
+        self._climate_auto_skipped = [(float(node), float(seconds)) for node, seconds in saved.get("skipped") or []]
         self._climate_auto_elapsed_before = float(saved.get("elapsed_s", 0.0))
         self._climate_auto_problems = list(saved.get("problems") or [])
         self._climate_auto_session_start = now

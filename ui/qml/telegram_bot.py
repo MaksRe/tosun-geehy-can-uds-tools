@@ -16,11 +16,20 @@
 
 БОТ - ЗАПАСНАЯ ПАНЕЛЬ
 Бот сам ходит в Telegram и от туннеля сайта не зависит. Если сайт и
-мини-приложение недоступны, всё нужное есть в командах: отчёты таблицами
+мини-приложение недоступны, всё нужное есть в боте: отчёты таблицами
 (/status, /steps, /points, /events, /log, /rules, /scenarios, /commands,
 /answers) и управление (/setpoint, /mode, /pause, /resume, /next, /goto,
-/capture, /step, /rule, /limits, /label, /load, /save, /new, /cmd, /report,
-/journal, /trace, /estop) - те же действия, с теми же правами и журналом.
+/capture, /step, /addstep, /delstep, /rule, /limits, /label, /load, /save,
+/new, /cmd, /report, /journal, /trace, /estop) - те же действия, с теми же
+правами и журналом.
+
+КНОПКИ ВМЕСТО КОМАНД
+Набирать команды не обязательно: внизу экрана постоянная клавиатура (статус,
+шаги, точки, камера, прогон, меню, экстренная остановка), а меню в сообщении
+листается кнопками на месте (telegram_menus.py). Где нужно число, бот просит
+прислать его обычным сообщением - без «/». Кнопка помнит своё действие в
+памяти бота; после перезапуска программы старые кнопки отвечают «кнопка
+устарела» и присылают свежее меню.
 
 УВЕДОМЛЕНИЯ
 Каждый подписчик сам выбирает (/settings), что ему присылать:
@@ -52,6 +61,7 @@ from urllib import error as urlerror
 from urllib import request as urlrequest
 from urllib.parse import parse_qsl
 
+from ui.qml import telegram_menus as menus
 from ui.qml import telegram_reports as reports
 
 API_ROOT = "https://api.telegram.org"
@@ -89,7 +99,8 @@ SIMPLE_CONTROL = {"/pause": ("run_pause", None), "/resume": ("run_resume", None)
                   "/save": ("scenario_save", None), "/operator": ("run_operator", None)}
 FILE_COMMANDS = {"/report": "report", "/journal": "journal", "/trace": "trace"}
 CONTROL_COMMANDS = set(SIMPLE_CONTROL) | set(FILE_COMMANDS) | {
-    "/setpoint", "/mode", "/goto", "/label", "/limits", "/step", "/rule", "/load", "/new", "/cmd"}
+    "/setpoint", "/mode", "/goto", "/label", "/limits", "/step", "/addstep", "/delstep", "/rule", "/load", "/new",
+    "/cmd"}
 MODE_WORDS = {"пуск": "start", "start": "start", "run": "start", "constant": "start",
               "стоп": "stop", "stop": "stop", "standby": "stop", "выкл": "off", "off": "off", "выключить": "off"}
 # Права: наблюдатель только смотрит, «управляет» - может управлять камерой и прогоном, админ - ещё и раздаёт права.
@@ -104,6 +115,18 @@ CONFIRM_ACTIONS = {"estop": "Экстренно остановить камер�
                    "step_next": "Перейти к следующему шагу сценария, не дожидаясь точек текущего?"}
 # Ответы Telegram, после которых писать в чат бессмысленно: человек заблокировал бота или удалил чат.
 GONE_MARKS = ("chat not found", "bot was blocked", "user is deactivated")
+# Ответы Telegram, которые не ошибка: «Обновить» без изменений, сообщение уже удалено человеком.
+HARMLESS_MARKS = ("message is not modified", "message to edit not found")
+# Сколько кнопок помнить на чат: старые меню со временем перестают работать.
+MAX_BUTTONS_PER_CHAT = 400
+# Версия постоянной клавиатуры: при смене набора кнопок или прав её присылают заново.
+KEYBOARD_VERSION = "1"
+# Нажатия постоянной клавиатуры: надпись - (вид, имя экрана).
+KEYBOARD_ACTIONS = {menus.KB_STATUS: ("view", "status"), menus.KB_STEPS: ("view", "steps"),
+                    menus.KB_POINTS: ("view", "points"), menus.KB_EVENTS: ("view", "events"),
+                    menus.KB_REPORTS: ("menu", "reports"), menus.KB_MENU: ("menu", "main"),
+                    menus.KB_CAMERA: ("menu", "camera"), menus.KB_RUN: ("menu", "run"),
+                    menus.KB_ESTOP: ("estop", ""), menus.KB_SETTINGS: ("settings", "")}
 
 
 def default_user(level: str = "important", points: bool = True, summaries: bool = True, files: bool = True) -> dict:
@@ -113,7 +136,9 @@ def default_user(level: str = "important", points: bool = True, summaries: bool 
             "points": bool(points), "summaries": bool(summaries), "files": bool(files),
             "since": time.strftime("%Y-%m-%d %H:%M"),
             # Права и ключ личной ссылки входа на сайт (только у тех, кто управляет).
-            "role": "viewer", "web_token": ""}
+            "role": "viewer", "web_token": "",
+            # Какая постоянная клавиатура у человека сейчас (версия и права): сменились - прислать новую.
+            "keyboard": ""}
 
 
 def can_control(user: dict | None) -> bool:
@@ -299,6 +324,12 @@ class TelegramBot:
         # Снимок состояния (как у мини-приложения) - для отчётов бота; и отложенные подтверждения по чатам.
         self._snapshot: dict | None = None
         self._pending: dict[str, tuple[str, dict]] = {}
+        # Кнопки меню: номер кнопки -> что она делает (по чатам); и чаты, где бот ждёт ввод значения.
+        self._buttons: dict[str, dict[str, dict]] = {}
+        self._button_seq = 0
+        self._awaiting: dict[str, dict] = {}
+        # Через сколько секунд перерисовать меню после действия: программа успевает обновить снимок.
+        self.menu_refresh_s = 1.5
         self._menu_url_sent = ""
         # Исполнитель действий управления (см. set_control_handler): (номер чата, действие, параметры) -> (успех, текст).
         self._control_handler: Callable[[str, str, dict], tuple[bool, str]] | None = None
@@ -486,6 +517,9 @@ class TelegramBot:
                     break
                 except Exception as error:  # noqa: BLE001 - любая ошибка сети одинаково повод повторить
                     last_error = str(error)
+                    if any(mark in last_error for mark in HARMLESS_MARKS):
+                        last_error = ""
+                        break
                     if any(mark in last_error for mark in GONE_MARKS):
                         break
                     if attempt + 1 < SEND_ATTEMPTS and not self._stop.wait(RETRY_PAUSE_S):
@@ -562,14 +596,26 @@ class TelegramBot:
         username = str(sender.get("username") or "")
         command = text.partition(" ")[0].split("@", 1)[0].lower()
 
+        if text and not text.startswith("/"):
+            # Кнопка постоянной клавиатуры или значение, которое бот попросил прислать.
+            self._handle_text(chat_id, text)
+            self._ensure_keyboard(chat_id)
+            return
+        with self._lock:
+            # Любая команда отменяет ожидание ввода: человек передумал.
+            self._awaiting.pop(chat_id, None)
+
         if command == "/start":
             known = self.users.get(chat_id) is not None
             user = self.subscribe(chat_id, name, username)
             if not known:
                 self._emit(f"Telegram: подписался {name}.", True)
+            self.users.upsert(chat_id, keyboard=self._keyboard_mark(user))
             self.send_to(chat_id, ("Вы подписаны на уведомления о прогоне. " if not known else "Вы уже подписаны. ")
                          + f"Что присылать: {LEVEL_TITLES[user['level']]} - изменить /settings.\n\n"
-                         + self._help_text(user), self._app_markup())
+                         + self._help_text(user), menus.keyboard(can_control(user)))
+            self._show(chat_id, "menu", "main")
+            return
         elif command == "/stop":
             user = self.users.get(chat_id)
             if can_control(user):
@@ -582,11 +628,12 @@ class TelegramBot:
             self._emit(f"Telegram: отписался {name}.", True)
         elif command in ("/login", "/estop", "/control") or command in CONTROL_COMMANDS:
             self._control_command(chat_id, command, text.partition(" ")[2].strip())
+        elif command == "/menu":
+            self._show(chat_id, "menu", "main")
         elif command in VIEW_COMMANDS:
             snapshot = self.snapshot()
             if snapshot:
-                self.send_to(chat_id, VIEW_COMMANDS[command](snapshot), self._app_markup() if command == "/status" else None,
-                             html=True)
+                self._show(chat_id, "view", command[1:])
             else:
                 with self._lock:
                     status = self._status_text
@@ -603,6 +650,176 @@ class TelegramBot:
                          else "Мини-приложение ещё не включено в программе у камеры.", markup)
         else:
             self.send_to(chat_id, self._help_text(self.users.get(chat_id)))
+        self._ensure_keyboard(chat_id)
+
+    # ------------------------------------------------------------------ кнопки
+
+    @staticmethod
+    def _keyboard_mark(user: dict | None) -> str:
+        return f"{KEYBOARD_VERSION}:{'control' if can_control(user) else 'view'}"
+
+    def _ensure_keyboard(self, chat_id: str):
+        """Постоянная клавиатура под права человека: прислать, если её ещё нет или права сменились."""
+        user = self.users.get(chat_id)
+        if user is None or user.get("keyboard") == self._keyboard_mark(user):
+            return
+        self.users.upsert(chat_id, keyboard=self._keyboard_mark(user))
+        self.send_to(chat_id, "Кнопки внизу экрана обновлены" + (": можно управлять камерой и прогоном."
+                                                                  if can_control(user) else "."),
+                     menus.keyboard(can_control(user)))
+
+    def _handle_text(self, chat_id: str, text: str):
+        """Сообщение без «/»: нажатие постоянной клавиатуры или значение, которое бот просил прислать."""
+        pressed = KEYBOARD_ACTIONS.get(text)
+        with self._lock:
+            waiting = None if pressed else self._awaiting.pop(chat_id, None)
+            if pressed:
+                self._awaiting.pop(chat_id, None)
+        if pressed:
+            kind, name = pressed
+            if self.users.get(chat_id) is None:
+                self.send_to(chat_id, "Сначала подпишитесь: /start")
+            elif kind == "estop":
+                self._control_command(chat_id, "/estop", "")
+            elif kind == "settings":
+                self.send_to(chat_id, self._settings_text(chat_id), self._settings_markup(chat_id))
+            else:
+                self._show(chat_id, kind, name)
+            return
+        if waiting is None:
+            self.send_to(chat_id, "Не понял. Кнопки - внизу экрана, меню - /menu.")
+            return
+        if text.lower() in ("отмена", "cancel", "нет"):
+            self.send_to(chat_id, "Отменено.")
+            return
+        argument = f"{waiting.get('prefix', '')} {text}".strip()
+        parsed = self._parse_control(waiting["command"], argument)
+        if isinstance(parsed, str):
+            # Значение не подошло: подсказка и ожидание ввода заново.
+            with self._lock:
+                self._awaiting[chat_id] = waiting
+            self.send_to(chat_id, parsed + "\nПришлите ещё раз или «отмена».",
+                         {"force_reply": True, "input_field_placeholder": waiting.get("placeholder") or "значение"})
+            return
+        self._control_command(chat_id, waiting["command"], argument)
+
+    def _register(self, chat_id: str, entry: dict) -> str:
+        """Запоминает, что делает кнопка; возвращает короткий номер для callback_data (не длиннее 64 байт)."""
+        with self._lock:
+            self._button_seq += 1
+            key = format(self._button_seq, "x")
+            buttons = self._buttons.setdefault(chat_id, {})
+            buttons[key] = entry
+            while len(buttons) > MAX_BUTTONS_PER_CHAT:
+                buttons.pop(next(iter(buttons)))
+        return key
+
+    def _inline(self, chat_id: str, rows: list) -> dict:
+        """Ряды кнопок меню -> разметка Telegram; действие каждой кнопки запоминается под её номером."""
+        keyboard = []
+        for row in rows:
+            line = []
+            for title, entry in row:
+                if entry.get("t") == "raw":
+                    line.append(dict(entry["button"], text=title))
+                else:
+                    line.append({"text": title, "callback_data": "b:" + self._register(chat_id, entry)})
+            if line:
+                keyboard.append(line)
+        return {"inline_keyboard": keyboard}
+
+    def _show(self, chat_id: str, kind: str, name: str, arg=None, message_id=None):
+        """Экран меню или отчёт: новым сообщением или на месте прежнего (message_id)."""
+        user = self.users.get(chat_id)
+        snapshot = self.snapshot()
+        if kind == "view":
+            text, rows = menus.view(name, snapshot, can_control(user))
+        else:
+            text, rows = menus.build(name, arg, snapshot, can_control(user))
+            app = self._app_button()
+            if name == "main" and app:
+                rows.append([("📱 Мини-приложение", {"t": "raw", "button": app})])
+        markup = self._inline(chat_id, rows)
+        if message_id is None:
+            self.send_to(chat_id, text, markup, html=True)
+        else:
+            self._edit(chat_id, message_id, text, markup)
+
+    def _edit(self, chat_id: str, message_id, text: str, markup: dict | None = None, html: bool = True):
+        """Перерисовать сообщение на месте: меню листается, а не плодит новые сообщения."""
+        payload = {"chat_id": chat_id, "message_id": message_id, "text": text, "disable_web_page_preview": True,
+                   "reply_markup": markup or {"inline_keyboard": []}}
+        if html:
+            payload["parse_mode"] = "HTML"
+        self._queue.put(("call", ("editMessageText", payload)))
+
+    def _refresh_later(self, chat_id: str, back, message_id):
+        """После действия перерисовать меню, откуда оно сделано: снимок программы обновляется раз в секунду."""
+        if not back or message_id is None:
+            return
+        name, arg = back
+
+        def refresh():
+            self._show(chat_id, "menu", name, arg, message_id)
+        if self.menu_refresh_s <= 0:
+            refresh()
+        else:
+            timer = threading.Timer(self.menu_refresh_s, refresh)
+            timer.daemon = True
+            timer.start()
+
+    def _press(self, chat_id: str, key: str, message: dict, user: dict | None) -> str:
+        """Нажатие кнопки меню. Возвращает короткий ответ для всплывающей подсказки."""
+        message_id = message.get("message_id")
+        with self._lock:
+            entry = (self._buttons.get(chat_id) or {}).get(key)
+            if entry is not None and entry["t"] == "do":
+                # Кнопка «Да» срабатывает один раз: повторное нажатие не повторит действие.
+                self._buttons[chat_id].pop(key, None)
+        if entry is None:
+            self._show(chat_id, "menu", "main")
+            return "Кнопка устарела - вот свежее меню"
+        kind = entry["t"]
+        if user is None:
+            return "Сначала подпишитесь: /start"
+        if kind == "menu":
+            self._show(chat_id, "menu", entry["name"], entry.get("arg"), message_id)
+            return ""
+        if kind == "view":
+            self._show(chat_id, "view", entry["name"], None, message_id)
+            return "Обновлено"
+        if kind == "settings":
+            self._edit(chat_id, message_id, self._settings_text(chat_id), self._settings_markup(chat_id), html=False)
+            return ""
+        if kind == "cancel":
+            self._edit(chat_id, message_id, "Отменено.", html=False)
+            return "Отменено"
+        if not can_control(user):
+            return "Нет права управлять камерой"
+        if kind == "login":
+            self._control_command(chat_id, "/login", "")
+            return ""
+        if kind == "ask":
+            with self._lock:
+                self._awaiting[chat_id] = entry
+            self.send_to(chat_id, entry["prompt"] + "\nОтмена - «отмена».",
+                         {"force_reply": True, "input_field_placeholder": entry.get("placeholder") or "значение"})
+            return ""
+        if kind == "act" and entry.get("confirm"):
+            # Опасное действие - отдельное сообщение с «Да» и «Отмена»; меню перерисуется после «Да».
+            yes = dict(entry, t="do", origin=message_id)
+            self.send_to(chat_id, entry["confirm"], self._inline(chat_id, [[("✅ Да", yes), ("Отмена", {"t": "cancel"})]]))
+            return ""
+        if kind in ("act", "do"):
+            result = self._run_control(chat_id, entry["action"], entry.get("params"))
+            if kind == "do":
+                self._edit(chat_id, message_id, f"{entry.get('confirm') or ''}\n{result}".strip(), html=False)
+                self._refresh_later(chat_id, entry.get("back"), entry.get("origin"))
+            else:
+                self.send_to(chat_id, result)
+                self._refresh_later(chat_id, entry.get("back"), message_id)
+            return result[:190]
+        return ""
 
     def _control_command(self, chat_id: str, command: str, argument: str):
         """Команды управления: вход на сайт, экстренная остановка, панель кнопок. Только для тех, у кого есть право."""
@@ -637,12 +854,8 @@ class TelegramBot:
                          {"inline_keyboard": [[{"text": "⛔ Да, остановить", "callback_data": "ctl!estop"},
                                                {"text": "Отмена", "callback_data": "ctl!cancel"}]]})
         else:
-            rows = [[{"text": title, "callback_data": f"ctl:{action}"}] for action, title in CONTROL_BUTTONS]
-            app = self._app_button()
-            if app:
-                rows.append([app])
-            self.send_to(chat_id, "Управление камерой и прогоном. Режимы, уставка и шаги сценария - в мини-приложении.",
-                         {"inline_keyboard": rows})
+            # /control - то же меню кнопками, что и «☰ Меню»: камера, прогон, сценарий, правила, файлы.
+            self._show(chat_id, "menu", "main")
 
     def _parse_control(self, command: str, argument: str):
         """Команда управления текстом -> (действие, параметры, текст подтверждения или None) или текст ошибки."""
@@ -698,6 +911,22 @@ class TelegramBot:
             if len(words) == 3:
                 steps[index]["hold_min"] = number(words[2])
             return "scenario_steps", {"steps": steps}, None
+        if command == "/addstep":
+            steps = [dict(step) for step in (snapshot.get("climate") or {}).get("steps") or []]
+            if len(words) not in (1, 2) or any(number(word) is None for word in words):
+                return "Пример: /addstep -40 15 - новый шаг в конце: -40 °C, выдержка 15 мин (выдержку можно не писать)"
+            steps.append({"temp": number(words[0]), "hold_min": number(words[1]) if len(words) == 2 else 0.0,
+                          "capture": True})
+            return "scenario_steps", {"steps": steps}, None
+        if command == "/delstep":
+            steps = [dict(step) for step in (snapshot.get("climate") or {}).get("steps") or []]
+            if len(words) != 1 or not words[0].isdigit():
+                return "Пример: /delstep 3 - удалить шаг 3 (номера - в /steps)"
+            index = int(words[0]) - 1
+            if not 0 <= index < len(steps):
+                return f"Шага {words[0]} нет: шаги - в /steps"
+            removed = steps.pop(index)
+            return "scenario_steps", {"steps": steps}, f"Удалить шаг {words[0]} ({removed.get('temp')} °C)?"
         if command == "/rule":
             if len(words) != 2:
                 return "Пример: /rule board_max_shift_c 20 - ключи и значения в /rules"
@@ -736,7 +965,9 @@ class TelegramBot:
         chat_id = str((message.get("chat") or {}).get("id", ""))
         answer = ""
         user = self.users.get(chat_id)
-        if data.startswith(("ctl:", "ctl!")):
+        if data.startswith("b:"):
+            answer = self._press(chat_id, data[2:], message, user)
+        elif data.startswith(("ctl:", "ctl!")):
             action = data[4:]
             if action == "cancel":
                 with self._lock:
@@ -787,14 +1018,15 @@ class TelegramBot:
 
     @staticmethod
     def _help_text(user: dict | None = None) -> str:
-        lines = ["Команды:", "/status - что сейчас с прогоном",
+        lines = ["Всё есть на кнопках внизу экрана и в меню (☰ Меню, /menu) - команды набирать не нужно.",
+                 "", "Команды, если удобнее:", "/status - что сейчас с прогоном",
                  "/settings - что присылать", "/app - мини-приложение и сайт с подробностями",
                  "/stop - отписаться"]
         lines += ["", "Отчёты: /steps /points /events /log /rules /scenarios /answers - полный список: /help"]
         if can_control(user):
             lines += ["", f"Вы {ROLE_TITLES[user['role']]}: можете управлять камерой и прогоном.",
-                      "/control - кнопки управления (в том числе «Записать точку»)",
-                      "/estop - экстренная остановка камеры",
+                      "Кнопки «🌡 Камера» и «▶️ Прогон» внизу, всё остальное - в «☰ Меню».",
+                      "/estop или «⛔ СТОП камеры» - экстренная остановка камеры",
                       "/login - ссылка входа на сайт с правом управления",
                       "Все команды управления - /help"]
         return "\n".join(lines)
@@ -802,7 +1034,8 @@ class TelegramBot:
     @staticmethod
     def _full_help(user: dict | None = None) -> str:
         """Полный список команд: бот - запасная панель, если сайт недоступен."""
-        lines = ["Просмотр (всем):",
+        lines = ["Всё ниже есть и на кнопках: внизу экрана и в меню (/menu).", "",
+                 "Просмотр (всем):",
                  "/status - камера, плата, контуры, прогон, проблемы",
                  "/steps - шаги сценария: пройдено, идёт, впереди",
                  "/points - последние точки журнала",
@@ -823,6 +1056,7 @@ class TelegramBot:
                       "/next - следующий шаг, /goto 3 - к шагу 3",
                       "/capture - записать точку сейчас, /label 0/0 - пометка",
                       "/step 2 -40 15 - шаг 2: -40 °C, выдержка 15 мин",
+                      "/addstep -40 15 - новый шаг в конце, /delstep 3 - удалить шаг 3",
                       "/rule ключ значение - правило сценария",
                       "/load 1, /save, /new цикл|пустой - сценарии",
                       "/cmd ключ имя=значение - команда ESPEC",
@@ -845,6 +1079,8 @@ class TelegramBot:
         app = self._app_button()
         if app:
             rows.append([app])
+        rows.append([{"text": "☰ Меню", "callback_data": "b:" + self._register(chat_id, {"t": "menu", "name": "main",
+                                                                                          "arg": None})}])
         return {"inline_keyboard": rows}
 
     def _app_button(self) -> dict | None:
@@ -863,7 +1099,8 @@ class TelegramBot:
             if not token or url == self._menu_url_sent:
                 return
             self._menu_url_sent = url
-        commands = [{"command": "status", "description": "что сейчас с прогоном"},
+        commands = [{"command": "menu", "description": "меню кнопками: отчёты и управление"},
+                    {"command": "status", "description": "что сейчас с прогоном"},
                     {"command": "settings", "description": "что присылать"},
                     {"command": "app", "description": "мини-приложение и сайт"},
                     {"command": "steps", "description": "шаги сценария"},

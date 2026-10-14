@@ -35,8 +35,8 @@ from ui.qml.control_log import ControlLog
 
 
 def _target(node: float) -> float:
-    """Цель доводки: у края шкалы датчика платы (-40, +85) - на полградуса внутрь."""
-    return min(max(node, -39.5), 84.5)
+    """Цель доводки: у края шкалы датчика платы (-55, +125) - на полградуса внутрь."""
+    return min(max(node, -54.5), 124.5)
 
 
 def _boards(stub) -> list[float]:

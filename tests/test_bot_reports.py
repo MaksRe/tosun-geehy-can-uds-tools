@@ -54,8 +54,9 @@ SNAPSHOT = {
 
 def _bot(tmp_path: Path):
     users = TelegramUsers(tmp_path / "users.json")
-    users.upsert("2", name="Борис", role="operator")
-    users.upsert("3", name="Вера")
+    # Постоянная клавиатура уже прислана: здесь проверяются ответы на команды, а не она.
+    users.upsert("2", name="Борис", role="operator", keyboard="1:control")
+    users.upsert("3", name="Вера", keyboard="1:view")
     bot = TelegramBot(users)
     bot.close()
     bot.configure(TOKEN)

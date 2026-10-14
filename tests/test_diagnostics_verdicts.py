@@ -200,10 +200,12 @@ def test_media_ratio_of_one_is_neutral():
     "temperature_x10, expected_color",
     [
         (250, Diag.DIAGNOSTICS_COLOR_OK),
-        (-399, Diag.DIAGNOSTICS_COLOR_OK),
-        (799, Diag.DIAGNOSTICS_COLOR_OK),
-        (-400, Diag.DIAGNOSTICS_COLOR_BAD),
-        (800, Diag.DIAGNOSTICS_COLOR_BAD),
+        (-400, Diag.DIAGNOSTICS_COLOR_OK),
+        (850, Diag.DIAGNOSTICS_COLOR_OK),
+        (-549, Diag.DIAGNOSTICS_COLOR_OK),
+        (1249, Diag.DIAGNOSTICS_COLOR_OK),
+        (-550, Diag.DIAGNOSTICS_COLOR_BAD),
+        (1250, Diag.DIAGNOSTICS_COLOR_BAD),
     ],
 )
 def test_temperature_edges_are_treated_as_sensor_fault(temperature_x10, expected_color):

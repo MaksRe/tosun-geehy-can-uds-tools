@@ -66,13 +66,13 @@ class AppControllerDiagnosticsMixin(AppControllerContract):
     DIAGNOSTICS_TEMP_DELTA_WARN_X10 = 150
 
     # Границы таблиц NTC в прошивке, 0.1 °C. За ними показание недостоверно.
-    # У датчиков они разные: таблица платы построена по паспорту её
-    # терморезистора и доведена до +85 C, зонд в баке внешний и его таблица
-    # заканчивается на +80 C.
-    DIAGNOSTICS_TEMP_MIN_X10 = -400
-    DIAGNOSTICS_TEMP_MAX_X10 = 800
-    DIAGNOSTICS_BOARD_TEMP_MIN_X10 = -400
-    DIAGNOSTICS_BOARD_TEMP_MAX_X10 = 850
+    # Обе таблицы расширены до -55...+125 C, чтобы края прогона в камере
+    # (-40 и +85 C) лежали внутри шкалы. Задаются раздельно: таблицы у
+    # датчиков разные и могут меняться независимо.
+    DIAGNOSTICS_TEMP_MIN_X10 = -550
+    DIAGNOSTICS_TEMP_MAX_X10 = 1250
+    DIAGNOSTICS_BOARD_TEMP_MIN_X10 = -550
+    DIAGNOSTICS_BOARD_TEMP_MAX_X10 = 1250
 
     # Широковещательный уровень топлива J1939: PGN 0xFEFC, второй байт, шаг 0,4 %.
     DIAGNOSTICS_J1939_FUEL_PGN = 0xFEFC
@@ -824,7 +824,7 @@ class AppControllerDiagnosticsMixin(AppControllerContract):
         verdict, color, hint = self._diagnostics_temperature_verdict(fuel_temp)
         rows.append(self._diagnostics_row(
             group, "Датчик в топливе", self._diagnostics_text(fuel_temp, " °C", 0.1, 1),
-            "DID 0x0019, шкала таблицы -40 ... +80 °C", verdict, color, hint,
+            "DID 0x0019, шкала таблицы -55 ... +125 °C", verdict, color, hint,
         ))
 
         board_temp = self._diagnostics_value("board_temp")
@@ -832,7 +832,7 @@ class AppControllerDiagnosticsMixin(AppControllerContract):
         verdict, color, hint = self._diagnostics_temperature_verdict(board_temp, board=True)
         rows.append(self._diagnostics_row(
             group, "Датчик на плате", self._diagnostics_text(board_temp, " °C", 0.1, 1),
-            f"код АЦП {self._diagnostics_text(board_adc)}, шкала -40 ... +85 °C", verdict, color, hint,
+            f"код АЦП {self._diagnostics_text(board_adc)}, шкала -55 ... +125 °C", verdict, color, hint,
         ))
 
         if fuel_temp is None or board_temp is None:

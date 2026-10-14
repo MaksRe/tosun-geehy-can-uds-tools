@@ -2,13 +2,14 @@
 
 Что случилось на стенде и что тесты закрепляют:
 - шаг -40 °C: после трёх доводок (уставка до -56,3) плата стояла на -38,6...-39,6
-  (шум датчика у края шкалы), правило «устоялась» три часа не выполнялось, прогон
-  висел - теперь при малой скорости три окна подряд плата считается устоявшейся;
+  (шум датчика), правило «устоялась» три часа не выполнялось, прогон висел -
+  теперь при малой скорости три окна подряд плата считается устоявшейся;
 - плата так и не устаивается - по истечении «предупредить, если не устоялась за»
   решение принимается по текущему среднему, прогон не висит;
-- шаг +85 °C: датчик платы (шкала прошивки -40...+85) упёрся в +85,0, и это
-  сочлось попаданием - теперь показание на пределе шкалы попаданием не считается,
-  уставка уводится внутрь шкалы, цель у края - +84,5 (у -40 - -39,5);
+- шаг +85 °C: датчик платы (шкала прошивки была -40...+85) упёрся в +85,0, и
+  это сочлось попаданием - теперь показание на пределе шкалы попаданием не
+  считается, уставка уводится внутрь шкалы, цель у края - на 0,5 °C внутрь;
+- шкала прошивки расширена до -55...+125: узлы -40 и +85 внутри, цель - сам узел;
 - конец прогона: камеру остановили сразу после уставки +25, и она остывала сама
   часами - теперь сначала выход на +25, потом остановка;
 - ход прогона по времени пишется в CSV для разбора.
@@ -36,16 +37,17 @@ def _run(tmp_path: Path, nodes: str, **settings):
     return stub
 
 
-def _with_sensor(stub, noise_c=0.0, wave_c=0.0, wave_min=20.0, seed=3):
-    """Датчик платы прибора: шкала -40...+85 (как в прошивке), шум и медленные колебания."""
+def _with_sensor(stub, noise_c=0.0, wave_c=0.0, wave_min=20.0, seed=3, scale=(-55.0, 125.0)):
+    """Датчик платы прибора: шкала прошивки (по умолчанию -55...+125), шум и медленные колебания."""
     rnd = random.Random(seed)
+    stub.BOARD_SENSOR_RANGE_C = scale
     original = stub.sim.read
 
     def read():
         reading = original()
         value = reading.product_c + rnd.uniform(-noise_c, noise_c)
         value += wave_c * math.sin(2 * math.pi * stub.clock[0] / (wave_min * 60.0))
-        reading.product_c = round(min(85.0, max(-40.0, value)), 1)
+        reading.product_c = round(min(scale[1], max(scale[0], value)), 1)
         return reading
     stub.sim.read = read
 
@@ -54,14 +56,14 @@ def _boards(stub):
     return [point["board_temp_x10"] / 10.0 for point in stub._chamber_points]
 
 
-def test_noisy_board_at_the_edge_does_not_hang_the_run(tmp_path: Path):
+def test_noisy_board_does_not_hang_the_run(tmp_path: Path):
     stub = _run(tmp_path, "25, -40", settle_timeout_min=600.0)
     stub.sim.self_heating_c = 1.0
     _with_sensor(stub, noise_c=0.6)
     assert stub._climate_run_start()
     _walk(stub, limit=20000)
     boards = _boards(stub)
-    assert len(boards) == 2 and abs(boards[1] - (-39.5)) <= 1.2, boards
+    assert len(boards) == 2 and abs(boards[1] - (-40.0)) <= 1.2, boards
     texts = [text for _level, text in stub.events]
     assert any("колеблется" in text and "в среднем стоит" in text for text in texts), texts
 
@@ -76,9 +78,10 @@ def test_board_that_never_settles_is_decided_by_timeout(tmp_path: Path):
 
 
 def test_clamped_sensor_at_plus_85_is_not_a_hit(tmp_path: Path):
+    """Прошивка до расширения таблиц: шкала -40...+85, узел +85 на самом краю."""
     stub = _run(tmp_path, "25, 85")
     stub.sim.self_heating_c = 7.0
-    _with_sensor(stub)
+    _with_sensor(stub, scale=(-40.0, 85.0))
     assert stub._climate_run_start()
     _walk(stub, limit=20000)
     boards = _boards(stub)
@@ -114,3 +117,18 @@ def test_run_trace_is_written(tmp_path: Path):
     rows = list(csv.reader(io.StringIO(traces[0].read_text(encoding="utf-8-sig")), delimiter=";"))
     assert rows[0][:4] == ["Время", "Шаг", "Температура шага (°C)", "Этап"] and len(rows) > 20
     assert {row[3] for row in rows[1:]} >= {"reach", "settle"}
+
+
+def test_step_left_by_hand_keeps_its_own_time(tmp_path: Path):
+    """Шаг -40 оставлен кнопкой «следующий шаг» через 6:47: это время - не шагу -20 и не в оценку остатка."""
+    stub = _run(tmp_path, "25, -40, -20")
+    assert stub._climate_run_start()
+    stub._climate_auto_durations = [(25.0, 1860.0)]
+    stub._climate_run_index = 1
+    stub._climate_auto_node_start = 1000.0
+    stub._climate_auto_on_node_left(-40.0, 1000.0 + 6 * 3600 + 47 * 60, "Max")
+    assert stub._climate_auto_skipped == [(-40.0, 24420.0)] and stub._climate_auto_node_start == 1000.0 + 24420.0
+    assert any("оставлен без точки через 6:47 (Max)" in text for text in stub._climate_auto_problems)
+    assert "Без точки (оставлены вручную): -40,0 °C - 6:47" in stub._climate_auto_nodes_text()
+    stub._climate_run_index = 2
+    assert stub._climate_auto_eta(stub._climate_auto_node_start) == 1860.0

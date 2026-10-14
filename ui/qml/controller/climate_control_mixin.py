@@ -507,9 +507,12 @@ class AppControllerClimateControlMixin(AppControllerContract):
         self.chamberChanged.emit()
         return True, f"пометка точки: «{label}».", f"«{before}» → «{label}»"
 
-    def _climate_run_goto(self, index: int):
+    def _climate_run_goto(self, index: int, who: str = ""):
         """Прогон переходит к шагу index: уставка шага задаётся заново, точки шага снимаются с начала."""
         now = time.monotonic()
+        nodes = self._climate_run_nodes
+        if 0 <= self._climate_run_index < len(nodes) and int(index) != self._climate_run_index:
+            self._climate_hook("_climate_auto_on_node_left", nodes[self._climate_run_index], now, who)
         self._climate_run_index = int(index)
         self._climate_run_reset_board()
         self._climate_run_label_index = 0
@@ -530,7 +533,7 @@ class AppControllerClimateControlMixin(AppControllerContract):
         if index + 1 >= len(self._climate_run_nodes):
             return False, "это последний шаг: чтобы закончить раньше, остановите прогон", ""
         details = f"{self._control_step_text(index)} → {self._control_step_text(index + 1)}"
-        self._climate_run_goto(index + 1)
+        self._climate_run_goto(index + 1, str(actor.get("name", "")))
         return True, f"прогон перешёл к шагу {index + 2}.", details
 
     def _control_do_step_goto(self, actor: dict, params: dict):
@@ -545,7 +548,7 @@ class AppControllerClimateControlMixin(AppControllerContract):
         if target == self._climate_run_index:
             return False, "этот шаг уже идёт", ""
         details = f"{self._control_step_text(self._climate_run_index)} → {self._control_step_text(target)}"
-        self._climate_run_goto(target)
+        self._climate_run_goto(target, str(actor.get("name", "")))
         return True, f"прогон перешёл к шагу {target + 1}.", details
 
     # ------------------------------------------------------------------ сценарий
