@@ -241,6 +241,8 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             # Новые подписчики бота: уровень и сводки по умолчанию.
             "telegram_default_level": "important",
             "telegram_summaries": True,
+            # Рассылка только админам: на время тестов и экспериментов остальным ничего не уходит.
+            "telegram_admin_only": False,
             # Мини-приложение: адрес https от туннеля Cloudflare или свой.
             "miniapp_mode": "tailscale",
             "miniapp_url": "",
@@ -385,6 +387,7 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             defaults = {"level": settings["telegram_default_level"], "points": settings["telegram_points"],
                         "summaries": settings["telegram_summaries"], "files": settings["telegram_files"]}
             self._remote_telegram.configure(settings["telegram_token"], defaults)
+            self._remote_telegram.set_admin_only(settings["telegram_admin_only"])
             if not settings["telegram_token"]:
                 self._remote_telegram_status = "Впишите токен бота."
                 self._remote_telegram_ok = False
@@ -751,6 +754,8 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
                 "rows": self._chamber_rows()[:15],
             },
             "chain": self._chamber_chain_view(),
+            # Рассылка бота: всем или только админу (показ и переключатель у админа на сайте).
+            "telegram": {"adminOnly": bool(self._remote_settings.get("telegram_admin_only"))},
             "climate": self._remote_climate_snapshot(),
             "test": self._chamber_test_view(),
             "history": {
@@ -843,6 +848,7 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             "telegramToken": str(settings["telegram_token"]),
             "telegramPoints": bool(settings["telegram_points"]),
             "telegramFiles": bool(settings["telegram_files"]),
+            "telegramAdminOnly": bool(settings["telegram_admin_only"]),
             "telegramStatus": self._remote_telegram_status,
             "telegramOk": self._remote_telegram_ok,
             "syncEnabled": bool(settings["sync_enabled"]),

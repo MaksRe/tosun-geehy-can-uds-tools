@@ -32,6 +32,11 @@
 устарела» и присылают свежее меню.
 
 УВЕДОМЛЕНИЯ
+Рассылку можно целиком переключить на «только админу» (окно программы,
+/quiet у админа, меню бота, мини-приложение): на время тестов и экспериментов
+уведомления, сводки, точки и файлы получают только админы, остальным не
+приходит ничего. Ответы на их собственные команды и кнопки приходят как обычно.
+
 Каждый подписчик сам выбирает (/settings), что ему присылать:
 - «Все события» - всё, что пишет программа;
 - «Важные» - выход на этапы, итоги, предупреждения и аварии, без мелочей;
@@ -100,7 +105,10 @@ SIMPLE_CONTROL = {"/pause": ("run_pause", None), "/resume": ("run_resume", None)
 FILE_COMMANDS = {"/report": "report", "/journal": "journal", "/trace": "trace"}
 CONTROL_COMMANDS = set(SIMPLE_CONTROL) | set(FILE_COMMANDS) | {
     "/setpoint", "/mode", "/goto", "/label", "/limits", "/step", "/addstep", "/delstep", "/rule", "/load", "/new",
-    "/cmd"}
+    "/cmd", "/quiet"}
+# Слова для /quiet: включить «только админу» или вернуть рассылку всем.
+QUIET_WORDS = {"on": True, "вкл": True, "да": True, "админ": True, "admin": True,
+               "off": False, "выкл": False, "нет": False, "все": False, "всем": False, "all": False}
 MODE_WORDS = {"пуск": "start", "start": "start", "run": "start", "constant": "start",
               "стоп": "stop", "stop": "stop", "standby": "stop", "выкл": "off", "off": "off", "выключить": "off"}
 # Права: наблюдатель только смотрит, «управляет» - может управлять камерой и прогоном, админ - ещё и раздаёт права.
@@ -330,6 +338,8 @@ class TelegramBot:
         self._awaiting: dict[str, dict] = {}
         # Через сколько секунд перерисовать меню после действия: программа успевает обновить снимок.
         self.menu_refresh_s = 1.5
+        # Рассылка только админам (тесты, эксперименты): остальным уведомления и файлы не уходят.
+        self._admin_only = False
         self._menu_url_sent = ""
         # Исполнитель действий управления (см. set_control_handler): (номер чата, действие, параметры) -> (успех, текст).
         self._control_handler: Callable[[str, str, dict], tuple[bool, str]] | None = None
@@ -382,6 +392,22 @@ class TelegramBot:
             token = secrets.token_urlsafe(24)
             self.users.upsert(chat_id, web_token=token)
         return f"{base.rstrip('/')}/#login={token}"
+
+    def set_admin_only(self, enabled: bool):
+        """Рассылка только админам или всем подписчикам. Ответы на команды это не затрагивает."""
+        with self._lock:
+            self._admin_only = bool(enabled)
+
+    @property
+    def admin_only(self) -> bool:
+        with self._lock:
+            return self._admin_only
+
+    def _only_admins(self, chat_ids: list[str]) -> list[str]:
+        """Получатели рассылки с учётом режима «только админу»."""
+        if not self.admin_only:
+            return list(chat_ids)
+        return [chat_id for chat_id in chat_ids if (self.users.get(chat_id) or {}).get("role") == "admin"]
 
     def set_snapshot(self, snapshot: dict):
         """Свежий снимок состояния для отчётов бота. Вызывается из потока окна раз в секунду."""
@@ -460,14 +486,14 @@ class TelegramBot:
             return
         mark = EVENT_MARK.get(level, "ℹ️")
         body = f"{mark} {text}"
-        for chat_id in self.users.recipients(level, kind):
+        for chat_id in self._only_admins(self.users.recipients(level, kind)):
             self._queue.put(("send", {"chat_id": chat_id, "text": body, "disable_web_page_preview": True}))
 
     def send_document(self, path, caption: str = "", chat_ids: list[str] | None = None):
         """Файл тем, кто включил «файлы» (или в указанные чаты)."""
         if not self.ready:
             return
-        targets = chat_ids if chat_ids is not None else self.users.recipients("info", "file")
+        targets = chat_ids if chat_ids is not None else self._only_admins(self.users.recipients("info", "file"))
         for chat_id in targets:
             self._queue.put(("document", (str(chat_id), str(path), str(caption))))
 
@@ -737,6 +763,13 @@ class TelegramBot:
         else:
             text, rows = menus.build(name, arg, snapshot, can_control(user))
             app = self._app_button()
+            if name == "main" and (user or {}).get("role") == "admin":
+                # Только админ переключает рассылку: на время тестов уведомления получает лишь он.
+                quiet = self.admin_only
+                rows.append([("🔕 Рассылка: только админу" if quiet else "🔔 Рассылка: всем подписчикам",
+                              {"t": "act", "action": "notify_scope", "params": {"admin_only": not quiet},
+                               "confirm": None, "back": ("main", None)})])
+                text += ("\n🔕 Рассылка сейчас только админу: остальным уведомления не уходят." if quiet else "")
             if name == "main" and app:
                 rows.append([("📱 Мини-приложение", {"t": "raw", "button": app})])
         markup = self._inline(chat_id, rows)
@@ -887,6 +920,12 @@ class TelegramBot:
         if command in SIMPLE_CONTROL:
             action, confirm = SIMPLE_CONTROL[command]
             return action, {}, confirm
+        if command == "/quiet":
+            wanted = QUIET_WORDS.get(words[0].lower()) if words else None
+            if wanted is None:
+                return ("Пример: /quiet on - уведомления только админу (тесты), /quiet off - снова всем. "
+                        f"Сейчас: {'только админу' if self.admin_only else 'всем подписчикам'}.")
+            return "notify_scope", {"admin_only": wanted}, None
         if command == "/goto":
             if len(words) != 1 or not words[0].isdigit():
                 return "Пример: /goto 3 - перейти к шагу 3 (номера - в /steps)"
@@ -1062,6 +1101,9 @@ class TelegramBot:
                       "/cmd ключ имя=значение - команда ESPEC",
                       "/report, /journal, /trace - файлы в этот чат",
                       "/control - кнопки, /login - вход на сайт"]
+        if (user or {}).get("role") == "admin":
+            lines += ["", "Только админу:",
+                      "/quiet on - уведомления только админу (тесты), /quiet off - снова всем"]
         return "\n".join(lines)
 
     def _settings_text(self, chat_id: str) -> str:

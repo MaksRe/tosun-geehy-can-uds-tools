@@ -217,3 +217,39 @@ def test_add_and_delete_step_by_text(tmp_path: Path):
     assert "Удалить шаг 2" in confirm["text"]
     bot.handle_update({"callback_query": {"id": "q", "data": "ctl!pending", "message": {"chat": {"id": 2}, "message_id": 9}}})
     assert [step["temp"] for step in calls[-1][2]["steps"]] == [25.0, -20.0]
+
+
+def test_admin_only_broadcast_reaches_only_admins(tmp_path: Path):
+    """Режим «только админу»: уведомления и файлы - только админам, ответы на команды - всем."""
+    bot, calls = _bot(tmp_path)
+    bot.users.upsert("1", name="Анна", role="admin", level="all", keyboard="1:control")
+    _drain(bot)
+    bot.notify("плата дошла до шага", "warn")
+    assert sorted(item["chat_id"] for item in _messages(_drain(bot))) == ["1", "2", "3"]
+    bot.set_admin_only(True)
+    bot.notify("плата дошла до шага", "warn")
+    bot.send_document(tmp_path / "report.txt", "отчёт")
+    items = _drain(bot)
+    assert [item["chat_id"] for item in _messages(items)] == ["1"]
+    assert [payload[0] for kind, payload in items if kind == "document"] == ["1"]
+    # Наблюдатель по-прежнему получает ответы на свои команды.
+    assert _messages(_say(bot, 3, "/status"))[0]["chat_id"] == "3"
+
+
+def test_quiet_command_and_admin_menu_button(tmp_path: Path):
+    bot, calls = _bot(tmp_path)
+    bot.users.upsert("1", name="Анна", role="admin", keyboard="1:control")
+    _say(bot, 1, "/quiet on")
+    assert calls[-1] == ("1", "notify_scope", {"admin_only": True})
+    assert "Сейчас: всем подписчикам" in _messages(_say(bot, 1, "/quiet"))[0]["text"]
+    menu = _messages(_say(bot, 1, "/menu"))[0]
+    _press(bot, "1", menu, "🔔 Рассылка: всем")
+    assert calls[-1] == ("1", "notify_scope", {"admin_only": True})
+    bot.set_admin_only(True)
+    menu = _messages(_say(bot, 1, "/menu"))[0]
+    assert "только админу" in menu["text"]
+    _press(bot, "1", menu, "🔕 Рассылка: только админу")
+    assert calls[-1] == ("1", "notify_scope", {"admin_only": False})
+    # У оператора такой кнопки нет.
+    titles = [button["text"] for button in _buttons(_messages(_say(bot, 2, "/menu"))[0])]
+    assert not any("Рассылка" in title for title in titles)

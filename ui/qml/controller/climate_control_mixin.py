@@ -82,10 +82,11 @@ ACTION_TITLES = {
     "scenario": "изменение сценария",
     "scenario_steps": "изменение шагов сценария",
     "role": "права управления",
+    "notify_scope": "рассылка бота",
 }
 # Кого будить сообщением: важность события для подписчиков бота.
 NOTIFY_LEVEL = {"estop": "bad", "mode": "warn", "setpoint": "warn", "run_start": "ok", "run_pause": "warn",
-                "run_resume": "ok", "run_stop": "warn", "run_operator": "info", "capture": "ok", "step_next": "warn",
+                "run_resume": "ok", "run_stop": "warn", "run_operator": "info", "notify_scope": "warn", "capture": "ok", "step_next": "warn",
                 "step_goto": "warn", "scenario": "warn", "scenario_steps": "warn", "role": "info",
                 "scenario_rules": "warn", "scenario_load": "info", "scenario_new": "info", "limits": "warn",
                 "espec_command": "warn", "resume_saved": "ok", "discard_saved": "warn", "label": "info"}
@@ -624,6 +625,19 @@ class AppControllerClimateControlMixin(AppControllerContract):
         return ok
 
     # ------------------------------------------------------------------ права
+
+    def _control_do_notify_scope(self, actor: dict, params: dict):
+        """Рассылка бота только админу (тесты, эксперименты) или всем. Переключает только админ."""
+        if actor.get("channel") != GUI_CHANNEL and actor.get("role") != "admin":
+            return False, "рассылку переключает только админ", ""
+        value = params.get("admin_only")
+        wanted = value in (True, "true", "1", 1, "да", "on")
+        setter = getattr(self, "_remote_set", None)
+        if setter is None or not setter("telegram_admin_only", wanted):
+            return False, "настройка рассылки недоступна", ""
+        if wanted:
+            return True, "уведомления, сводки и файлы теперь получает только админ.", "только админу"
+        return True, "уведомления снова получают все подписчики по своим настройкам.", "всем подписчикам"
 
     def _control_do_role(self, actor: dict, params: dict):
         chat_id = str(params.get("id", ""))

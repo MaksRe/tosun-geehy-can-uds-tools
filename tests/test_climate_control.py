@@ -407,3 +407,17 @@ def test_bot_estop_asks_for_confirmation(tmp_path: Path):
     assert drain()[0]["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == "ctl!capture" and len(done) == 1
     bot.handle_update({"callback_query": {"id": "q", "data": "ctl!capture", "message": {"chat": {"id": 2}, "message_id": 7}}})
     assert done[-1] == ("2", "capture")
+
+
+def test_only_admin_switches_bot_broadcast_to_admin_only(tmp_path: Path):
+    """Тесты и эксперименты: рассылку «только админу» переключает только админ, и это в журнале."""
+    stub = _ControlStub(tmp_path)
+    settings = {}
+    stub._remote_set = lambda key, value: settings.__setitem__(key, value) or True
+    ok, text = stub._control_submit(_as(stub, "2"), "notify_scope", {"admin_only": True})
+    assert not ok and "только админ" in text and not settings
+    ok, _text = stub._control_submit(_as(stub, "1"), "notify_scope", {"admin_only": True})
+    assert ok and settings == {"telegram_admin_only": True}
+    ok, _text = stub._control_gui("notify_scope", {"admin_only": False})
+    assert ok and settings == {"telegram_admin_only": False}
+    assert sum("рассылка бота" in row for row in _log_rows(stub)) == 3

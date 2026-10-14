@@ -347,6 +347,7 @@
       <h2>Права управления <span>вы админ</span></h2>
       <ul class="list" id="rights"></ul>
       <div class="soft" style="margin-top:6px">Назначить или снять админа можно только в окне программы у камеры.</div>
+      <div id="scope" style="margin-top:10px"></div>
     </div>
     <div class="card">
       <h2>Сайт</h2>
@@ -1034,6 +1035,10 @@
     const users = s.users;
     $("rightsCard").hidden = !users;
     if (!users) return;
+    // Рассылка бота: на время тестов - только админу. Переключает только админ (у него видна эта карточка).
+    const quiet = !!(s.telegram && s.telegram.adminOnly);
+    $("scope").innerHTML = `<div class="${quiet ? "warn" : "soft"}">Рассылка бота: ${quiet ? "только админу (остальным уведомления не уходят)" : "всем подписчикам"}</div>` +
+      `<div class="buttons"><button class="light" data-scope="${quiet ? "all" : "admin"}">${quiet ? "Вернуть рассылку всем" : "Только админу (тесты)"}</button></div>`;
     $("rights").innerHTML = users.map((u) => {
       const button = u.role === "admin" ? `<span class="soft">админ</span>`
         : u.role === "operator" ? `<button class="danger" data-role="viewer" data-user="${esc(u.id)}">Снять право</button>`
@@ -1217,6 +1222,15 @@
       }
     };
     if (act === "renew") confirmDo("Выдать новую ссылку входа? Все прежние перестанут работать.", go); else go();
+  });
+
+  // Рассылка бота только админу или всем: кнопка в карточке прав у админа.
+  $("scope").addEventListener("click", (event) => {
+    const scope = event.target.closest("button[data-scope]");
+    if (!scope) return;
+    const quiet = scope.dataset.scope === "admin";
+    control({ action: "notify_scope", admin_only: quiet },
+      quiet ? "Уведомления будет получать только админ, остальным - ничего. Включить?" : "Вернуть уведомления всем подписчикам?");
   });
 
   $("rights").addEventListener("click", (event) => {

@@ -3405,6 +3405,11 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         """Цель функции в применении правок сценария к идущему прогону; пройденные шаги не меняются."""
         self._control_gui("scenario", {"scenario": str(text)})
 
+    @Slot(bool)
+    def setRemoteAdminOnly(self, enabled):
+        """Цель функции в переключении рассылки бота только на админа (тесты); действие пишется в журнал."""
+        self._control_gui("notify_scope", {"admin_only": bool(enabled)})
+
     @Slot(str, str)
     def setRemoteUserRole(self, chat_id, role):
         """Цель функции в выдаче или снятии права управлять камерой подписчику бота; действие в журнале."""

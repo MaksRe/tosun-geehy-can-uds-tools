@@ -338,6 +338,19 @@ Card {
                     Layout.fillWidth: true
                     spacing: 8
 
+                    SmallSwitch {
+                        title: "только админу"
+                        checked: root.remote.telegramAdminOnly === true
+                        onToggled: (checked) => { if (root.appController) root.appController.setRemoteAdminOnly(checked) }
+                    }
+                    InfoMark {
+                        tip: "<b>Рассылка только админу</b><br>На время тестов и экспериментов: уведомления, сводки, "
+                             + "точки и файлы получает только админ, остальным подписчикам не уходит ничего. "
+                             + "Ответы на их собственные команды и кнопки приходят как обычно.<br><br>"
+                             + "Переключить можно и издалека: у админа в боте (/quiet on или off, кнопка в меню) "
+                             + "и на сайте в карточке «Права управления». Переключение пишется в журнал действий."
+                    }
+
                     Caption { text: "Новым подписчикам:" }
                     LevelPicker {
                         current: root.remote.telegramDefaultLevel || ""
