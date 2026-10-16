@@ -630,12 +630,12 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         return max(0.0, average * remaining - current)
 
     def _climate_auto_nodes_text(self) -> str:
-        text = ", ".join(f"{_c(node)} - {duration_text(seconds)}" for node, seconds in self._climate_auto_durations)
+        parts = [", ".join(f"{_c(node)} - {duration_text(seconds)}" for node, seconds in self._climate_auto_durations)]
         skipped = getattr(self, "_climate_auto_skipped", None) or []
         if skipped:
-            text += ". Без точки (оставлены вручную): " + ", ".join(
-                f"{_c(node)} - {duration_text(seconds)}" for node, seconds in skipped)
-        return text
+            parts.append("Без точки (оставлены вручную): " + ", ".join(
+                f"{_c(node)} - {duration_text(seconds)}" for node, seconds in skipped))
+        return ". ".join(part for part in parts if part)
 
     def _climate_auto_summary_text(self, now: float) -> str:
         """Сводка для Telegram: где прогон, камера, плата, точки, время."""

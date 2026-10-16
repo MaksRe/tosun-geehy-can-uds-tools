@@ -253,3 +253,13 @@ def test_quiet_command_and_admin_menu_button(tmp_path: Path):
     # У оператора такой кнопки нет.
     titles = [button["text"] for button in _buttons(_messages(_say(bot, 2, "/menu"))[0])]
     assert not any("Рассылка" in title for title in titles)
+
+
+def test_check_message_respects_admin_only(tmp_path: Path):
+    bot, _calls = _bot(tmp_path)
+    bot.users.upsert("1", name="Анна", role="admin")
+    _drain(bot)
+    assert bot.test() == 3
+    _drain(bot)
+    bot.set_admin_only(True)
+    assert bot.test() == 1 and [item["chat_id"] for item in _messages(_drain(bot))] == ["1"]

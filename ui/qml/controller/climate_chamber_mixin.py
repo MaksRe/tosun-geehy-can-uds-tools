@@ -891,7 +891,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         if current is not None and abs(int(current) - target) < self.CLIMATE_BRIDGE_STEP_X10:
             return
         self._climate_bridge_last_s = now
-        self._chamber_test_start_set(max(-400, min(850, target)))
+        self._chamber_test_start_set(max(-550, min(1250, target)))
 
     # ------------------------------------------------------------------ автоматический прогон
 

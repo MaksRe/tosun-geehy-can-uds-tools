@@ -15,6 +15,7 @@ from j1939.j1939_can_identifier import J1939CanIdentifier
 from uds.data_identifiers import UdsData
 from uds.services.read_data_by_id import ServiceReadDataById
 from uds.uds_identifiers import UdsIdentifiers
+from ui.qml.app_paths import data_root
 from ui.qml.collector_csv_manager import CollectorCombinedCsvManager, CollectorCsvManager
 from ui.qml.collector_sftp_uploader import CollectorSftpConfig
 
@@ -322,8 +323,9 @@ class AppControllerCollectorMixin(AppControllerContract):
         }
     @staticmethod
     def _resolve_project_root_directory() -> Path:
+        """Папка данных (config, logs): у собранной программы - рядом с exe, см. app_paths."""
         try:
-            return Path(__file__).resolve().parents[2]
+            return data_root()
         except Exception:
             return Path.cwd()
 

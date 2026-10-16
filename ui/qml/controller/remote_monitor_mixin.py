@@ -607,7 +607,10 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             self._remote_telegram_status = "Включите бота и впишите его токен."
             self._remote_telegram_ok = False
         elif self._remote_telegram.test() == 0:
-            self._remote_telegram_status = "Подписчиков пока нет: напишите боту /start в Telegram и повторите."
+            self._remote_telegram_status = ("Включена рассылка «только админу», а админов среди подписчиков нет: "
+                                            "назначьте админа или выключите «только админу»."
+                                            if settings["telegram_admin_only"] else
+                                            "Подписчиков пока нет: напишите боту /start в Telegram и повторите.")
             self._remote_telegram_ok = False
         else:
             self._remote_telegram_status = (f"Telegram: пробное сообщение с компьютера {socket.gethostname()} "

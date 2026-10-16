@@ -507,8 +507,8 @@ class TelegramBot:
         self._queue.put(("send", payload))
 
     def test(self) -> int:
-        """Проверка связи: сообщение всем подписчикам. Возвращает, скольким."""
-        subscribers = list(self.users.all())
+        """Проверка связи: сообщение подписчикам (в режиме «только админу» - только админам). Возвращает, скольким."""
+        subscribers = self._only_admins(list(self.users.all()))
         for chat_id in subscribers:
             self.send_to(chat_id, "ℹ️ Проверка связи: бот наблюдения на связи. Команды: /status, /settings, /app.")
         return len(subscribers)

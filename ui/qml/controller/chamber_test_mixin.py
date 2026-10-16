@@ -284,8 +284,9 @@ class AppControllerChamberTestMixin(AppControllerContract):
         if not force and not self._chamber_test_mode:
             self._chamber_test_set("Сначала включите тестовый режим.", "#dc2626")
             return False
-        if target_x10 is not None and not (-400 <= int(target_x10) <= 850):
-            self._chamber_test_set("Температура должна быть от -40 до +85 °C.", "#dc2626")
+        # Шкала датчиков прошивки -55...+125 °C (таблицы NTC расширены); эмуляцию прибор принимает в ней.
+        if target_x10 is not None and not (-550 <= int(target_x10) <= 1250):
+            self._chamber_test_set("Температура должна быть от -55 до +125 °C.", "#dc2626")
             return False
         problem = self._chamber_test_problem()
         if problem:

@@ -916,7 +916,7 @@ Card {
                         SmallButton {
                             Layout.preferredWidth: 80
                             text: "Задать"
-                            toolTipText: "Любая температура от -40 до +85 °C, например -12,5"
+                            toolTipText: "Любая температура от -55 до +125 °C, например -12,5"
                             enabled: root.testIdle && testTempField.text.length > 0
                             onClicked: if (root.appController) root.appController.setChamberTestTemperatureText(testTempField.text)
                         }
