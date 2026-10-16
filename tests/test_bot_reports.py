@@ -207,3 +207,17 @@ def test_server_compresses_and_sends_history_only_on_full():
         assert encoding == "gzip" and light_size < full_size
     finally:
         server.stop()
+
+
+def test_site_stability_rule_follows_scenario():
+    """«Плата устоялась» на сайте - по окну и порогу сценария (как у прогона), без сценария - 5 мин / 0,05."""
+    from types import SimpleNamespace
+
+    from ui.qml import climate_scenario as cs
+    from ui.qml.controller.remote_monitor_mixin import AppControllerRemoteMonitorMixin as Remote
+
+    owner = SimpleNamespace(REMOTE_STABLE_WINDOW_S=300.0, REMOTE_STABLE_RATE_C_MIN=0.05,
+                            _climate_scenario=cs.board_cycle_scenario())
+    assert Remote._remote_stable_rule(owner) == (720.0, 0.03)
+    owner._climate_scenario = None
+    assert Remote._remote_stable_rule(owner) == (300.0, 0.05)

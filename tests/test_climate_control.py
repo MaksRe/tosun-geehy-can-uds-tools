@@ -133,10 +133,10 @@ def test_steps_can_be_skipped_and_chosen(tmp_path: Path):
     stub = _started(tmp_path)
     ok, _text = stub._control_submit(_as(stub, "2"), "step_next", {})
     assert ok and stub._climate_run_index == 1
-    assert stub._climate_link.commands[-1] == ("setpoint", -40.0)
+    assert stub._climate_link.commands[-1] == ("setpoint", -20.0)
     ok, _text = stub._control_submit(_as(stub, "1"), "step_goto", {"index": 5})
     assert ok and stub._climate_run_index == 5
-    assert "шаг 2 (-40 °C) → шаг 6 (+70 °C)" in _log_rows(stub)[-1][4]
+    assert "шаг 2 (-20 °C) → шаг 6 (+70 °C)" in _log_rows(stub)[-1][4]
     ok, text = stub._control_submit(_as(stub, "1"), "step_goto", {"index": 9})
     assert not ok
 
@@ -240,9 +240,9 @@ def test_manual_point_needs_a_label(tmp_path: Path):
 def test_full_remote_control_of_scenario_and_chamber(tmp_path: Path):
     """С сайта и из мини-приложения - всё, что в окне: правила, файлы сценария, пределы, пометка, команды ESPEC."""
     stub = _started(tmp_path, espec=True)
-    ok, _text = stub._control_submit(_as(stub, "2"), "scenario_rules", {"board_max_shift_c": "25", "finish_stop": True})
-    assert ok and stub._climate_scenario["board_max_shift_c"] == 25.0 and stub._climate_scenario["finish_stop"] is True
-    assert "наибольший сдвиг уставки при доводке: +20 °C → +25 °C" in _log_rows(stub)[-1][4]
+    ok, _text = stub._control_submit(_as(stub, "2"), "scenario_rules", {"board_max_shift_c": "30", "finish_stop": True})
+    assert ok and stub._climate_scenario["board_max_shift_c"] == 30.0 and stub._climate_scenario["finish_stop"] is True
+    assert "наибольший сдвиг уставки при доводке: +25 °C → +30 °C" in _log_rows(stub)[-1][4]
 
     ok, text = stub._control_submit(_as(stub, "2"), "scenario_load", {"file": "любой.json"})
     assert not ok and "идёт прогон" in text

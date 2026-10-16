@@ -156,7 +156,8 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
     # История для графика: шаг и длительность, с.
     REMOTE_HISTORY_STEP_S = 10.0
     REMOTE_HISTORY_SPAN_S = 3 * 3600.0
-    # Правило «плата устоялась»: окно, предел скорости и разброса.
+    # Правило «плата устоялась»: окно, предел скорости и разброса. Окно и скорость берутся из
+    # текущего сценария (те же, по которым судит прогон), эти - если сценария нет.
     REMOTE_STABLE_WINDOW_S = 300.0
     REMOTE_STABLE_RATE_C_MIN = 0.05
     REMOTE_STABLE_SPREAD_C = 0.3
@@ -663,10 +664,24 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
     def _remote_board_rate(self, now: float):
         """Скорость и разброс температуры платы за окно устойчивости: (°C/мин, °C, охват с) или None."""
         return rate_and_spread(((stamp, board) for stamp, board, _main, _media in self._remote_history),
-                               now, self.REMOTE_STABLE_WINDOW_S)
+                               now, self._remote_stable_rule()[0])
+
+    def _remote_stable_rule(self) -> tuple[float, float]:
+        """Окно (с) и предел скорости (°C/мин) признака «плата устоялась»: как в правилах сценария.
+
+        Иначе сайт говорил бы «устоялась» по 5 мин и 0,05 °C/мин, пока прогон ждёт по своим правилам.
+        """
+        scenario = getattr(self, "_climate_scenario", None) or {}
+        try:
+            window = float(scenario.get("settle_min")) * 60.0
+            rate = float(scenario.get("settle_rate"))
+        except (TypeError, ValueError):
+            return self.REMOTE_STABLE_WINDOW_S, self.REMOTE_STABLE_RATE_C_MIN
+        return (window, rate) if window > 0 and rate > 0 else (self.REMOTE_STABLE_WINDOW_S, self.REMOTE_STABLE_RATE_C_MIN)
 
     def _remote_check_stability(self, now: float):
-        """Правило прогона: плата устоялась, если 5 минут меняется медленнее 0,05 °C/мин."""
+        """Правило прогона: плата устоялась, если за окно сценария меняется медленнее его порога."""
+        window_s, rate_limit = self._remote_stable_rule()
         result = self._remote_board_rate(now)
         if result is None:
             self._remote_stable_text = "Температура платы: истории ещё мало."
@@ -674,13 +689,12 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             return
         rate, spread, covered = result
         rate_text = f"{rate:+.3f} °C/мин".replace(".", ",")
-        full_window = covered >= self.REMOTE_STABLE_WINDOW_S * 0.9
-        stable = is_stable(result, self.REMOTE_STABLE_WINDOW_S, self.REMOTE_STABLE_RATE_C_MIN,
-                           self.REMOTE_STABLE_SPREAD_C)
+        full_window = covered >= window_s * 0.9
+        stable = is_stable(result, window_s, rate_limit, self.REMOTE_STABLE_SPREAD_C)
         board = self._remote_history[-1][1]
 
         if stable:
-            self._remote_stable_text = f"Плата устоялась: {rate_text} за 5 мин. Можно снимать точки."
+            self._remote_stable_text = f"Плата устоялась: {rate_text} за {window_s / 60:g} мин. Можно снимать точки."
             self._remote_stable_ok = True
             if not self._remote_stable_announced:
                 self._remote_stable_announced = True
@@ -691,7 +705,7 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             return
 
         self._remote_stable_ok = False
-        wait = "" if full_window else f", окно заполнено на {int(covered / self.REMOTE_STABLE_WINDOW_S * 100)} %"
+        wait = "" if full_window else f", окно заполнено на {int(covered / window_s * 100)} %"
         self._remote_stable_text = f"Плата ещё меняется: {rate_text}{wait}."
         if self._remote_stable_announced and abs(rate) > self.REMOTE_MOVING_RATE_C_MIN:
             self._remote_stable_announced = False
@@ -742,7 +756,9 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
                 "writeOpen": bool(write_open()) if write_open is not None else False,
             },
             "live": {key: live.get(key) for key in ("main", "media", "fuelTemp", "boardTemp", "windowText")},
-            "stability": {"text": self._remote_stable_text, "ok": self._remote_stable_ok},
+            "stability": {"text": self._remote_stable_text, "ok": self._remote_stable_ok,
+                          # Правило для графика скорости: окно, с, и порог, °C/мин - как у прогона.
+                          "windowS": self._remote_stable_rule()[0], "rate": self._remote_stable_rule()[1]},
             "run": {
                 "points": len(self._chamber_points),
                 # Что подключено к прибору: с этой пометкой запишется ручная точка.

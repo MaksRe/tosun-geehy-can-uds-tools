@@ -30,24 +30,34 @@ import re
 from pathlib import Path
 
 FORMAT = "climate_scenario"
-VERSION = 1
+# Версия 2: новые значения по умолчанию (плата в коробке) и порядок шагов цикла платы.
+VERSION = 2
 
 # Модели ухода при одной ёмкости: как в расчёте таблиц (chamber_fit.SINGLE_MODELS).
 SINGLE_MODELS = ("растяжение", "сдвиг")
 
-# Общие значения по умолчанию: те же, что были в настройках прогона.
+# Общие значения по умолчанию. Подобраны по стенду 13-14.10.2026 (плата в своей коробке):
+# у коробки медленный «хвост» устаивания, поэтому окно длиннее и порог скорости строже -
+# меньше ложных «устоялась» и лишних доводок; на холоде плате нужен воздух на 17-20 °C
+# холоднее шага, поэтому сдвиг до 25 °C и четыре попытки (запас на первый холодный шаг).
 DEFAULTS = {
     "reach_tolerance_c": 1.0,
-    "settle_min": 5.0,
-    "settle_rate": 0.05,
+    "settle_min": 12.0,
+    "settle_rate": 0.03,
     "reach_timeout_min": 120.0,
     "settle_timeout_min": 180.0,
     # Доводка платы: плата должна устояться у температуры шага с этим допуском; если нет -
     # уставка камеры сдвигается не дальше чем на board_max_shift_c, не больше board_attempts раз.
     "board_tolerance_c": 1.0,
-    "board_max_shift_c": 20.0,
-    "board_attempts": 3.0,
+    "board_max_shift_c": 25.0,
+    "board_attempts": 4.0,
 }
+# Значения по умолчанию версии 1: в сценарии прежней версии такие значения заменяются новыми,
+# а заданные человеком иначе - остаются.
+DEFAULTS_V1 = {"settle_min": 5.0, "settle_rate": 0.05, "board_max_shift_c": 20.0, "board_attempts": 3.0}
+# Как назвать эти правила человеку в замечании об обновлении.
+DEFAULTS_V1_TITLES = {"settle_min": "окно устаивания {:g} мин", "settle_rate": "порог {:g} °C/мин",
+                      "board_max_shift_c": "сдвиг уставки до {:g} °C", "board_attempts": "попыток доводки {:g}"}
 
 # Поля шага, которые могут переопределять общие: (ключ, наименьшее, наибольшее).
 STEP_LIMITS = {
@@ -71,7 +81,13 @@ TEMP_LIMITS = (-100.0, 200.0)
 BOARD_CYCLE_NAME = "Испытание платы, один цикл"
 # Пометка точки одной платы: эталоны не подключены (основной 0 / вид топлива 0).
 BOARD_LABEL = "0/0"
-BOARD_CYCLE_TEMPS = (25.0, -40.0, -20.0, 0.0, 50.0, 70.0, 85.0)
+# Порядок цикла: к -40 прогон подходит уже с холодной точкой от -20, и упреждение уставки для -40
+# точное (модель «воздух -> плата» на холоде иная, чем на тепле). Камера проходит те же 190 °C,
+# что и при прежнем порядке 25, -40, -20, ...
+BOARD_CYCLE_TEMPS = (25.0, -20.0, -40.0, 0.0, 50.0, 70.0, 85.0)
+BOARD_CYCLE_TEMPS_V1 = (25.0, -40.0, -20.0, 0.0, 50.0, 70.0, 85.0)
+# Выдержка на крайних шагах, мин: запас на медленный «хвост» платы в коробке.
+BOARD_CYCLE_HOLD = {-40.0: 15.0, 85.0: 15.0}
 
 
 def new_step(temp: float = 25.0) -> dict:
@@ -101,7 +117,7 @@ def empty_scenario(name: str = "Новый сценарий") -> dict:
 def board_cycle_scenario() -> dict:
     """Наш случай: одна плата на своих ёмкостях, все 7 узлов прибора за один проход.
 
-    Первым опорный +25 °C, затем вниз до -40 и вверх до +85, в конце камера
+    Первым опорный +25 °C, затем -20 и -40, потом вверх до +85, в конце камера
     возвращается к +25 °C. Пометка «0/0»: к входам ничего не подключено.
     """
     scenario = empty_scenario(BOARD_CYCLE_NAME)
@@ -109,9 +125,40 @@ def board_cycle_scenario() -> dict:
                                "прибора. Опорный узел +25 °C первым.")
     scenario["board_only"] = True
     scenario["labels"] = ["0/0"]
-    scenario["steps"] = [new_step(temp) for temp in BOARD_CYCLE_TEMPS]
-    scenario["steps"][0]["note"] = "опорная точка"
+    scenario["steps"] = _board_cycle_steps()
     return scenario
+
+
+def _board_cycle_steps() -> list[dict]:
+    """Шаги цикла платы: порядок, выдержка на крайних шагах, примечания."""
+    steps = [new_step(temp) for temp in BOARD_CYCLE_TEMPS]
+    for step in steps:
+        step["hold_min"] = BOARD_CYCLE_HOLD.get(step["temp"], 0.0)
+    steps[0]["note"] = "опорная точка"
+    return steps
+
+
+def _upgrade_v1(scenario: dict, problems: list):
+    """Сценарий версии 1: старые значения по умолчанию -> новые; цикл платы как был - в новом порядке.
+
+    Значения, которые человек задал сам (не равные старым по умолчанию), и свои шаги не меняются.
+    """
+    changed = [key for key, old in DEFAULTS_V1.items() if scenario.get(key) == old]
+    for key in changed:
+        scenario[key] = DEFAULTS[key]
+    steps = scenario.get("steps") or []
+    untouched = (tuple(step["temp"] for step in steps) == BOARD_CYCLE_TEMPS_V1
+                 and all(not step["hold_min"] and step["capture"] and step["settle_min"] is None
+                         and step["settle_rate"] is None and step["reach_tolerance_c"] is None for step in steps))
+    if untouched:
+        scenario["steps"] = _board_cycle_steps()
+    if changed or untouched:
+        problems.append("сценарий прежней версии обновлён до новых значений по умолчанию"
+                        + (": " + ", ".join(DEFAULTS_V1_TITLES[key].format(DEFAULTS[key]).replace(".", ",")
+                                   for key in changed)
+                           if changed else "")
+                        + ("; шаги цикла платы - в порядке 25, -20, -40, 0, 50, 70, 85 с выдержкой 15 мин "
+                           "на -40 и +85" if untouched else ""))
 
 
 def from_settings(settings: dict, board_only: bool = False, single_model: str = "", label: str = "",
@@ -214,6 +261,12 @@ def normalize(data) -> tuple[dict, list[str]]:
         problems.append("ни одного годного шага: добавьте хотя бы один")
     elif not any(step["capture"] for step in steps):
         problems.append("ни в одном шаге не снимается точка")
+    try:
+        version = int(data.get("version", VERSION))
+    except (TypeError, ValueError):
+        version = VERSION
+    if version < 2:
+        _upgrade_v1(scenario, problems)
     return scenario, problems
 
 

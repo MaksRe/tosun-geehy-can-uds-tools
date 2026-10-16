@@ -731,7 +731,7 @@ Card {
                             fontPixelSize: 12
                             visible: !root.run.active
                             text: "Испытание платы, один цикл"
-                            toolTipText: "Готовый сценарий: узлы 25, -40, -20, 0, 50, 70, 85 °C; «только плата»; пометка «0/0»; автозапись профиля; тестовый режим выключен"
+                            toolTipText: "Готовый сценарий: узлы 25, -20, -40, 0, 50, 70, 85 °C (выдержка 15 мин на -40 и +85); «только плата»; пометка «0/0»; автозапись профиля; тестовый режим выключен"
                             tone: "#0f766e"; toneHover: "#115e59"; tonePressed: "#134e4a"
                             onClicked: if (root.appController) root.appController.applyClimateBoardPreset()
                         }

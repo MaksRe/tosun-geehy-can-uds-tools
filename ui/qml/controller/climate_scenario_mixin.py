@@ -56,7 +56,10 @@ class AppControllerClimateScenarioMixin(AppControllerContract):
             self._climate_scenario_problems = problems
             self._climate_scenario_path = str(stored.get("path") or "")
             self._climate_scenario_dirty = bool(stored.get("dirty", False))
-        except (OSError, ValueError, AttributeError):
+            if int((stored.get("scenario") or {}).get("version", climate_scenario.VERSION)) < climate_scenario.VERSION:
+                # Сценарий прежней версии обновлён при чтении: сохранить сразу, чтобы обновление было один раз.
+                self._climate_scenario_store()
+        except (OSError, ValueError, AttributeError, TypeError):
             self._climate_scenario = climate_scenario.from_settings(
                 self._climate_settings,
                 board_only=bool(getattr(self, "_chamber_board_only", False)),

@@ -47,8 +47,8 @@ ACTIVE_STAGES = ("reach", "settle", "hold", "points", "operator", "window", "cap
 HOLD_STAGES = ("settle", "hold", "points", "operator", "window", "capture", "capturing")
 
 # Испытание одной платы на своих ёмкостях за один цикл: все узлы сетки прибора,
-# первым - опорный +25 °C, затем вниз до -40 и вверх до +85.
-BOARD_CYCLE_NODES = "25, -40, -20, 0, 50, 70, 85"
+# первым - опорный +25 °C, затем -20 и -40 (к -40 - уже с холодной точкой), потом вверх до +85.
+BOARD_CYCLE_NODES = "25, -20, -40, 0, 50, 70, 85"
 
 
 def duration_text(seconds: float | None) -> str:

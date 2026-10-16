@@ -41,10 +41,12 @@ def test_board_cycle_scenario():
     scenario = cs.board_cycle_scenario()
     clean, problems = cs.normalize(scenario)
     assert problems == []
-    assert [step["temp"] for step in clean["steps"]] == [25.0, -40.0, -20.0, 0.0, 50.0, 70.0, 85.0]
+    assert [step["temp"] for step in clean["steps"]] == [25.0, -20.0, -40.0, 0.0, 50.0, 70.0, 85.0]
+    assert [step["hold_min"] for step in clean["steps"]] == [0.0, 0.0, 15.0, 0.0, 0.0, 0.0, 15.0]
+    assert (clean["settle_min"], clean["settle_rate"], clean["board_max_shift_c"], clean["board_attempts"]) ==         (12.0, 0.03, 25.0, 4.0)
     assert clean["board_only"] is True and clean["labels"] == ["0/0"] and clean["auto_write"] is True
     assert clean["finish_setpoint"] == 25.0
-    assert cs.summary(clean).startswith("7 шагов (+25 → -40 → -20 → +0 → +50 → +70 → +85 °C), точки в 7")
+    assert cs.summary(clean).startswith("7 шагов (+25 → -20 → -40 → +0 → +50 → +70 → +85 °C), точки в 7")
 
 
 def test_bad_fields_are_replaced_with_notes():
@@ -56,7 +58,7 @@ def test_bad_fields_are_replaced_with_notes():
     assert [step["temp"] for step in clean["steps"]] == [-40.0, 25.0]
     assert clean["steps"][0]["hold_min"] == 0.0 and clean["steps"][0]["settle_rate"] == 0.02
     assert clean["steps"][0]["capture"] is False and clean["steps"][1]["settle_min"] is None
-    assert clean["single_model"] == "растяжение" and clean["settle_min"] == 5.0
+    assert clean["single_model"] == "растяжение" and clean["settle_min"] == 12.0
     text = " | ".join(problems)
     assert "шаг 1, температура" in text and "выдержка" in text and "модель ухода" in text and "settle_min" in text
 
@@ -74,7 +76,7 @@ def test_save_and_load(tmp_path: Path):
     path = cs.save(scenario, tmp_path / "дир" / "испытание")
     assert path.name == "испытание.json"
     data = json.loads(path.read_text(encoding="utf-8"))
-    assert data["format"] == "climate_scenario" and data["version"] == 1
+    assert data["format"] == "climate_scenario" and data["version"] == 2
     loaded, problems = cs.load(path)
     assert problems == [] and loaded == cs.normalize(scenario)[0]
     assert cs.file_name('Плата: цикл "А"/Б') == "Плата_цикл_А_Б.json"
@@ -93,9 +95,9 @@ def test_from_old_settings():
 def test_step_value_falls_back_to_general():
     scenario = cs.empty_scenario()
     step = cs.new_step(-40)
-    assert cs.step_value(scenario, step, "settle_min") == 5.0
-    step["settle_min"] = 12.0
     assert cs.step_value(scenario, step, "settle_min") == 12.0
+    step["settle_min"] = 20.0
+    assert cs.step_value(scenario, step, "settle_min") == 20.0
 
 
 # ------------------------------------------------------------------ прогон по сценарию
@@ -136,7 +138,7 @@ def test_step_overrides_settle_window(tmp_path: Path):
     stub = _scenario_stub(tmp_path, [slow])
     assert stub._climate_run_start()
     assert stub._climate_run_param("settle_min") == 30.0
-    assert stub._climate_run_param("settle_rate") == 0.05
+    assert stub._climate_run_param("settle_rate") == 0.03
 
 
 def test_start_applies_scenario_to_the_chamber_run(tmp_path: Path):
@@ -207,3 +209,23 @@ def test_labels_kept_only_with_references():
     assert with_refs["labels"] == ["0/0", "150/47"]
     board, _ = cs.normalize({"board_only": True, "labels": "68/22", "steps": [{"temp": 25}]})
     assert board["labels"] == ["0/0"]
+
+
+def test_old_scenario_is_upgraded_but_own_values_stay():
+    """Сценарий версии 1: прежние значения по умолчанию -> новые, свои значения и свои шаги - как есть."""
+    old = cs.board_cycle_scenario()
+    old.update({"version": 1, "settle_min": 5.0, "settle_rate": 0.05, "board_max_shift_c": 20.0, "board_attempts": 3.0})
+    old["steps"] = [cs.new_step(temp) for temp in (25.0, -40.0, -20.0, 0.0, 50.0, 70.0, 85.0)]
+    clean, problems = cs.normalize(old)
+    assert (clean["settle_min"], clean["settle_rate"], clean["board_max_shift_c"], clean["board_attempts"]) == \
+        (12.0, 0.03, 25.0, 4.0)
+    assert [step["temp"] for step in clean["steps"]] == [25.0, -20.0, -40.0, 0.0, 50.0, 70.0, 85.0]
+    assert clean["version"] == 2 and any("обновлён" in text for text in problems)
+    # Свои значения и свои шаги не трогаются.
+    own = dict(old, settle_min=8.0, board_attempts=5.0, steps=[cs.new_step(25.0), cs.new_step(-40.0)])
+    clean, _problems = cs.normalize(own)
+    assert clean["settle_min"] == 8.0 and clean["board_attempts"] == 5.0 and clean["settle_rate"] == 0.03
+    assert [step["temp"] for step in clean["steps"]] == [25.0, -40.0]
+    # Сценарий текущей версии со значением, равным старому по умолчанию, - выбор человека, не трогается.
+    current = dict(cs.board_cycle_scenario(), settle_min=5.0)
+    assert cs.normalize(current)[0]["settle_min"] == 5.0

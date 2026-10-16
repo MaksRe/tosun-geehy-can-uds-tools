@@ -295,8 +295,8 @@
       <h2>Скорость платы, °C/мин <span id="rateNow"></span></h2>
       <canvas class="plot" id="plotRate"></canvas>
       <div class="legend">
-        <span><i style="background:var(--board)"></i>за 5 мин</span>
-        <span><i style="background:var(--ok)"></i>±0,05 - плата устоялась</span>
+        <span><i style="background:var(--board)"></i><span id="rateWindow">за 5 мин</span></span>
+        <span><i style="background:var(--ok)"></i><span id="rateBand">±0,05 - плата устоялась</span></span>
       </div>
       <div class="readout" id="readRate"></div>
     </div>
@@ -587,14 +587,14 @@
     canvas.addEventListener("pointerleave", () => { if (state) renderCharts(state, true); });
   });
 
-  // Скорость изменения температуры платы, °C/мин: разница с точкой примерно 5 минут назад.
-  function boardRate(t, board) {
+  // Скорость изменения температуры платы, °C/мин: разница с точкой на окно назад (окно - как у прогона).
+  function boardRate(t, board, windowS) {
     const out = [];
     let j = 0;
     for (let i = 0; i < t.length; i++) {
-      while (j < i && t[i] - t[j] > 300) j++;
+      while (j < i && t[i] - t[j] > windowS) j++;
       const span = t[i] - t[j];
-      out.push(span >= 240 && board[i] !== null && board[j] !== null ? (board[i] - board[j]) / span * 60 : null);
+      out.push(span >= windowS * 0.8 && board[i] !== null && board[j] !== null ? (board[i] - board[j]) / span * 60 : null);
     }
     return out;
   }
@@ -613,7 +613,13 @@
     const chamber = (s.climate || {}).history || {};
     const t = history.t || [], ct = chamber.t || [];
     const board = history.board || [];
-    const rate = boardRate(t, board);
+    // Правило «устоялась» - из сценария прогона (окно и порог), а если его нет - 5 мин и 0,05 °C/мин.
+    const rule = s.stability || {};
+    const windowS = Number(rule.windowS) > 0 ? Number(rule.windowS) : 300;
+    const band = Number(rule.rate) > 0 ? Number(rule.rate) : 0.05;
+    const rate = boardRate(t, board, windowS);
+    $("rateWindow").textContent = "за " + fmt(windowS / 60, 0) + " мин";
+    $("rateBand").textContent = "±" + fmt(band, 2) + " - плата устоялась";
     const inRange = (times, values) => values.filter((v, i) => times[i] >= -chartRange);
 
     plot("plotTemp", "readTemp", [
@@ -622,7 +628,7 @@
       { name: "плата", t, v: board, color: "--board" },
     ], { digits: 1, minSpan: 2 });
     plot("plotRate", "readRate", [{ name: "плата", t, v: rate, color: "--board" }],
-         { digits: 3, minSpan: 0.2, lines: [{ v: 0.05, color: "--ok" }, { v: -0.05, color: "--ok" }] });
+         { digits: 3, minSpan: 0.2, lines: [{ v: band, color: "--ok" }, { v: -band, color: "--ok" }] });
     plot("plotMain", "readMain", [{ name: "основной", t, v: history.main || [], color: "--main" }], { digits: 0, minSpan: 4 });
     plot("plotMedia", "readMedia", [{ name: "вид топлива", t, v: history.media || [], color: "--media" }], { digits: 0, minSpan: 4 });
 
@@ -630,7 +636,7 @@
     const last = (values) => { for (let i = values.length - 1; i >= 0; i--) if (values[i] !== null) return values[i]; return null; };
     const lastRate = last(rate);
     $("tempNow").textContent = last(board) === null ? "" : "плата " + fmt(last(board), 1);
-    $("rateNow").innerHTML = lastRate === null ? "" : `<span class="${Math.abs(lastRate) <= 0.05 ? "ok" : "warn"}">${fmt(lastRate, 3)}</span>`;
+    $("rateNow").innerHTML = lastRate === null ? "" : `<span class="${Math.abs(lastRate) <= band ? "ok" : "warn"}">${fmt(lastRate, 3)}</span>`;
     $("mainSpread").textContent = spreadText(inRange(t, history.main || []));
     $("mediaSpread").textContent = spreadText(inRange(t, history.media || []));
   }

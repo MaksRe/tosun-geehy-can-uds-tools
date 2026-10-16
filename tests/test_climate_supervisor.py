@@ -350,7 +350,7 @@ def test_board_cycle_preset(tmp_path: Path):
     stub._climate_settings["run_labels"] = "0/0; 150/47"
     stub._chamber_auto_write = False
     stub._climate_auto_board_preset()
-    assert stub._climate_settings["run_nodes"] == "25, -40, -20, 0, 50, 70, 85"
+    assert stub._climate_settings["run_nodes"] == "25, -20, -40, 0, 50, 70, 85"
     assert stub._climate_settings["run_labels"] == ""
     assert stub._chamber_board_only is True and stub._chamber_label == "0/0"
     assert stub._chamber_auto_write is True
