@@ -3335,6 +3335,13 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         """Цель функции в остановке обхода, затем он кончается после текущего шага."""
         self._chamber_test_walk_stop()
 
+    @Slot()
+    def setClimateLimitsToPassport(self):
+        """Цель функции в пределах уставки по паспорту камеры (ESPEC MC-811P: -85...+180 °C); действие в журнале."""
+        passport = self._climate_passport()
+        if passport is not None:
+            self._control_gui("limits", {"min": str(passport[0]), "max": str(passport[1])})
+
     @Slot(str, str)
     def setClimateSetting(self, key, value):
         """Цель функции в правке настройки камеры, затем она сохраняется, а связь переподключается."""

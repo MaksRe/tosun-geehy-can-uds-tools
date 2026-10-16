@@ -441,8 +441,9 @@ class AppControllerClimateControlMixin(AppControllerContract):
             high = float(str(params.get("max", self._climate_settings["max_c"])).replace(",", "."))
         except ValueError:
             return False, "пределы - числа, °C", ""
-        if not (-100.0 <= low < high <= 200.0):
-            return False, "нижний предел должен быть меньше верхнего, в пределах -100...+200 °C", ""
+        problem = self._climate_limits_problem(low, high)
+        if problem:
+            return False, problem, f"{low:+g}...{high:+g} °C"
         before = f"{self._climate_settings['min_c']:+g}...{self._climate_settings['max_c']:+g} °C"
         self._climate_settings["min_c"], self._climate_settings["max_c"] = low, high
         self._climate_save_settings()
@@ -697,7 +698,8 @@ class AppControllerClimateControlMixin(AppControllerContract):
                         for item in list(getattr(self, "_climate_raw_log", []) or [])[:12] if isinstance(item, dict)],
             "modes": self._control_modes(),
             "espec": self._climate_settings.get("driver") == DRIVER_ESPEC,
-            "limits": {"min": float(self._climate_settings["min_c"]), "max": float(self._climate_settings["max_c"])},
+            "limits": {"min": float(self._climate_settings["min_c"]), "max": float(self._climate_settings["max_c"]),
+                       "passport": list(self._climate_passport() or [])},
             "log": log.recent(self.CONTROL_LOG_SHOWN) if log is not None else [],
             "logPath": log.current_path if log is not None else "",
         }

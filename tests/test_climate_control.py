@@ -421,3 +421,31 @@ def test_only_admin_switches_bot_broadcast_to_admin_only(tmp_path: Path):
     ok, _text = stub._control_gui("notify_scope", {"admin_only": False})
     assert ok and settings == {"telegram_admin_only": False}
     assert sum("рассылка бота" in row for row in _log_rows(stub)) == 3
+
+
+def test_setpoint_limits_follow_chamber_passport(tmp_path: Path):
+    """ESPEC MC-811P: паспорт -85...+180 °C. Пределы - по паспорту, шире паспорта нельзя ниоткуда."""
+    stub = _ControlStub(tmp_path)
+    stub._climate_settings.update({"driver": "espec", "min_c": -60.0, "max_c": 110.0, "limits_version": 0})
+    stub._climate_limits_upgrade()
+    assert (stub._climate_settings["min_c"], stub._climate_settings["max_c"]) == (-85.0, 180.0)
+    # Сузить можно, и повторное приведение к паспорту это уже не трогает.
+    ok, _text = stub._control_submit(_as(stub, "1"), "limits", {"min": "-70", "max": "120"})
+    assert ok
+    stub._climate_limits_upgrade()
+    assert (stub._climate_settings["min_c"], stub._climate_settings["max_c"]) == (-70.0, 120.0)
+    ok, text = stub._control_submit(_as(stub, "1"), "limits", {"min": "-90", "max": "120"})
+    assert not ok and "паспортом камеры -85...+180" in text
+    assert not stub._climate_set("max_c", "190") and stub._climate_settings["max_c"] == 120.0
+    assert stub._climate_set("min_c", "-85") and stub._climate_settings["min_c"] == -85.0
+    assert stub._climate_view()["chamber"]["rangeText"] == "-85 … +180 °C"
+
+
+def test_choosing_espec_sets_passport_limits_other_chambers_keep_theirs(tmp_path: Path):
+    stub = _ControlStub(tmp_path)
+    stub._climate_settings.update({"driver": "simulator", "min_c": -45.0, "max_c": 90.0, "limits_version": 0})
+    stub._climate_limits_upgrade()
+    assert (stub._climate_settings["min_c"], stub._climate_settings["max_c"]) == (-45.0, 90.0)
+    assert stub._climate_settings["limits_version"] == 1
+    stub._climate_set("driver", "espec")
+    assert (stub._climate_settings["min_c"], stub._climate_settings["max_c"]) == (-85.0, 180.0)

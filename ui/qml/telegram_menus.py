@@ -217,7 +217,9 @@ def _camera(snapshot: dict, _arg, _can):
     lines = ["<b>Камера</b>", escape(_camera_line(snapshot)),
              f"Режим: {escape(str((climate.get('espec') or {}).get('modeText') or '—'))}. "
              f"Авария: {escape(str(climate.get('alarmText') or '—'))}.",
-             f"Пределы уставки: {_c(limits.get('min'))} … {_c(limits.get('max'))}."]
+             f"Пределы уставки: {_c(limits.get('min'))} … {_c(limits.get('max'))}."
+             + (f" Паспорт камеры: {_c(limits['passport'][0])} … {_c(limits['passport'][1])}."
+                if len(limits.get("passport") or []) == 2 else "")]
     if active:
         lines.append("Идёт автопрогон: ручная уставка поставит его на паузу.")
     hold = " Автопрогон встанет на паузу." if active else ""

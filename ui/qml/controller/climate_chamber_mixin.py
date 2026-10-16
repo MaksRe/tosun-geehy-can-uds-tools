@@ -69,6 +69,9 @@ DRIVERS = (DRIVER_NONE, DRIVER_ESPEC, DRIVER_SIMCON, DRIVER_SIMULATOR, DRIVER_MO
 
 # Камеры, с которыми работает программа: у каждой своё назначение, чтобы их не путать.
 # board_only - какой режим раздела «Прогон в камере» подходит этой камере.
+# Паспортный диапазон температур камеры (range_c, °C): за него программа не задаст уставку.
+# ESPEC серии MC-811 (MC-811, MC-812R): -85...+180 °C по данным производителя.
+# У камер без range_c пределы задаёт только оператор.
 CHAMBERS = {
     DRIVER_ESPEC: {
         "name": "ESPEC MC-811P",
@@ -76,6 +79,7 @@ CHAMBERS = {
         "link": "RS-485, 4 провода",
         "accent": "#0f766e",
         "board_only": True,
+        "range_c": (-85.0, 180.0),
     },
     DRIVER_SIMCON: {
         "name": "Weiss WK1-600/70",
@@ -171,6 +175,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         self._climate_incoming: list[dict] = []
         self._climate_settings = self._climate_default_settings()
         self._climate_settings.update(self._climate_load_settings())
+        self._climate_limits_upgrade()
 
         self._climate_link: ChamberLink | None = None
         self._climate_reading = None
@@ -295,6 +300,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             "map": ModbusMap().to_dict(),
             "min_c": -45.0,
             "max_c": 90.0,
+            # Пределы уже приведены к паспорту камеры (1); 0 - настройки прежней версии.
+            "limits_version": 0,
             "run_nodes": "25, -40, -20, 0, 50, 70, 85",
             "run_labels": "",
             "reach_tolerance_c": 1.0,
@@ -347,6 +354,45 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         except OSError as error:
             self._climate_command_status = f"Настройки камеры не сохранились: {error}"
 
+    # ------------------------------------------------------------------ паспорт камеры
+
+    def _climate_passport(self, driver: str | None = None) -> tuple[float, float] | None:
+        """Паспортный диапазон температур выбранной камеры, °C, или None, если он не задан."""
+        info = CHAMBERS.get(driver if driver is not None else self._climate_settings["driver"]) or {}
+        return info.get("range_c")
+
+    def _climate_limits_to_passport(self) -> bool:
+        """Пределы уставки = паспортный диапазон камеры. False - у камеры паспорта нет."""
+        passport = self._climate_passport()
+        if passport is None:
+            return False
+        self._climate_settings["min_c"], self._climate_settings["max_c"] = float(passport[0]), float(passport[1])
+        return True
+
+    def _climate_limits_upgrade(self):
+        """Один раз после обновления: пределы уставки - по паспорту камеры.
+
+        Раньше пределы задавались вручную (по умолчанию -45...+90 °C) и мешали доводке
+        платы на холоде: на стенде 13.10 их пришлось расширять на ходу.
+        """
+        if int(self._climate_settings.get("limits_version", 0) or 0) >= 1:
+            return
+        self._climate_settings["limits_version"] = 1
+        if self._climate_limits_to_passport():
+            self._climate_save_settings()
+
+    def _climate_limits_problem(self, low: float, high: float) -> str:
+        """Почему такие пределы нельзя: пусто - можно."""
+        if not low < high:
+            return "нижний предел должен быть меньше верхнего"
+        passport = self._climate_passport()
+        if passport is not None and (low < passport[0] or high > passport[1]):
+            return (f"пределы за паспортом камеры {passport[0]:+g}...{passport[1]:+g} °C: "
+                    "такую уставку камера не выдержит или отвергнет")
+        if not (-100.0 <= low and high <= 200.0):
+            return "пределы - в диапазоне -100...+200 °C"
+        return ""
+
     # ------------------------------------------------------------------ настройки
 
     def _climate_set(self, key: str, value) -> bool:
@@ -389,6 +435,14 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 self._climate_command_status = "Адрес камеры ESPEC - от 1 до 16, как в меню её пульта."
                 self.climateChanged.emit()
                 return False
+            if key in ("min_c", "max_c"):
+                low = float(value) if key == "min_c" else float(settings["min_c"])
+                high = float(value) if key == "max_c" else float(settings["max_c"])
+                problem = self._climate_limits_problem(low, high)
+                if problem:
+                    self._climate_command_status = "Предел не изменён: " + problem + "."
+                    self.climateChanged.emit()
+                    return False
             if settings[key] == value:
                 return True
             self._climate_diag_event("SET", f"{key}: {settings[key]} → {value}")
@@ -396,6 +450,10 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 # Пределы уставки и правила прогона влияют на камеру: смена записывается с именем оператора.
                 self._control_note("настройка камеры", f"{key}: {settings[key]} → {value}", True)
             settings[key] = value
+            if key == "driver" and self._climate_limits_to_passport():
+                # Другая камера - её паспортный диапазон: пределы прежней камеры к ней не относятся.
+                self._climate_diag_event("SET", f"пределы уставки по паспорту камеры: "
+                                                f"{settings['min_c']:+g}...{settings['max_c']:+g} °C")
             if key == "diag_verbose" and getattr(self, "_climate_diag", None) is not None:
                 self._climate_diag.verbose = bool(value)
             reconnect = key in ("driver", "poll_s", "unit", "tcp_host", "tcp_port", "rtu_port", "rtu_baud",
@@ -1692,7 +1750,11 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             summary = f"{settings['tcp_host']}:{settings['tcp_port']} · устройство {settings['unit']}"
         else:
             summary = f"{settings['rtu_port']} · {settings['rtu_baud']} бод · устройство {settings['unit']}"
-        return {**{key: info[key] for key in ("name", "purpose", "link", "accent")}, "summary": summary}
+        passport = info.get("range_c")
+        return {**{key: info[key] for key in ("name", "purpose", "link", "accent")}, "summary": summary,
+                "rangeText": f"{passport[0]:+g} … {passport[1]:+g} °C" if passport else "",
+                "rangeMatches": bool(passport) and (float(settings["min_c"]), float(settings["max_c"]))
+                == (float(passport[0]), float(passport[1]))}
 
     def _climate_espec_port_text(self) -> str:
         """Порт ESPEC для шапки: при «auto» - какой переходник Moxa найден."""

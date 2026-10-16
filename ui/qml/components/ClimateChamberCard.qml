@@ -924,6 +924,21 @@ Card {
                         SettingField { key: "min_c"; Layout.preferredWidth: 60 }
                         SettingField { key: "max_c"; Layout.preferredWidth: 60 }
                         Caption { text: "- ни ручная уставка, ни сценарий не выйдут за эти пределы" }
+                        Caption {
+                            visible: (root.climate.chamber || {}).rangeText ? true : false
+                            text: "   паспорт камеры: " + ((root.climate.chamber || {}).rangeText || "")
+                        }
+                        FancyButton {
+                            Layout.preferredWidth: 110
+                            Layout.preferredHeight: 28
+                            fontPixelSize: 12
+                            visible: (root.climate.chamber || {}).rangeText ? true : false
+                            enabled: (root.climate.chamber || {}).rangeMatches !== true
+                            text: "По паспорту"
+                            toolTipText: "Пределы уставки = паспортный диапазон камеры (ESPEC MC-811P: -85 … +180 °C). "
+                                         + "Шире паспорта задать нельзя; уже - можно, если нужно поберечь камеру или изделие."
+                            onClicked: if (root.appController) root.appController.setClimateLimitsToPassport()
+                        }
                         Item { Layout.fillWidth: true }
                     }
 
