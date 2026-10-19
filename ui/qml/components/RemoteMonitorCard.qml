@@ -82,10 +82,31 @@ Card {
         tone: "#64748b"; toneHover: "#475569"; tonePressed: "#334155"
     }
 
+    // Ссылка в строке состояния (например, разрешение Funnel в Tailscale): без хвостовых знаков препинания.
+    function statusLink(text) {
+        var found = String(text || "").match(/https?:\/\/[^\s<>"«»]+/)
+        return found ? found[0].replace(/[.,;:)»]+$/, "") : ""
+    }
+
+    // Текст строки состояния для StyledText: разметка экранирована, ссылка - кликабельная.
+    function statusHtml(text) {
+        var plain = String(text || "")
+        var link = root.statusLink(plain)
+        var escape = function(value) {
+            return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        }
+        if (!link)
+            return escape(plain)
+        var at = plain.indexOf(link)
+        return escape(plain.slice(0, at)) + "<a href=\"" + link + "\">" + escape(link) + "</a>"
+               + escape(plain.slice(at + link.length))
+    }
+
     component StatusLine: RowLayout {
         id: statusLine
         property string text: ""
         property bool ok: false
+        readonly property string link: root.statusLink(statusLine.text)
         visible: statusLine.text.length > 0
         Layout.fillWidth: true
         spacing: 8
@@ -99,12 +120,37 @@ Card {
         }
 
         Text {
+            id: statusText
             Layout.fillWidth: true
-            text: statusLine.text
+            text: root.statusHtml(statusLine.text)
+            textFormat: Text.StyledText
+            linkColor: "#0f6ab4"
             color: root.textMain
             font.pixelSize: 12
             font.family: "Bahnschrift"
             wrapMode: Text.WordWrap
+            onLinkActivated: (link) => Qt.openUrlExternally(link)
+
+            HoverHandler {
+                cursorShape: statusText.hoveredLink.length > 0 ? Qt.PointingHandCursor : Qt.ArrowCursor
+            }
+        }
+
+        // Ссылку в строке состояния можно открыть или скопировать, а не переписывать вручную.
+        SmallButton {
+            visible: statusLine.link.length > 0
+            Layout.alignment: Qt.AlignVCenter
+            Layout.preferredWidth: 90
+            text: "Открыть"
+            tone: "#0284c7"; toneHover: "#0369a1"; tonePressed: "#075985"
+            onClicked: Qt.openUrlExternally(statusLine.link)
+        }
+        SmallButton {
+            visible: statusLine.link.length > 0
+            Layout.alignment: Qt.AlignVCenter
+            Layout.preferredWidth: 100
+            text: "Копировать"
+            onClicked: if (root.appController) root.appController.copyTextToClipboard(statusLine.link)
         }
     }
 
