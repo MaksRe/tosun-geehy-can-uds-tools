@@ -735,6 +735,19 @@ Card {
                             tone: "#0f766e"; toneHover: "#115e59"; tonePressed: "#134e4a"
                             onClicked: if (root.appController) root.appController.applyClimateBoardPreset()
                         }
+
+                        FancyButton {
+                            Layout.preferredWidth: 150
+                            Layout.preferredHeight: 30
+                            fontPixelSize: 12
+                            visible: !root.run.active
+                            text: "Добор точек"
+                            toolTipText: "Готовый сценарий добора к журналу прошлого прогона: 25, -20, -40, +85 °C. Сначала откройте "
+                                         + "журнал прошлого прогона («Прогон в камере» → «Журналы»): новые точки допишутся к нему. "
+                                         + "+25 и -20 - проверка, что установка не изменилась"
+                            tone: "#0369a1"; toneHover: "#075985"; tonePressed: "#0c4a6e"
+                            onClicked: if (root.appController) root.appController.newClimateScenario("refill")
+                        }
                     }
 
                     // Ход автономного прогона: доля пройденных узлов, время, проблемы.

@@ -261,6 +261,12 @@
       <div id="report"></div>
     </div>
     <div class="card">
+      <h2>Журналы на диске <span>свои и прошлых версий</span></h2>
+      <div class="soft">Открыть - новые точки допишутся к этому журналу (так добирают точку к прошлому прогону).</div>
+      <ul class="list" id="journals"></ul>
+      <div class="buttons" id="journalButtons"></div>
+    </div>
+    <div class="card">
       <h2>Запись профиля</h2>
       <div class="chips" id="steps"></div>
       <div id="chain" style="margin-top:6px"></div>
@@ -829,12 +835,27 @@
         (test.checkText ? `<div style="color:${esc(test.checkColor)}">${esc(test.checkText)}</div>` : "");
     }
 
+    // Точки журнала: тем, кто управляет, - кнопка «убрать» у каждой (по номеру и времени точки).
+    const edit = canControl(s);
     const rows = journal.rows || [];
     $("points").innerHTML = rows.length
-      ? "<tr><th>Время</th><th>Узел</th><th>Плата</th><th>Основной</th><th>Вид</th></tr>" +
+      ? "<tr><th>Время</th><th>Узел</th><th>Плата</th><th>Основной</th><th>Вид</th>" + (edit ? "<th></th>" : "") + "</tr>" +
         rows.map((r) => `<tr><td>${esc(r.time)}</td><td class="${r.nodeOk ? "" : "warn"}">${esc(r.node)}</td>` +
-          `<td>${esc(r.boardTemp)}</td><td>${esc(r.main)}</td><td>${esc(r.media)}</td></tr>`).join("")
+          `<td>${esc(r.boardTemp)}</td><td>${esc(r.main)}</td><td>${esc(r.media)}</td>` +
+          (edit ? `<td><button class="light" data-point="${esc(r.index)}" data-time="${esc(r.time)}" data-node="${esc(r.node)}">✕</button></td>` : "") +
+          `</tr>`).join("")
       : `<tr><td class="soft">Точек пока нет.</td></tr>`;
+
+    // Журналы на диске: открыть любой (журнал прошлой версии откроется копией), начать новый.
+    const journals = journal.journals || [];
+    $("journals").innerHTML = journals.map((j) =>
+      `<li class="row"><div><div>${j.current ? "<b>● " : ""}${esc(j.name)}${j.current ? "</b>" : ""}</div>` +
+      `<div class="soft">${j.folder ? esc(j.folder) + " · " : ""}${esc(j.points)} точ. · ${esc(j.modified)}</div></div>` +
+      (edit && !j.current ? `<button class="light" data-journal="${esc(j.id)}" data-name="${esc(j.name)}">Открыть</button>`
+                          : (j.current ? `<span class="soft">открыт</span>` : "")) + `</li>`).join("")
+      || `<li class="soft">Журналов пока нет: первый появится сам после первой точки.</li>`;
+    $("journalButtons").innerHTML = edit && (journal.points || 0) > 0
+      ? `<button class="danger" data-journal-new="1">Новый журнал</button>` : "";
   }
 
   function sizeText(bytes) {
@@ -975,7 +996,7 @@
       (edit && !run.active ? `<button class="light" data-load="${esc(f.file)}">Загрузить</button>` : "") + `</li>`).join("")
       || `<li class="soft">Сохранённых сценариев нет.</li>`;
     $("scenarioButtons").innerHTML = !edit ? "" :
-      (run.active ? "" : `<button class="light" data-scn="board_cycle">Новый: цикл платы</button><button class="light" data-scn="empty">Пустой</button>`) +
+      (run.active ? "" : `<button class="light" data-scn="board_cycle">Новый: цикл платы</button><button class="light" data-scn="refill">Добор точек</button><button class="light" data-scn="empty">Пустой</button>`) +
       `<button data-scn="save">Сохранить</button>`;
     const auto = run.auto || {};
     $("resumeCard").hidden = !auto.resume;
@@ -1180,6 +1201,26 @@
   $("scenarioFiles").addEventListener("click", (event) => {
     const button = event.target.closest("button[data-load]");
     if (button) control({ action: "scenario_load", file: button.dataset.load }, `Загрузить сценарий ${button.dataset.load}? Несохранённые изменения текущего пропадут.`);
+  });
+
+  // Журнал точек: убрать точку, открыть журнал с диска, начать новый.
+  $("points").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-point]");
+    if (!button) return;
+    control({ action: "journal_remove_point", index: button.dataset.point, time: button.dataset.time },
+      `Убрать точку ${button.dataset.time} (${button.dataset.node}) из журнала? Таблицы пересчитаются.`);
+  });
+
+  $("journals").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-journal]");
+    if (!button) return;
+    control({ action: "journal_open", path: button.dataset.journal },
+      `Открыть журнал ${button.dataset.name}? Новые точки допишутся к нему.`);
+  });
+
+  $("journalButtons").addEventListener("click", (event) => {
+    if (!event.target.closest("button[data-journal-new]")) return;
+    control({ action: "journal_new" }, "Начать новый журнал? Точки уберутся из программы, файл прежнего журнала останется на диске.");
   });
 
   $("scenarioButtons").addEventListener("click", (event) => {

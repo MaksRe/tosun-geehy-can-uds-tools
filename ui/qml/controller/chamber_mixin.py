@@ -29,6 +29,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import pathlib
 import time
@@ -37,6 +38,7 @@ from datetime import datetime
 from PySide6.QtCore import QTimer
 
 import chamber_fit
+from ui.qml.app_paths import previous_version_roots
 from uds.data_identifiers import UdsData
 from uds.services.read_data_by_id import ServiceReadDataById
 
@@ -58,6 +60,12 @@ class AppControllerChamberMixin(AppControllerContract):
 
     # Сколько строк журнала показывать в окне. Остальные есть в файле.
     CHAMBER_VISIBLE_ROWS = 120
+    # Повторяемость: новая точка в узле, где точка уже есть (та же пометка), дальше стольких отсчётов -
+    # установка изменилась; добор к журналу прошлого прогона тогда исказит таблицу.
+    CHAMBER_REPEAT_COUNTS = 2
+    # Список журналов: сколько показывать и как часто перечитывать папки, с.
+    CHAMBER_JOURNALS_SHOWN = 40
+    CHAMBER_JOURNALS_CACHE_S = 10.0
 
     CHAMBER_COLUMNS = (
         "Время",
@@ -311,6 +319,7 @@ class AppControllerChamberMixin(AppControllerContract):
         if chamber_x10 is not None:
             point["chamber_temp_x10"] = int(chamber_x10)
         self._chamber_points.append(point)
+        repeat = "" if rehearsal else self._chamber_repeatability(point)
 
         node = chamber_fit.nearest_node(point["board_temp_x10"])
         if node is None:
@@ -329,8 +338,9 @@ class AppControllerChamberMixin(AppControllerContract):
         if not self._chamber_rehearsal:
             self._chamber_remote("_remote_note_point", point)
         self._chamber_set_status(
-            f"{prefix} «{point['note']}» записана{how}, {hint}. Всего точек: {len(self._chamber_points)}.{saved}",
-            color,
+            f"{prefix} «{point['note']}» записана{how}, {hint}. Всего точек: {len(self._chamber_points)}.{saved}"
+            + (f" Внимание: {repeat}" if repeat else ""),
+            "#d97706" if repeat else color,
         )
 
     def _chamber_abort(self, message: str):
@@ -436,6 +446,171 @@ class AppControllerChamberMixin(AppControllerContract):
 
     # ------------------------------------------------------------------ журнал
 
+    def _chamber_repeatability(self, point: dict) -> str:
+        """Новая точка в узле, где точка уже есть: сверка со старыми. Разошлись - предупреждение.
+
+        Точки одного узла при расчёте усредняются. При доборе к журналу прошлого прогона
+        это верно, только если установка не изменилась (кабель, коробка, положение платы):
+        весь уход платы по температуре - единицы отсчётов, и сдвиг между прогонами
+        сопоставим с ним. Возвращает текст предупреждения или пустую строку.
+        """
+        node = chamber_fit.nearest_node(point["board_temp_x10"])
+        if node is None:
+            return ""
+        earlier = [item for item in self._chamber_points[:-1]
+                   if not item.get("rehearsal") and item["note"] == point["note"]
+                   and chamber_fit.nearest_node(item["board_temp_x10"]) == node]
+        if not earlier:
+            return ""
+        parts, worst = [], 0.0
+        for key, title in (("main", "основной"), ("media", "вид топлива")):
+            values = [item[key] for item in earlier if item.get(key) is not None]
+            if point.get(key) is None or not values:
+                continue
+            mean = sum(values) / len(values)
+            diff = point[key] - mean
+            worst = max(worst, abs(diff))
+            parts.append(f"{title} {point[key]} против {mean:.0f} ({diff:+.0f})".replace(".", ","))
+        if not parts:
+            return ""
+        where = f"узел {chamber_fit.node_text(node)}"
+        if worst <= self.CHAMBER_REPEAT_COUNTS:
+            text = f"повторяемость в {where} в порядке: {'; '.join(parts)} отсчётов."
+            level = "ok"
+        else:
+            text = (f"повторяемость в {where} нарушена: {'; '.join(parts)} отсчётов (допуск ±"
+                    f"{self.CHAMBER_REPEAT_COUNTS}). Установка изменилась - добор к прошлому журналу исказит "
+                    "таблицу: лучше полный прогон с новым журналом.")
+            level = "warn"
+        event = getattr(self, "_climate_event", None)
+        if event is not None:
+            event(text, level)
+        return text if level == "warn" else ""
+
+    def _chamber_journal_dirs(self) -> list[pathlib.Path]:
+        """Где искать журналы: своя папка logs/chamber, папки прошлых версий и (при разработке) logs проекта."""
+        own = self._chamber_autosave_directory()
+        dirs = [own] if own is not None else []
+        root = getattr(self, "_project_root_directory", None)
+        if root is not None:
+            root = pathlib.Path(root)
+            # Прошлые версии рядом: их logs и старое место внутри _internal\ui.
+            for version in previous_version_roots(root):
+                dirs += [version / "logs" / "chamber", version / "_internal" / "ui" / "logs" / "chamber"]
+            # Запуск из исходников: журналы, разложенные по папкам в logs проекта.
+            dirs.append(root.parent / "logs" / "chamber")
+        unique = []
+        for folder in dirs:
+            if folder not in unique and folder.is_dir():
+                unique.append(folder)
+        return unique
+
+    @staticmethod
+    def _chamber_journal_place(folder: pathlib.Path) -> str:
+        """Где лежит чужой журнал - коротко: «прошлая версия v1.0.16» или последние две папки пути."""
+        for part in folder.parts:
+            if "_v" in part and part.rsplit("_v", 1)[1][:1].isdigit():
+                return f"прошлая версия v{part.rsplit('_v', 1)[1]}"
+        return "\\".join(folder.parts[-2:])
+
+    def _chamber_journals(self, fresh: bool = False) -> list[dict]:
+        """Журналы точек (chamber_*.csv): своя папка, подпапки и прошлые версии, новые сверху.
+
+        Перечитывается не чаще раза в 10 с (или по fresh): список нужен окну и сайту часто.
+        """
+        now = time.monotonic()
+        cached = getattr(self, "_chamber_journals_cache", None)
+        if not fresh and cached is not None and now - cached[0] < self.CHAMBER_JOURNALS_CACHE_S:
+            return cached[1]
+        own = self._chamber_autosave_directory()
+        current = str(pathlib.Path(self._chamber_file_path).resolve()) if self._chamber_file_path else ""
+        found = {}
+        for folder in self._chamber_journal_dirs():
+            try:
+                files = list(folder.rglob("chamber_*.csv"))
+            except OSError:
+                continue
+            for path in files:
+                try:
+                    resolved = path.resolve()
+                    stat = path.stat()
+                    with path.open("r", encoding="utf-8-sig", errors="replace") as handle:
+                        points = max(0, sum(1 for line in handle if line.strip()) - 1)
+                except OSError:
+                    continue
+                key = str(resolved)
+                if key in found:
+                    continue
+                inside = own is not None and own.resolve() in resolved.parents
+                found[key] = {
+                    # id - короткий ключ журнала для сайта и бота: полный путь на диске наружу не уходит.
+                    "path": key, "id": hashlib.sha1(key.encode("utf-8")).hexdigest()[:12], "name": path.name,
+                    "folder": (str(resolved.parent.relative_to(own.resolve())) if inside
+                               else self._chamber_journal_place(resolved.parent)),
+                    "points": points, "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%d.%m.%Y %H:%M"),
+                    "stamp": stat.st_mtime, "current": key == current, "external": not inside,
+                }
+        journals = sorted(found.values(), key=lambda item: item["stamp"], reverse=True)[:self.CHAMBER_JOURNALS_SHOWN]
+        for item in journals:
+            if item["folder"] == ".":
+                item["folder"] = ""
+        self._chamber_journals_cache = (now, journals)
+        return journals
+
+    def _chamber_open_journal(self, path: str) -> tuple[bool, str]:
+        """Открывает журнал из списка: новые точки допишутся к нему.
+
+        Журнал из чужой папки (прошлая версия, папка разбора) сначала копируется в свою
+        logs/chamber: дальше автосохранение пишет в копию, а исходный файл не меняется.
+        """
+        if getattr(self, "_climate_run_stage", ""):
+            return False, "идёт прогон: открыть другой журнал можно после него"
+        if self._chamber_busy:
+            return False, "сейчас снимается точка: повторите через несколько секунд"
+        wanted = str(pathlib.Path(str(path)).resolve()) if path else ""
+        item = next((entry for entry in self._chamber_journals(fresh=True)
+                     if path and (entry["path"] == wanted or entry["id"] == str(path))), None)
+        if item is None:
+            return False, "такого журнала нет в списке"
+        source = pathlib.Path(item["path"])
+        target = source
+        copied = ""
+        own = self._chamber_autosave_directory()
+        if item["external"] and own is not None:
+            try:
+                own.mkdir(parents=True, exist_ok=True)
+                target = own / source.name
+                if target.exists() and target.read_bytes() != source.read_bytes():
+                    target = own / f"{source.stem}_копия_{datetime.now():%Y%m%d_%H%M%S}{source.suffix}"
+                if not target.exists():
+                    target.write_bytes(source.read_bytes())
+                copied = f" (скопирован из {source.parent})"
+            except OSError as error:
+                return False, f"журнал не скопирован: {error}"
+        if not self._chamber_load_file(str(target)):
+            return False, str(self._chamber_status)
+        self._chamber_journals_cache = None
+        return True, f"открыт журнал {target.name}{copied}: точек {len(self._chamber_points)}. Новые точки допишутся к нему."
+
+    def _chamber_remove_point(self, index: int, stamp: str = "") -> tuple[bool, str]:
+        """Убирает любую точку журнала. stamp - время точки: защита от удаления не той, если журнал сдвинулся."""
+        if self._chamber_busy:
+            return False, "сейчас снимается точка: повторите через несколько секунд"
+        if not 0 <= int(index) < len(self._chamber_points):
+            return False, "такой точки нет"
+        point = self._chamber_points[int(index)]
+        if stamp and point["time"] != stamp:
+            return False, "журнал изменился, обновите список и повторите"
+        self._chamber_points.pop(int(index))
+        saved = self._chamber_after_change()
+        node = chamber_fit.nearest_node(point["board_temp_x10"])
+        where = "вне сетки" if node is None else chamber_fit.node_text(node)
+        text = (f"точка {point['time']} ({where}, плата {point['board_temp_x10'] / 10:+.1f} °C, основной "
+                f"{point['main']}) убрана. Осталось точек: {len(self._chamber_points)}.")
+        self._chamber_set_status(text[:1].upper() + text[1:] + saved, "#0f6ab4")
+        self._chamber_journals_cache = None
+        return True, text
+
     def _chamber_remove_last_point(self) -> bool:
         """Убирает последнюю точку: обычно она снята с неверной пометкой."""
         if not self._chamber_points:
@@ -458,6 +633,7 @@ class AppControllerChamberMixin(AppControllerContract):
         self._chamber_points = []
         self._chamber_report = []
         self._chamber_file_path = ""
+        self._chamber_journals_cache = None
         self._chamber_tables_complete = False
         self._chamber_tables_text = "Таблицы посчитаются сами, когда появятся точки."
         self._chamber_tables_color = "#64748b"
@@ -798,9 +974,13 @@ class AppControllerChamberMixin(AppControllerContract):
     def _chamber_rows(self) -> list:
         """Готовит журнал прогона для показа: последние строки сверху."""
         rows = []
-        for point in reversed(self._chamber_points[-self.CHAMBER_VISIBLE_ROWS:]):
+        first = max(0, len(self._chamber_points) - self.CHAMBER_VISIBLE_ROWS)
+        for index in range(len(self._chamber_points) - 1, first - 1, -1):
+            point = self._chamber_points[index]
             node = chamber_fit.nearest_node(point["board_temp_x10"])
             rows.append({
+                # Номер точки в журнале (с нуля) и её время: по ним точку убирают из окна, с сайта и из бота.
+                "index": index,
                 "time": point["time"],
                 "note": point["note"] + (" (проба)" if point.get("rehearsal") else ""),
                 "main": str(point["main"]),

@@ -263,3 +263,31 @@ def test_check_message_respects_admin_only(tmp_path: Path):
     _drain(bot)
     bot.set_admin_only(True)
     assert bot.test() == 1 and [item["chat_id"] for item in _messages(_drain(bot))] == ["1"]
+
+
+def test_journal_screens_remove_point_and_open_journal(tmp_path: Path):
+    """Журнал в боте: точки с номерами, «🗑 N» убирает точку N (с подтверждением), журнал с диска - открыть."""
+    bot, calls = _bot(tmp_path)
+    snapshot = _snapshot()
+    snapshot["run"] = {"points": 2, "file": "chamber_20261013_151722.csv",
+                       "rows": [{"index": 1, "time": "02:39:46", "node": "+85 °C", "boardTemp": "+85.0", "main": "4540"},
+                                {"index": 0, "time": "15:17:22", "node": "+25 °C", "boardTemp": "+24.5", "main": "4533"}],
+                       "journals": [{"id": "abc123def456", "name": "chamber_20261013_151722.csv",
+                                     "folder": "прошлая версия v1.0.16", "points": 6, "modified": "14.10.2026 02:39",
+                                     "current": False}]}
+    bot.set_snapshot(snapshot)
+    menu = _messages(_say(bot, 2, "/menu"))[0]
+    journal = _edits(_press(bot, "2", menu, "📒 Журнал точек"))[0]
+    assert "<pre>" in journal["text"] and "02:39:46" in journal["text"]
+    confirm = _messages(_press(bot, "2", journal, "🗑 2"))[0]
+    assert "Убрать точку 2 (02:39:46" in confirm["text"] and calls == []
+    _press(bot, "2", confirm, "✅ Да")
+    assert calls[-1] == ("2", "journal_remove_point", {"index": 1, "time": "02:39:46"})
+    journals = _edits(_press(bot, "2", menu, "📂 Журналы на диске"))[0]
+    assert "прошлая версия v1.0.16" in journals["text"] and "D:\\" not in journals["text"]
+    confirm = _messages(_press(bot, "2", journals, "📄 1."))[0]
+    _press(bot, "2", confirm, "✅ Да")
+    assert calls[-1] == ("2", "journal_open", {"path": "abc123def456"})
+    _say(bot, 2, "/new добор")
+    bot.handle_update({"callback_query": {"id": "q", "data": "ctl!pending", "message": {"chat": {"id": 2}, "message_id": 9}}})
+    assert calls[-1] == ("2", "scenario_new", {"kind": "refill"})

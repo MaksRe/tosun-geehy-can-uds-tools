@@ -149,10 +149,14 @@ class AppControllerClimateScenarioMixin(AppControllerContract):
         return True
 
     def _climate_scenario_new(self, kind: str) -> bool:
-        """Новый сценарий: «board_cycle» - испытание платы за один цикл, иначе пустой."""
+        """Новый сценарий: «board_cycle» - испытание платы за один цикл, «refill» - добор точек, иначе пустой."""
         if self._climate_scenario_busy():
             return False
-        if kind == "board_cycle":
+        if kind == "refill":
+            self._climate_scenario_set(climate_scenario.refill_scenario(),
+                                       status=f"Новый сценарий «{climate_scenario.REFILL_NAME}». Перед стартом откройте "
+                                              "журнал прошлого прогона: точки допишутся к нему.")
+        elif kind == "board_cycle":
             self._climate_scenario_set(climate_scenario.board_cycle_scenario(),
                                        status=f"Новый сценарий «{climate_scenario.BOARD_CYCLE_NAME}». "
                                               "Сохраните его, если меняли.")

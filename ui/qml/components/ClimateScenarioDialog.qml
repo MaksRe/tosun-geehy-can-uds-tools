@@ -398,6 +398,13 @@ Popup {
                         onClicked: if (dialog.appController) dialog.appController.newClimateScenario("board_cycle")
                     }
                     SmallButton {
+                        Layout.preferredWidth: 130
+                        text: "Добор точек"
+                        toolTipText: "25, -20, -40, +85 °C - добор к журналу прошлого прогона (сначала откройте его в «Прогоне в камере»)"
+                        enabled: !dialog.locked
+                        onClicked: if (dialog.appController) dialog.appController.newClimateScenario("refill")
+                    }
+                    SmallButton {
                         Layout.preferredWidth: 110
                         text: "Пустой"
                         enabled: !dialog.locked

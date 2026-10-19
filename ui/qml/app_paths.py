@@ -67,6 +67,18 @@ def _newest_previous_config(root: Path) -> tuple[Path, Path] | None:
     return (best[1], best[2]) if best else None
 
 
+def previous_version_roots(root: Path) -> list[Path]:
+    """Папки соседних версий той же программы (без текущей): там могут быть журналы прошлых прогонов."""
+    prefix = _product_prefix(root)
+    if not prefix or not root.parent.is_dir():
+        return []
+    try:
+        return sorted((item for item in root.parent.iterdir()
+                       if item != root and item.is_dir() and _product_prefix(item) == prefix), reverse=True)
+    except OSError:
+        return []
+
+
 def migrate_previous_settings(root: Path) -> str:
     """Первый запуск новой версии: копирует настройки и сценарии из прошлой версии.
 

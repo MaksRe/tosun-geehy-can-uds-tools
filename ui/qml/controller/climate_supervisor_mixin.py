@@ -36,6 +36,7 @@ import time
 from collections import deque
 
 import chamber_fit
+from ui.qml import climate_scenario
 from ui.qml.climate_chamber import DRIVER_ESPEC, DRIVER_SIMULATOR
 
 from .contract import AppControllerContract
@@ -245,18 +246,32 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             mapped = {node: chamber_fit.nearest_node(int(round(node * 10))) for node in capture_nodes}
             covered = {grid for grid in mapped.values() if grid is not None}
             off_grid = [node for node, grid in mapped.items() if grid is None]
-            missing = [node for node in chamber_fit.NODES_X10 if node not in covered]
-            reference = chamber_fit.REFERENCE_X10 in covered
+            # Точки уже открытого журнала (добор к прошлому прогону): их узлы тоже идут в таблицу.
+            journal = [point for point in getattr(self, "_chamber_points", []) or [] if not point.get("rehearsal")]
+            in_journal = {node for node in (chamber_fit.nearest_node(point["board_temp_x10"]) for point in journal)
+                          if node is not None}
+            missing = [node for node in chamber_fit.NODES_X10 if node not in covered | in_journal]
+            reference = chamber_fit.REFERENCE_X10 in covered | in_journal
             add("reference", reference, "Опорный узел +25 °C в списке" if reference
                 else "Нет узла +25 °C: это опорная точка, без неё таблица платы не посчитается")
+            refill = str((getattr(self, "_climate_scenario", None) or {}).get("name", "")) == climate_scenario.REFILL_NAME
+            if refill and not journal:
+                add("refill", False, "Сценарий добора: сначала откройте журнал прошлого прогона (Прогон в камере -> "
+                                      "Журналы) - новые точки допишутся к нему")
+            journal_text = f" вместе с открытым журналом ({len(journal)} точек)" if journal else ""
             if off_grid:
                 add("grid", False, f"Температуры {', '.join(_c(node) for node in off_grid)} не попадают в узлы "
                                    f"прибора (±3 °C): точки там не войдут в таблицу", "warn")
             elif missing:
-                add("grid", False, f"Не все узлы прибора: нет {', '.join(chamber_fit.node_text(node) for node in missing)}. "
+                add("grid", False, f"Не все узлы прибора{journal_text}: нет "
+                                   f"{', '.join(chamber_fit.node_text(node) for node in missing)}. "
                                    f"Таблица будет неполной, профиль сам не запишется", "warn")
             else:
-                add("grid", True, "Все 7 узлов прибора в списке: таблица будет полной", "warn")
+                add("grid", True, f"Все 7 узлов прибора{journal_text}: таблица будет полной", "warn")
+            repeat = sorted(covered & in_journal)
+            if repeat:
+                add("repeat", True, f"Узлы {', '.join(chamber_fit.node_text(node) for node in repeat)} уже есть в "
+                                    "журнале: новые точки сверятся со старыми (повторяемость) и усреднятся", "warn")
 
         details = (getattr(reading, "details", None) or {}) if reading is not None else {}
         if settings["driver"] == DRIVER_ESPEC and nodes and details.get("high_c") is not None:
@@ -317,8 +332,9 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
 
         points = len(getattr(self, "_chamber_points", []) or [])
         if points:
-            add("journal", True, f"В журнале уже {points} точек: новые допишутся к ним. Для нового профиля "
-                                 f"очистите журнал в «Прогоне в камере»", "warn")
+            name = pathlib.Path(str(getattr(self, "_chamber_file_path", "") or "")).name
+            add("journal", True, f"В журнале{f' {name}' if name else ''} уже {points} точек: новые допишутся к ним. "
+                                 "Для нового профиля начните новый журнал («Прогон в камере» -> «Журналы»)", "warn")
         return checks
 
     def _climate_auto_blockers(self) -> list[str]:

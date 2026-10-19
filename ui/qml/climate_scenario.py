@@ -129,6 +129,33 @@ def board_cycle_scenario() -> dict:
     return scenario
 
 
+REFILL_NAME = "Добор точек: 25, -20, -40, +85"
+REFILL_TEMPS = (25.0, -20.0, -40.0, 85.0)
+REFILL_NOTES = {25.0: "проверка повторяемости с прошлым прогоном",
+                -20.0: "проверка повторяемости и холодная точка для упреждения уставки на -40"}
+
+
+def refill_scenario() -> dict:
+    """Добор недостающих точек к журналу прошлого прогона той же платы.
+
+    Перед стартом открывают журнал прошлого прогона: новые точки допишутся к нему.
+    +25 и -20 снимаются повторно - это проверка, что установка не изменилась (точки
+    одного узла усредняются, программа предупредит, если новые разошлись со старыми
+    больше чем на 2 отсчёта); -40 и +85 - недостающие или недостоверные точки.
+    """
+    scenario = empty_scenario(REFILL_NAME)
+    scenario["description"] = ("Добор точек к журналу прошлого прогона: сначала откройте его (Прогон в камере -> "
+                               "Журналы). +25 и -20 - проверка повторяемости, -40 и +85 - недостающие точки.")
+    scenario["board_only"] = True
+    scenario["labels"] = ["0/0"]
+    steps = [new_step(temp) for temp in REFILL_TEMPS]
+    for step in steps:
+        step["hold_min"] = BOARD_CYCLE_HOLD.get(step["temp"], 0.0)
+        step["note"] = REFILL_NOTES.get(step["temp"], "")
+    scenario["steps"] = steps
+    return scenario
+
+
 def _board_cycle_steps() -> list[dict]:
     """Шаги цикла платы: порядок, выдержка на крайних шагах, примечания."""
     steps = [new_step(temp) for temp in BOARD_CYCLE_TEMPS]

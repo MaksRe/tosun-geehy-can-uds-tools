@@ -977,7 +977,9 @@ class TelegramBot:
             item = files[int(words[0]) - 1]
             return "scenario_load", {"file": item["file"]}, f"Загрузить сценарий «{item['name']}»?"
         if command == "/new":
-            kind = "empty" if words and words[0].lower().startswith(("пуст", "empty")) else "board_cycle"
+            word = words[0].lower() if words else ""
+            kind = ("empty" if word.startswith(("пуст", "empty")) else
+                    "refill" if word.startswith(("добор", "refill")) else "board_cycle")
             return "scenario_new", {"kind": kind}, "Создать новый сценарий? Несохранённые изменения текущего пропадут."
         if command == "/cmd":
             if not words:
@@ -1097,7 +1099,7 @@ class TelegramBot:
                       "/step 2 -40 15 - шаг 2: -40 °C, выдержка 15 мин",
                       "/addstep -40 15 - новый шаг в конце, /delstep 3 - удалить шаг 3",
                       "/rule ключ значение - правило сценария",
-                      "/load 1, /save, /new цикл|пустой - сценарии",
+                      "/load 1, /save, /new цикл|добор|пустой - сценарии",
                       "/cmd ключ имя=значение - команда ESPEC",
                       "/report, /journal, /trace - файлы в этот чат",
                       "/control - кнопки, /login - вход на сайт"]

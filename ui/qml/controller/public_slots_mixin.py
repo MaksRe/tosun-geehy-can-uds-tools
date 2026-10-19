@@ -3577,6 +3577,27 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         """Цель функции в очистке журнала прогона, затем она готовит окно к новому прогону."""
         self._chamber_clear_points()
 
+    @Slot(str)
+    def openChamberJournal(self, path):
+        """Цель функции в открытии журнала из списка, затем новые точки допишутся к нему; действие в журнале."""
+        self._control_gui("journal_open", {"path": str(path)})
+
+    @Slot(int, str)
+    def removeChamberPoint(self, index, stamp):
+        """Цель функции в удалении любой точки журнала по номеру и времени; действие в журнале."""
+        self._control_gui("journal_remove_point", {"index": int(index), "time": str(stamp)})
+
+    @Slot()
+    def newChamberJournal(self):
+        """Цель функции в начале нового журнала: прежний файл остаётся на диске; действие в журнале."""
+        self._control_gui("journal_new")
+
+    @Slot()
+    def refreshChamberJournals(self):
+        """Цель функции в перечитывании папок журналов, затем список показывает новые файлы."""
+        self._chamber_journals(fresh=True)
+        self.chamberChanged.emit()
+
     @Slot(bool)
     def setChamberExtendLiquid(self, enabled):
         """Цель функции в включении достройки строк «в жидкости», затем расчёт использует постоянный размах."""

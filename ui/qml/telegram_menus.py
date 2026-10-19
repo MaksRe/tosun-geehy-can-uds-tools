@@ -165,7 +165,8 @@ def build(name: str, arg, snapshot: dict, can_control: bool) -> tuple[str, list[
     if can_control:
         builders.update({"camera": _camera, "run": _run_menu, "goto": _goto, "scenario": _scenario,
                          "load": _load, "steps_edit": _steps_edit, "step": _step, "rules": _rules,
-                         "espec": _espec, "espec_group": _espec_group, "espec_cmd": _espec_cmd, "files": _files})
+                         "espec": _espec, "espec_group": _espec_group, "espec_cmd": _espec_cmd, "files": _files,
+                         "journal": _journal, "journals": _journals})
     builder = builders.get(name, _main)
     return builder(snapshot, arg, can_control)
 
@@ -190,6 +191,7 @@ def _main(snapshot: dict, _arg, can_control: bool):
         espec = bool(_control(snapshot).get("espec"))
         rows += [[("🌡 Камера", _menu("camera")), ("▶️ Прогон", _menu("run"))],
                  [("🧾 Сценарий", _menu("scenario")), ("⚖ Правила", _menu("rules"))],
+                 [("📒 Журнал точек", _menu("journal")), ("📂 Журналы на диске", _menu("journals"))],
                  ([("🛠 Команды ESPEC", _menu("espec"))] if espec else []) + [("📁 Файлы", _menu("files"))],
                  [("⛔ Экстренная остановка", _act("estop", confirm="Экстренно остановить камеру? Автопрогон тоже остановится."))],
                  [("🔑 Вход на сайт", {"t": "login"}), ("⚙️ Уведомления", {"t": "settings"})]]
@@ -316,7 +318,60 @@ def _scenario(snapshot: dict, _arg, _can):
              ("🆕 Новый: пустой", _act("scenario_new", {"kind": "empty"},
                                        "Создать пустой сценарий? Несохранённые изменения текущего пропадут.",
                                        back=("scenario", None)))],
+            [("🆕 Новый: добор точек (25, -20, -40, +85)",
+              _act("scenario_new", {"kind": "refill"},
+                   "Создать сценарий добора точек? Перед стартом откройте журнал прошлого прогона (📂 Журналы на диске): "
+                   "новые точки допишутся к нему.", back=("scenario", None)))],
             [("⟳ Обновить", _menu("scenario")), _home()]]
+    return text, rows
+
+
+def _journal(snapshot: dict, _arg, _can):
+    """Журнал точек: все точки с номерами; любую можно убрать (по номеру и времени), файл - в чат, новый журнал."""
+    journal = snapshot.get("run") or {}
+    rows_data = journal.get("rows") or []
+    head = (f"<b>Журнал точек</b> · {escape(str(journal.get('file') or 'ещё не сохранён'))} · "
+            f"точек {journal.get('points', 0)}")
+    if rows_data:
+        table = reports.table(["№", "время", "узел", "плата", "осн"],
+                              [[row.get("index", 0) + 1, row.get("time", ""), row.get("node", ""),
+                                row.get("boardTemp", ""), row.get("main", "")] for row in rows_data],
+                              right=(0, 3, 4))
+        text = head + "\n" + reports.pre(table) + "\nНажмите «🗑 N», чтобы убрать точку N (например, недостоверную)."
+    else:
+        text = head + "\nТочек пока нет. Добор к прошлому прогону: откройте его журнал (📂 Журналы на диске)."
+    buttons = [(f"🗑 {row.get('index', 0) + 1}",
+                _act("journal_remove_point", {"index": row.get("index", 0), "time": row.get("time", "")},
+                     f"Убрать точку {row.get('index', 0) + 1} ({row.get('time', '')}, {row.get('node', '')}, плата "
+                     f"{row.get('boardTemp', '')}) из журнала? Таблицы пересчитаются.", back=("journal", None)))
+               for row in rows_data[:30]]
+    rows = [buttons[start:start + 5] for start in range(0, len(buttons), 5)]
+    rows.append([("📂 Журналы на диске", _menu("journals")), ("📒 Файл в чат", _act("send_file", {"which": "journal"}))])
+    if rows_data:
+        rows.append([("🆕 Новый журнал", _act("journal_new", confirm="Начать новый журнал? Точки уберутся из программы, "
+                                                                    "файл прежнего журнала останется на диске.",
+                                             back=("journal", None)))])
+    rows.append([("⟳ Обновить", _menu("journal")), _home()])
+    return text, rows
+
+
+def _journals(snapshot: dict, _arg, _can):
+    """Журналы на диске (свои и прошлых версий): открыть - новые точки допишутся к нему."""
+    journals = (snapshot.get("run") or {}).get("journals") or []
+    lines = []
+    rows = []
+    for number, item in enumerate(journals[:20], start=1):
+        place = f" · {item['folder']}" if item.get("folder") else ""
+        lines.append(f"{number}. {'● ' if item.get('current') else ''}{item['name']} — {item.get('points', 0)} точ., "
+                     f"{item.get('modified', '')}{place}")
+        if not item.get("current"):
+            rows.append([(f"📄 {number}. {item['name']} ({item.get('points', 0)} точ.)"[:60],
+                          _act("journal_open", {"path": item["id"]},
+                               f"Открыть журнал {item['name']}? Новые точки допишутся к нему.", back=("journal", None)))])
+    text = ("<b>Журналы на диске</b> · свои и прошлых версий, новые сверху\n"
+            + (escape("\n".join(lines)) if lines else "Журналов пока нет.")
+            + "\n\nОткрытый журнал (●) - тот, куда пишутся точки. Журнал прошлой версии откроется копией.")
+    rows.append([("📒 Журнал точек", _menu("journal")), _home()])
     return text, rows
 
 

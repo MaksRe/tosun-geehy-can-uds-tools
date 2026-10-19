@@ -83,10 +83,14 @@ ACTION_TITLES = {
     "scenario_steps": "изменение шагов сценария",
     "role": "права управления",
     "notify_scope": "рассылка бота",
+    "journal_open": "открытие журнала точек",
+    "journal_remove_point": "удаление точки журнала",
+    "journal_new": "новый журнал точек",
 }
 # Кого будить сообщением: важность события для подписчиков бота.
 NOTIFY_LEVEL = {"estop": "bad", "mode": "warn", "setpoint": "warn", "run_start": "ok", "run_pause": "warn",
-                "run_resume": "ok", "run_stop": "warn", "run_operator": "info", "notify_scope": "warn", "capture": "ok", "step_next": "warn",
+                "run_resume": "ok", "run_stop": "warn", "run_operator": "info", "notify_scope": "warn",
+                "journal_open": "info", "journal_remove_point": "warn", "journal_new": "info", "capture": "ok", "step_next": "warn",
                 "step_goto": "warn", "scenario": "warn", "scenario_steps": "warn", "role": "info",
                 "scenario_rules": "warn", "scenario_load": "info", "scenario_new": "info", "limits": "warn",
                 "espec_command": "warn", "resume_saved": "ok", "discard_saved": "warn", "label": "info"}
@@ -423,9 +427,41 @@ class AppControllerClimateControlMixin(AppControllerContract):
         busy = self._control_no_run("создать новый сценарий")
         if busy:
             return False, busy, ""
-        kind = "board_cycle" if str(params.get("kind", "board_cycle")) == "board_cycle" else "empty"
+        kind = str(params.get("kind", "board_cycle"))
+        kind = kind if kind in ("board_cycle", "refill") else "empty"
         ok = self._climate_scenario_new(kind)
         return ok, f"новый сценарий «{self._climate_scenario.get('name', '')}»." if ok else "не создан", kind
+
+    # ------------------------------------------------------------------ журнал точек
+
+    def _control_do_journal_open(self, actor: dict, params: dict):
+        """Открыть журнал из списка (в том числе прошлого прогона из папки прежней версии)."""
+        path = str(params.get("path", ""))
+        ok, text = self._chamber_open_journal(path)
+        self.chamberChanged.emit()
+        return ok, text, pathlib.Path(path).name
+
+    def _control_do_journal_remove_point(self, actor: dict, params: dict):
+        """Убрать любую точку журнала: номер (с нуля) и время точки - защита от удаления не той."""
+        try:
+            index = int(params.get("index"))
+        except (TypeError, ValueError):
+            return False, "номер точки не понят", ""
+        stamp = str(params.get("time", ""))
+        ok, text = self._chamber_remove_point(index, stamp)
+        self.chamberChanged.emit()
+        return ok, text, f"точка {index + 1}" + (f" ({stamp})" if stamp else "")
+
+    def _control_do_journal_new(self, actor: dict, params: dict):
+        """Новый журнал: точки из окна убираются, файл прежнего журнала остаётся на диске."""
+        if self._climate_run_stage:
+            return False, "идёт прогон: новый журнал - после него", ""
+        before = pathlib.Path(self._chamber_file_path).name if self._chamber_file_path else ""
+        count = len(self._chamber_points)
+        self._chamber_clear_points()
+        self.chamberChanged.emit()
+        return True, "новый журнал: следующая точка начнёт новый файл. Прежний остался на диске.", (
+            f"{before}, точек {count}" if before else f"точек {count}")
 
     def _control_do_scenario_save(self, actor: dict, params: dict):
         ok = self._climate_scenario_save("")

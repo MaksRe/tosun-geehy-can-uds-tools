@@ -770,7 +770,11 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
                 "tablesColor": str(self._chamber_tables_color),
                 "coverage": self._chamber_coverage_rows(),
                 "report": [str(item) for item in self._chamber_report],
-                "rows": self._chamber_rows()[:15],
+                # Точки журнала (свежие сверху, с номером и временем - по ним точку убирают издалека).
+                "rows": self._chamber_rows()[:40],
+                # Журналы на диске: свои и прошлых версий - открыть одной кнопкой с сайта и из бота.
+                "journals": [{key: item[key] for key in ("id", "name", "folder", "points", "modified", "current")}
+                             for item in self._chamber_journals()],
             },
             "chain": self._chamber_chain_view(),
             # Рассылка бота: всем или только админу (показ и переключатель у админа на сайте).

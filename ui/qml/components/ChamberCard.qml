@@ -793,14 +793,80 @@ Card {
                 }
             }
 
-            // --- Файлы журнала и таблиц: журнал и так сохраняется сам после каждой точки ---
+            // --- Журналы и таблицы: журнал и так сохраняется сам после каждой точки ---
             Spoiler {
-                title: "Файлы журнала и таблиц"
+                title: "Журналы и таблицы"
                 hintText: {
                     if (!root.appController)
                         return ""
                     var path = root.appController.chamberFilePath
                     return path.length > 0 ? "журнал сохраняется сам: " + path : "журнал сохранится сам после первой точки"
+                }
+
+                // Журналы на диске: своя папка и прошлые версии программы. Открыть - новые точки допишутся к нему
+                // (так добирают точку к прошлому прогону); журнал прошлой версии открывается копией в своей папке.
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    Caption { text: "Журналы на диске (новые сверху)"; font.bold: true }
+                    Item { Layout.fillWidth: true }
+                    SmallButton {
+                        Layout.preferredWidth: 110
+                        text: "Обновить"
+                        toolTipText: "Перечитать папки журналов"
+                        onClicked: if (root.appController) root.appController.refreshChamberJournals()
+                    }
+                    SmallButton {
+                        id: newJournalButton
+                        property bool armed: false
+                        Layout.preferredWidth: 150
+                        text: armed ? "Точно? Ещё раз" : "Новый журнал"
+                        tone: "#ef4444"; toneHover: "#dc2626"; tonePressed: "#b91c1c"
+                        toolTipText: "Убирает точки из окна; следующая точка начнёт новый файл. Прежний файл остаётся на диске"
+                        enabled: root.appController !== null && !root.busy && root.appController.chamberPointCount > 0
+                        onClicked: {
+                            if (!armed) { armed = true; newJournalDisarm.restart(); return }
+                            armed = false
+                            if (root.appController) root.appController.newChamberJournal()
+                        }
+                        Timer { id: newJournalDisarm; interval: 4000; onTriggered: newJournalButton.armed = false }
+                    }
+                }
+
+                Repeater {
+                    model: root.appController ? root.appController.chamberJournals : []
+
+                    RowLayout {
+                        id: journalRow
+                        required property var modelData
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: (journalRow.modelData.current ? "● " : "") + journalRow.modelData.name
+                                  + (journalRow.modelData.folder ? "   ·   " + journalRow.modelData.folder : "")
+                            color: journalRow.modelData.current ? "#0f6ab4" : root.textMain
+                            font.pixelSize: 12
+                            font.bold: journalRow.modelData.current === true
+                            font.family: "Bahnschrift"
+                            elide: Text.ElideMiddle
+                        }
+                        Caption { text: journalRow.modelData.points + " точ.  ·  " + journalRow.modelData.modified }
+                        SmallButton {
+                            Layout.preferredWidth: 100
+                            text: journalRow.modelData.current ? "Открыт" : "Открыть"
+                            toolTipText: "Новые точки допишутся к этому журналу. Журнал прошлой версии откроется копией в своей папке"
+                            enabled: root.appController !== null && !root.busy && journalRow.modelData.current !== true
+                            onClicked: if (root.appController) root.appController.openChamberJournal(journalRow.modelData.path)
+                        }
+                    }
+                }
+
+                Caption {
+                    visible: !root.appController || root.appController.chamberJournals.length === 0
+                    text: "Журналов на диске пока нет: первый появится сам после первой точки."
                 }
 
                 RowLayout {
@@ -834,14 +900,6 @@ Card {
 
                     Item { Layout.fillWidth: true }
 
-                    SmallButton {
-                        Layout.preferredWidth: 150
-                        text: "Очистить журнал"
-                        tone: "#ef4444"; toneHover: "#dc2626"; tonePressed: "#b91c1c"
-                        toolTipText: "Убирает все точки из окна. Файл прежнего журнала остаётся на диске, следующая точка начнёт новый"
-                        enabled: root.appController !== null && !root.busy
-                        onClicked: if (root.appController) root.appController.clearChamberPoints()
-                    }
                 }
             }
 
@@ -1017,8 +1075,10 @@ Card {
                     // Ширина колонок считается один раз и применяется и к шапке, и к
                     // строкам: иначе подписи разъедутся с данными.
                     readonly property var weights: [0.10, 0.22, 0.13, 0.13, 0.105, 0.105, 0.105, 0.105]
+                    // Справа у каждой строки - кнопка «убрать точку».
+                    readonly property int removeWidth: 34
                     function columnWidth(index) {
-                        return Math.max(54, (width - 7 * 6) * weights[index])
+                        return Math.max(54, (width - 8 * 6 - removeWidth) * weights[index])
                     }
 
                     RowLayout {
@@ -1042,6 +1102,7 @@ Card {
                                 elide: Text.ElideRight
                             }
                         }
+                        Item { Layout.preferredWidth: logBody.removeWidth }
                     }
 
                     Repeater {
@@ -1071,6 +1132,27 @@ Card {
                                     font.family: "Bahnschrift"
                                     elide: Text.ElideRight
                                 }
+                            }
+
+                            // Убрать эту точку (например, недостоверную): первое нажатие - «точно?», второе - убирает.
+                            SmallButton {
+                                id: removeButton
+                                property bool armed: false
+                                Layout.preferredWidth: logBody.removeWidth
+                                Layout.preferredHeight: 22
+                                fontPixelSize: 11
+                                text: armed ? "?" : "✕"
+                                tone: armed ? "#dc2626" : "#94a3b8"; toneHover: "#dc2626"; tonePressed: "#b91c1c"
+                                toolTipText: armed ? "Нажмите ещё раз, чтобы убрать точку " + logRow.modelData.time
+                                                   : "Убрать эту точку из журнала"
+                                enabled: root.appController !== null && !root.busy
+                                onClicked: {
+                                    if (!armed) { armed = true; removeDisarm.restart(); return }
+                                    armed = false
+                                    if (root.appController)
+                                        root.appController.removeChamberPoint(logRow.modelData.index, logRow.modelData.time)
+                                }
+                                Timer { id: removeDisarm; interval: 4000; onTriggered: removeButton.armed = false }
                             }
                         }
                     }
