@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import gzip
+import io
 import json
 import sys
 import time
@@ -151,40 +152,84 @@ def test_bad_arguments_get_an_example(tmp_path: Path):
 
 # ------------------------------------------------------------------ Tailscale
 
-class _Done:
-    def __init__(self, code, text):
-        self.returncode = code
-        self.stdout = text.encode("utf-8")
-        self.stderr = b""
+class _Process:
+    """Подмена tailscale: печатает вывод; hang - потом висит (как «funnel», ждущий разрешения)."""
+
+    def __init__(self, code, text, hang=False):
+        self.stdout = io.BytesIO(text.encode("utf-8"))
+        self._code = code
+        self._hang = hang
+        self.killed = False
+
+    def poll(self):
+        return None if self._hang and not self.killed else self._code
+
+    def kill(self):
+        self.killed = True
 
 
-def test_tailscale_funnel_asks_to_enable_then_gives_the_address(monkeypatch, tmp_path: Path):
+def test_tailscale_funnel_shows_enable_link_at_once_then_gives_the_address(monkeypatch, tmp_path: Path):
+    """Funnel не разрешён: tailscale печатает ссылку и ЖДЁТ. Ссылка - сразу, без 40 с ожидания."""
     answers = {"enabled": False}
+    commands, processes = [], []
 
-    def run(command, **_kwargs):
-        if command[1] == "funnel":
+    def popen(command, **_kwargs):
+        commands.append(command[1:])
+        if command[1] == "funnel" and command[-1] != "off":
             if answers["enabled"]:
-                return _Done(0, "Available on the internet")
-            return _Done(1, "Funnel is not enabled on your tailnet.\nTo enable, visit:\n\n"
-                            "         https://login.tailscale.com/f/funnel?node=abc\n")
-        return _Done(0, json.dumps({"BackendState": "Running", "Self": {"DNSName": "lab-pc.tail1234.ts.net."}}))
+                process = _Process(0, "Available on the internet:\nhttps://lab-pc.tail1234.ts.net/\n")
+            else:
+                process = _Process(None, "Funnel is not enabled on your tailnet.\nTo enable, visit:\n\n"
+                                         "         https://login.tailscale.com/f/funnel?node=abc\n", hang=True)
+        elif command[1] == "funnel":
+            process = _Process(0, "")
+        else:
+            process = _Process(0, json.dumps({"BackendState": "Running", "Self": {"DNSName": "lab-pc.tail1234.ts.net."}}))
+        processes.append(process)
+        return process
 
-    monkeypatch.setattr(public_tunnel.subprocess, "run", run)
+    monkeypatch.setattr(public_tunnel.subprocess, "Popen", popen)
+    monkeypatch.setattr(public_tunnel.TailscaleFunnel, "RETRY_S", 0.05)
     monkeypatch.setattr(public_tunnel.TailscaleFunnel, "CHECK_EVERY_S", 0.05)
     urls, statuses = [], []
     funnel = public_tunnel.TailscaleFunnel(urls.append, lambda text, ok: statuses.append((text, ok)), tmp_path / "ts.log")
+    started = time.monotonic()
     funnel.start(8765, "tailscale.exe")
     try:
-        deadline = time.monotonic() + 5
+        deadline = started + 5
         while not any("login.tailscale.com/f/funnel" in text for text, _ok in statuses) and time.monotonic() < deadline:
             time.sleep(0.02)
-        assert not urls
+        assert time.monotonic() - started < 3, "ссылка должна появиться сразу, а не после таймаута"
+        assert processes[0].killed and not urls
+        assert any("Enable" in text for text, _ok in statuses)
         answers["enabled"] = True
         while not urls and time.monotonic() < deadline:
             time.sleep(0.02)
         assert urls == ["https://lab-pc.tail1234.ts.net/"]
     finally:
         funnel.stop()
+    # Выключение - правильной командой и только потому, что Funnel включался.
+    assert commands[-1] == ["funnel", "--https=443", "off"]
+
+
+def test_tailscale_funnel_is_not_switched_off_if_it_never_started(monkeypatch, tmp_path: Path):
+    commands = []
+
+    def popen(command, **_kwargs):
+        commands.append(command[1:])
+        return _Process(1, "error: not logged in")
+
+    monkeypatch.setattr(public_tunnel.subprocess, "Popen", popen)
+    monkeypatch.setattr(public_tunnel.TailscaleFunnel, "RETRY_S", 0.05)
+    statuses = []
+    funnel = public_tunnel.TailscaleFunnel(lambda url: None, lambda text, ok: statuses.append(text), tmp_path / "ts.log")
+    funnel.start(8765, "tailscale.exe")
+    deadline = time.monotonic() + 3
+    while not any("не включился" in text for text in statuses) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    funnel.stop()
+    assert any("not logged in" in text for text in statuses)
+    assert ["funnel", "--https=443", "off"] not in commands
 
 
 # ------------------------------------------------------------------ сервер: трафик

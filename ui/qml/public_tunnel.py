@@ -39,6 +39,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -433,13 +434,21 @@ class TailscaleFunnel:
     В отличие от ngrok и Cloudflare, туннель держит сама служба Tailscale: программа
     включает Funnel («tailscale funnel --bg --https=443 http://127.0.0.1:ПОРТ»), берёт
     адрес компьютера из «tailscale status --json» и раз в минуту проверяет, что
-    Tailscale на связи. При остановке Funnel выключается. Если Funnel в сети Tailscale
-    ещё не разрешён, tailscale печатает ссылку, по которой его разрешают в один клик, -
-    она показывается в строке состояния.
+    Tailscale на связи. При остановке Funnel выключается.
+
+    Если в сети Tailscale ещё не включены HTTPS-сертификаты или не разрешён Funnel,
+    «tailscale funnel» печатает ссылку, по которой их разрешают в один клик, и ЖДЁТ,
+    пока это сделают, - не завершается. Поэтому вывод читается по мере появления:
+    как только в нём есть ссылка, она показывается в строке состояния, ожидание
+    прерывается, и программа повторяет попытку раз в 20 с, пока разрешение не дано.
     """
 
     NAME = "Tailscale Funnel"
     CHECK_EVERY_S = 60.0
+    # Повтор, пока Funnel не включился (ждём, что человек разрешит его по ссылке).
+    RETRY_S = 20.0
+    # Funnel включался этой программой: только тогда при остановке его выключают.
+    _enabled_once = False
     COMMAND_TIMEOUT_S = 40.0
     ENABLE_LINK = re.compile(r"https://login\.tailscale\.com/\S+")
 
@@ -485,24 +494,55 @@ class TailscaleFunnel:
         had_url = bool(self.url)
         with self._lock:
             self._url = ""
-        if was_running and self._exe and self._port:
-            self._run(self._funnel_command() + ["off"])
+        if was_running and self._exe and self._port and self._enabled_once:
+            self._run([self._exe, "funnel", "--https=443", "off"])
+            self._enabled_once = False
         if had_url:
             self._on_url("")
 
     def _funnel_command(self) -> list[str]:
         return [self._exe, "funnel", "--bg", "--https=443", f"http://127.0.0.1:{self._port}"]
 
-    def _run(self, command: list[str]) -> tuple[int, str]:
-        """Команда tailscale: код возврата и вывод (вывод - в журнал)."""
+    def _run(self, command: list[str], watch_link: bool = False) -> tuple[int, str]:
+        """Команда tailscale: код возврата и вывод (вывод - в журнал).
+
+        Вывод читается по мере появления. watch_link - команда может ждать разрешения в
+        сети Tailscale: как только в выводе ссылка разрешения, ожидание прерывается (код -2).
+        Нет ответа за COMMAND_TIMEOUT_S - команда прерывается (код -1), вывод сохраняется.
+        """
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
-            done = subprocess.run(command, capture_output=True, timeout=self.COMMAND_TIMEOUT_S, creationflags=flags,
-                                  stdin=subprocess.DEVNULL)
-            output = (done.stdout + done.stderr).decode("utf-8", errors="replace")
-            code = done.returncode
-        except (OSError, subprocess.TimeoutExpired) as error:
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                       stdin=subprocess.DEVNULL, creationflags=flags)
+        except OSError as error:
             output, code = str(error), -1
+        else:
+            chunks: list[bytes] = []
+
+            def read():
+                for line in iter(process.stdout.readline, b""):
+                    chunks.append(line)
+            reader = threading.Thread(target=read, daemon=True, name="tailscale-output")
+            reader.start()
+            deadline = time.monotonic() + self.COMMAND_TIMEOUT_S
+            while True:
+                code = process.poll()
+                if code is not None:
+                    reader.join(timeout=2)
+                    break
+                if watch_link and self.ENABLE_LINK.search(b"".join(chunks).decode("utf-8", errors="replace")):
+                    process.kill()
+                    code = -2
+                    break
+                if time.monotonic() > deadline or (watch_link and self._stop.is_set()):
+                    # Нет ответа или сайт выключают, пока команда ждёт: прервать, не ждать до конца.
+                    process.kill()
+                    code = -1
+                    break
+                time.sleep(0.1)
+            output = b"".join(chunks).decode("utf-8", errors="replace")
+            if code == -1:
+                output += f"\n(нет ответа за {self.COMMAND_TIMEOUT_S:g} с)"
         if self._log_path is not None:
             try:
                 self._log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -530,15 +570,21 @@ class TailscaleFunnel:
 
     def _enable(self) -> bool:
         """Включает Funnel. False - не вышло (причина уже в строке состояния)."""
-        code, output = self._run(self._funnel_command())
+        code, output = self._run(self._funnel_command(), watch_link=True)
         link = self.ENABLE_LINK.search(output)
         if link:
-            self._on_status(f"Funnel в сети Tailscale ещё не разрешён: откройте {link.group(0)} и разрешите - "
-                            "программа включит его сама.", False)
+            what = "HTTPS-сертификаты" if "HTTPS" in output and "not enabled" in output else "Funnel"
+            self._on_status(f"Tailscale ждёт разрешения ({what} для этого компьютера): откройте {link.group(0)} "
+                            "и нажмите «Enable» - программа включит сайт сама в течение 20 с.", False)
+            return False
+        if code == -1:
+            self._on_status(f"Tailscale Funnel не ответил за {self.COMMAND_TIMEOUT_S:g} с: проверьте, что Tailscale "
+                            "запущен и вы вошли в учётную запись. Подробности - в logs/tailscale.log.", False)
             return False
         if code != 0:
             self._on_status(f"Tailscale Funnel не включился: {' '.join(output.split())[:200]}", False)
             return False
+        self._enabled_once = True
         return True
 
     def _worker(self):
@@ -561,5 +607,5 @@ class TailscaleFunnel:
                         self._on_url("")
                     self._on_status(problem, False)
                     enabled = False
-            self._stop.wait(self.CHECK_EVERY_S)
+            self._stop.wait(self.CHECK_EVERY_S if enabled else self.RETRY_S)
 
