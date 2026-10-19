@@ -174,6 +174,8 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             "offset": float(getattr(self, "_climate_run_offset", 0.0)),
             "board_attempts": int(getattr(self, "_climate_run_board_attempts", 0)),
             "board_pairs": list(getattr(self, "_climate_run_board_pairs", []) or []),
+            # Сколько точек журнала было до прогона: новые точки прогона - после них (для перехода на полный цикл).
+            "journal_base": int(getattr(self, "_climate_run_journal_base", 0) or 0),
             "labels": list(self._climate_run_labels),
             "done": list(self._climate_run_done),
             "stage": self._climate_run_stage,
@@ -764,6 +766,8 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         # Доводка платы на этом шаге продолжается с того же сдвига уставки.
         self._climate_run_offset = float(saved.get("offset", 0.0) or 0.0)
         self._climate_run_board_attempts = int(saved.get("board_attempts", 0) or 0)
+        self._climate_run_journal_base = int(saved.get("journal_base", 0) or 0)
+        self._climate_run_repeat_retries = {}
         self._climate_run_board_pairs = [dict(pair) for pair in saved.get("board_pairs") or []
                                          if isinstance(pair, dict) and {"air", "board", "step", "attempt"} <= set(pair)]
         self._climate_run_labels = list(saved.get("labels") or []) or [str(self._chamber_label).strip()]

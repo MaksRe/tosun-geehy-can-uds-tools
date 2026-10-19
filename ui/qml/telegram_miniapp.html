@@ -979,7 +979,7 @@
     $("rulesForm").innerHTML = (control.rules || []).map((r) => {
       const value = r.value === null || r.value === undefined ? "" : (typeof r.value === "boolean" ? r.value : String(r.value).replace(".", ","));
       const field = !edit ? `<span>${esc(typeof value === "boolean" ? (value ? "да" : "нет") : (value || "—"))} ${esc(r.unit)}</span>`
-        : r.key === "finish_stop" ? `<input type="checkbox" data-rule="${r.key}" ${value ? "checked" : ""}>`
+        : typeof r.value === "boolean" ? `<input type="checkbox" data-rule="${r.key}" ${value ? "checked" : ""}>`
         : `<span><input type="text" inputmode="decimal" data-rule="${r.key}" value="${esc(value)}"> ${esc(r.unit)}</span>`;
       return `<span class="soft">${esc(r.title)}</span>${field}`;
     }).join("");

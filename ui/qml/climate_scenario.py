@@ -51,6 +51,8 @@ DEFAULTS = {
     "board_tolerance_c": 1.0,
     "board_max_shift_c": 25.0,
     "board_attempts": 4.0,
+    # Повторяемость: новая точка в узле, где точка уже есть, дальше стольких отсчётов - установка изменилась.
+    "repeat_tolerance_counts": 2.0,
 }
 # Значения по умолчанию версии 1: в сценарии прежней версии такие значения заменяются новыми,
 # а заданные человеком иначе - остаются.
@@ -75,6 +77,7 @@ GENERAL_LIMITS = {
     "board_tolerance_c": (0.2, 10.0),
     "board_max_shift_c": (0.0, 30.0),
     "board_attempts": (0.0, 10.0),
+    "repeat_tolerance_counts": (0.5, 100.0),
 }
 TEMP_LIMITS = (-100.0, 200.0)
 
@@ -110,6 +113,8 @@ def empty_scenario(name: str = "Новый сценарий") -> dict:
         **DEFAULTS,
         "finish_setpoint": 25.0,
         "finish_stop": False,
+        # Повторяемость нарушена дважды подряд - прогон сам переходит на полный цикл с новым журналом.
+        "repeat_full_cycle": True,
         "steps": [new_step(25.0)],
     }
 
@@ -261,6 +266,7 @@ def normalize(data) -> tuple[dict, list[str]]:
     scenario["finish_setpoint"] = _number(data.get("finish_setpoint", 25.0), *TEMP_LIMITS, "в конце, °C", problems,
                                           25.0, allow_none=True)
     scenario["finish_stop"] = bool(data.get("finish_stop", False))
+    scenario["repeat_full_cycle"] = bool(data.get("repeat_full_cycle", True))
 
     steps = []
     raw_steps = data.get("steps")
@@ -355,6 +361,8 @@ DIFF_GENERAL = (
     ("board_attempts", "попыток доводки", ""),
     ("finish_setpoint", "уставка в конце", " °C"),
     ("finish_stop", "остановить камеру в конце", ""),
+    ("repeat_tolerance_counts", "допуск повторяемости", " отсч."),
+    ("repeat_full_cycle", "повторяемость нарушена - полный цикл с новым журналом", ""),
 )
 DIFF_STEP = (
     ("temp", "температура", " °C"),

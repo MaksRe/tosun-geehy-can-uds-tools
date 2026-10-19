@@ -106,7 +106,11 @@ SCENARIO_RULES = {
     "board_attempts": ("попыток доводки", ""),
     "finish_setpoint": ("в конце задать камере", "°C"),
     "finish_stop": ("в конце остановить камеру", ""),
+    "repeat_tolerance_counts": ("повторяемость: новая точка в узле отличается от прежних не больше чем на", "отсч."),
+    "repeat_full_cycle": ("повторяемость нарушена дважды - сам перейти на полный цикл с новым журналом", ""),
 }
+# Правила «да/нет»: остальные - числа.
+BOOL_RULES = ("finish_stop", "repeat_full_cycle")
 
 
 def _temp(value) -> str:
@@ -388,8 +392,8 @@ class AppControllerClimateControlMixin(AppControllerContract):
             if key not in params:
                 continue
             value = params[key]
-            if key == "finish_stop":
-                value = value in (True, "true", "1", 1, "да")
+            if key in BOOL_RULES:
+                value = value in (True, "true", "1", 1, "да", "on")
             elif key == "finish_setpoint" and str(value).strip() in ("", "none", "нет"):
                 value = None
             else:

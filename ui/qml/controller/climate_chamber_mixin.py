@@ -37,6 +37,8 @@ from datetime import datetime
 
 from PySide6.QtCore import QTimer
 
+import chamber_fit
+
 from ui.qml.climate_chamber import (
     DRIVER_ESPEC,
     DRIVER_MODBUS_RTU,
@@ -60,6 +62,7 @@ from ui.qml.climate_chamber import (
     resolve_port,
 )
 from ui.qml.climate_diag import ChamberDiagLog, environment_info, moxa_registry_info
+from ui.qml import climate_scenario
 from ui.qml.climate_scenario import DEFAULTS as SCENARIO_DEFAULTS
 
 from .contract import AppControllerContract
@@ -1342,6 +1345,10 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             self._climate_trace_path = folder / f"run_{datetime.now():%Y%m%d_%H%M%S}.csv"
         except OSError:
             self._climate_trace_path = None
+        # Сколько точек было в журнале до прогона: новые точки этого прогона - после них.
+        self._climate_run_journal_base = len(self._chamber_points)
+        self._climate_run_repeat_retries = {}
+        self._climate_run_hold_override_s = None
         self._climate_run_nodes = nodes
         self._climate_run_steps = plan["steps"]
         self._climate_run_labels = labels
@@ -1487,7 +1494,9 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             return
 
         if stage == "hold":
-            hold_s = self._climate_run_param("hold_min") * 60.0 / self._climate_speed()
+            override = getattr(self, "_climate_run_hold_override_s", None)
+            hold_s = (override if override is not None else self._climate_run_param("hold_min") * 60.0) \
+                / self._climate_speed()
             left = hold_s - (now - self._climate_run_since)
             if left <= 0:
                 self._climate_run_after_hold(now)
@@ -1540,14 +1549,97 @@ class AppControllerClimateChamberMixin(AppControllerContract):
 
         if stage == "capturing":
             if len(self._chamber_points) > self._climate_run_points:
+                if self._climate_run_repeat_check(now):
+                    return
                 self._climate_run_label_index += 1
                 self._climate_run_enter("points", now)
                 return
             if not self._chamber_capture_waiting:
                 self._climate_run_capture_failed(now)
 
+    # Повторяемость нарушена: выдержка перед повторной точкой, с - разовый выброс так отсеивается.
+    CLIMATE_REPEAT_RECHECK_S = 10 * 60.0
+
+    def _climate_run_repeat_check(self, now: float) -> bool:
+        """Только что снятая точка разошлась со старыми точками узла: реакция без человека.
+
+        Первый раз - точка убирается и снимается заново после выдержки 10 мин: одиночный
+        выброс не повод бросать добор. Повтор тоже разошёлся - установка изменилась, и
+        добор к прошлому журналу исказил бы таблицу: прогон сам переходит на полный цикл
+        с новым журналом (правило сценария «повторяемость нарушена - полный цикл»).
+        True - прогон пошёл по-другому, обычный ход точки не нужен.
+        """
+        result = getattr(self, "_chamber_repeat_last", None)
+        scenario = getattr(self, "_climate_scenario", None) or {}
+        if not result or result["ok"] or not bool(scenario.get("repeat_full_cycle", True)):
+            return False
+        node = result["node"]
+        retries = getattr(self, "_climate_run_repeat_retries", None)
+        if retries is None:
+            retries = self._climate_run_repeat_retries = {}
+        where = chamber_fit.node_text(node)
+        if not retries.get(node):
+            retries[node] = 1
+            self._chamber_points.pop()
+            self._chamber_after_change()
+            self._chamber_repeat_last = None
+            self._climate_run_hold_override_s = self.CLIMATE_REPEAT_RECHECK_S
+            minutes = self.CLIMATE_REPEAT_RECHECK_S / 60.0
+            self._climate_event(f"повторяемость в узле {where} нарушена: точка убрана, через {minutes:g} мин сниму её "
+                                "заново - исключить разовый выброс.", "warn")
+            self._climate_run_enter("hold", now)
+            return True
+        self._climate_run_switch_full_cycle(now, node)
+        return False
+
+    def _climate_run_switch_full_cycle(self, now: float, node: int):
+        """Добор не годится: новый журнал с точками этого прогона и полный цикл по недостающим узлам.
+
+        Прежний журнал возвращается к виду до прогона (без новых точек) и остаётся на диске.
+        В сценарий добавляются узлы полного цикла, которых нет среди пройденных шагов
+        этого прогона, в порядке цикла; идущий шаг продолжается как шёл.
+        """
+        base = int(getattr(self, "_climate_run_journal_base", 0) or 0)
+        old_points, new_points = self._chamber_points[:base], self._chamber_points[base:]
+        old_path = str(self._chamber_file_path or "")
+        if old_path and old_points:
+            self._chamber_points = old_points
+            self._chamber_write_csv(old_path)
+        self._chamber_points = new_points
+        self._chamber_file_path = ""
+        self._chamber_after_change()
+        self._climate_run_journal_base = 0
+        self._chamber_journals_cache = None
+
+        index = self._climate_run_index
+        run_steps = [dict(step) for step in self._climate_run_steps]
+        kept = {chamber_fit.nearest_node(int(round(float(step["temp"]) * 10))) for step in run_steps[:index + 1]}
+        extra = [step for step in climate_scenario.board_cycle_scenario()["steps"]
+                 if chamber_fit.nearest_node(int(round(float(step["temp"]) * 10))) not in kept]
+        steps = run_steps[:index + 1] + extra
+        scenario = dict(getattr(self, "_climate_scenario", None) or climate_scenario.board_cycle_scenario())
+        scenario["steps"] = steps
+        scenario["name"] = climate_scenario.BOARD_CYCLE_NAME
+        if hasattr(self, "_climate_scenario_set"):
+            self._climate_scenario_set(scenario, path="", dirty=True,
+                                       status="Повторяемость нарушена: прогон перешёл на полный цикл с новым журналом.")
+        self._climate_run_steps = steps
+        self._climate_run_nodes = [float(step["temp"]) for step in steps]
+        old_name = pathlib.Path(old_path).name if old_path else "прежний журнал"
+        text = (f"повторяемость в узле {chamber_fit.node_text(node)} нарушена и при повторной точке: установка "
+                f"изменилась, добор к прошлому журналу исказил бы таблицу. Перехожу на полный цикл с новым журналом: "
+                f"шаги {' → '.join(_c(step['temp']) for step in steps)}; точки этого прогона ({len(new_points)}) - в "
+                f"новом журнале, {old_name} оставлен без них.")
+        self._climate_event(text, "warn")
+        problems = getattr(self, "_climate_auto_problems", None)
+        if problems is not None:
+            problems.append(f"{time.strftime('%d.%m %H:%M')} {text}")
+        self._climate_hook("_climate_auto_save", now)
+        self.chamberChanged.emit()
+
     def _climate_run_after_hold(self, now: float):
         """После устойчивости и выдержки: точки, а у шага без точки - сразу следующий шаг."""
+        self._climate_run_hold_override_s = None
         if not bool(self._climate_run_step().get("capture", True)):
             self._climate_run_node_done(now)
             return

@@ -731,6 +731,31 @@ Popup {
                     }
 
                     FormRow {
+                        label: "Повторяемость: допуск, отсчётов"
+                        hint: "Новая точка в узле, где точка уже есть (добор к прошлому журналу), сверяется со старыми. "
+                              + "Разошлась больше допуска - точка переснимается через 10 мин; разошлась снова - установка "
+                              + "изменилась, и (если включено) прогон сам переходит на полный цикл с новым журналом: прежний "
+                              + "журнал остаётся без новых точек, недостающие узлы добавляются в шаги."
+                        NumberField {
+                            text: dialog.draftRevision >= 0 ? dialog.show(dialog.draft.repeat_tolerance_counts) : ""
+                            onTextEdited: dialog.draft.repeat_tolerance_counts = dialog.num(text)
+                            onEditingFinished: dialog.push()
+                        }
+                        Text { text: "отсч.   полный цикл с новым журналом"; color: dialog.textSoft; font.pixelSize: 12; font.family: "Bahnschrift" }
+                        FancySwitch {
+                            checked: dialog.draftRevision >= 0 && dialog.draft.repeat_full_cycle !== false
+                            onToggled: dialog.change("repeat_full_cycle", checked)
+                        }
+                        Text {
+                            text: dialog.draftRevision >= 0 && dialog.draft.repeat_full_cycle !== false ? "да" : "только предупредить"
+                            color: dialog.textMain
+                            font.pixelSize: 12
+                            font.family: "Bahnschrift"
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    FormRow {
                         label: "Предупредить, если плата не устоялась за"
                         hint: "Считая от выхода камеры на уставку. Так же: предупреждение, прогон ждёт дальше."
                         NumberField {

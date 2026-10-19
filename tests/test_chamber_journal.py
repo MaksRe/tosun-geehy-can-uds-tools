@@ -131,3 +131,77 @@ def test_start_checks_count_points_of_the_open_journal(tmp_path: Path):
     assert "refill" not in checks and "5 точек" in checks["journal"]["text"]
     assert checks["grid"]["ok"] and "вместе с открытым журналом (5 точек)" in checks["grid"]["text"]
     assert "+25" in checks["repeat"]["text"] and "-20" in checks["repeat"]["text"]
+
+
+def _refill_stub(tmp_path: Path, old_main: int):
+    """Добор к журналу прошлого прогона на имитаторе: в журнале 5 узлов, прибор сейчас даёт 5000/4500."""
+    import time as _time
+
+    from tests.test_climate_scenario import _ScnStub
+    from tests.test_climate_supervisor import _feed
+
+    stub = _ScnStub(tmp_path)
+    stub._project_root_directory = tmp_path
+    stub._climate_settings.update({"min_c": -85.0, "max_c": 180.0})
+    stub._chamber_label = "0/0"
+    assert stub._climate_scenario_new("refill")
+    # Запись профиля в прибор здесь не проверяется: у заготовки нет обмена с прибором.
+    stub._climate_scenario["auto_write"] = False
+    # Точки настоящие, не пробные: пробные точки повторяемость не сверяет.
+    stub._chamber_test_mode = False
+    folder = tmp_path / "logs" / "chamber"
+    folder.mkdir(parents=True)
+    stub._chamber_points = [{"time": f"0{index}:00:00", "note": "0/0", "main": old_main, "media": 4500,
+                             "fuel_temp_x10": node, "board_temp_x10": node, "rehearsal": False}
+                            for index, node in enumerate((250, -200, 0, 500, 700))]
+    stub._chamber_file_path = str(folder / "chamber_20261013_151722.csv")
+    stub._chamber_write_csv(stub._chamber_file_path)
+    _feed(stub, _time.monotonic())
+    return stub
+
+
+def test_refill_with_changed_setup_switches_to_full_cycle_by_itself(tmp_path: Path):
+    """Установка изменилась (+10 отсчётов): точка переснимается, затем прогон сам идёт полным циклом."""
+    from tests.test_climate_supervisor import _walk
+
+    stub = _refill_stub(tmp_path, old_main=4990)
+    old_file = Path(stub._chamber_file_path)
+    assert stub._climate_run_start(), stub._climate_run_status
+    _walk(stub, limit=40000)
+    texts = [text for _level, text in stub.events]
+    assert any("точка убрана, через 10 мин сниму её заново" in text for text in texts), texts
+    assert any("Перехожу на полный цикл с новым журналом" in text for text in texts), texts
+    # Прежний журнал - как до прогона: 5 старых точек, без новых.
+    assert old_file.read_text(encoding="utf-8-sig").count("\n") == 6
+    # Новый журнал: только точки этого прогона, все 7 узлов, по одной точке в узле.
+    import chamber_fit
+    nodes = sorted(chamber_fit.nearest_node(point["board_temp_x10"]) for point in stub._chamber_points)
+    assert nodes == sorted(chamber_fit.NODES_X10), nodes
+    assert all(point["main"] == 5000 for point in stub._chamber_points)
+    assert Path(stub._chamber_file_path) != old_file and Path(stub._chamber_file_path).exists()
+    assert [step["temp"] for step in stub._climate_scenario["steps"]] == [25.0, -20.0, -40.0, 0.0, 50.0, 70.0, 85.0]
+
+
+def test_refill_with_same_setup_just_adds_points(tmp_path: Path):
+    """Установка та же (разница в пределах допуска): добор как задуман - 4 шага, точки к прежнему журналу."""
+    from tests.test_climate_supervisor import _walk
+
+    stub = _refill_stub(tmp_path, old_main=4999)
+    assert stub._climate_run_start(), stub._climate_run_status
+    _walk(stub, limit=40000)
+    texts = [text for _level, text in stub.events]
+    assert not any("полный цикл" in text for text in texts)
+    assert any("повторяемость в узле +25 °C в порядке" in text for text in texts), texts
+    assert len(stub._chamber_points) == 9 and stub._chamber_file_path.endswith("chamber_20261013_151722.csv")
+
+
+def test_repeat_failure_only_warns_when_rule_is_off(tmp_path: Path):
+    from tests.test_climate_supervisor import _walk
+
+    stub = _refill_stub(tmp_path, old_main=4990)
+    stub._climate_scenario["repeat_full_cycle"] = False
+    assert stub._climate_run_start(), stub._climate_run_status
+    _walk(stub, limit=40000)
+    texts = [text for _level, text in stub.events]
+    assert any("нарушена" in text for text in texts) and not any("полный цикл с новым журналом:" in text for text in texts)
+    assert len(stub._chamber_points) == 9

@@ -454,6 +454,7 @@ class AppControllerChamberMixin(AppControllerContract):
         весь уход платы по температуре - единицы отсчётов, и сдвиг между прогонами
         сопоставим с ним. Возвращает текст предупреждения или пустую строку.
         """
+        self._chamber_repeat_last = None
         node = chamber_fit.nearest_node(point["board_temp_x10"])
         if node is None:
             return ""
@@ -473,19 +474,31 @@ class AppControllerChamberMixin(AppControllerContract):
             parts.append(f"{title} {point[key]} против {mean:.0f} ({diff:+.0f})".replace(".", ","))
         if not parts:
             return ""
-        where = f"узел {chamber_fit.node_text(node)}"
-        if worst <= self.CHAMBER_REPEAT_COUNTS:
+        where = f"узле {chamber_fit.node_text(node)}"
+        tolerance = self._chamber_repeat_tolerance()
+        # Итог сверки - для прогона: он сам переснимает точку или переходит на полный цикл.
+        self._chamber_repeat_last = {"ok": worst <= tolerance, "node": node, "worst": worst}
+        if worst <= tolerance:
             text = f"повторяемость в {where} в порядке: {'; '.join(parts)} отсчётов."
             level = "ok"
         else:
             text = (f"повторяемость в {where} нарушена: {'; '.join(parts)} отсчётов (допуск ±"
-                    f"{self.CHAMBER_REPEAT_COUNTS}). Установка изменилась - добор к прошлому журналу исказит "
-                    "таблицу: лучше полный прогон с новым журналом.")
+                    f"{tolerance:g}). Установка изменилась - добор к прошлому журналу исказит "
+                    "таблицу: нужен полный прогон с новым журналом.")
             level = "warn"
         event = getattr(self, "_climate_event", None)
         if event is not None:
             event(text, level)
         return text if level == "warn" else ""
+
+    def _chamber_repeat_tolerance(self) -> float:
+        """Допуск повторяемости, отсчётов: из правил сценария, иначе по умолчанию."""
+        scenario = getattr(self, "_climate_scenario", None) or {}
+        try:
+            value = float(scenario.get("repeat_tolerance_counts", self.CHAMBER_REPEAT_COUNTS))
+        except (TypeError, ValueError):
+            value = float(self.CHAMBER_REPEAT_COUNTS)
+        return value if value > 0 else float(self.CHAMBER_REPEAT_COUNTS)
 
     def _chamber_journal_dirs(self) -> list[pathlib.Path]:
         """Где искать журналы: своя папка logs/chamber, папки прошлых версий и (при разработке) logs проекта."""

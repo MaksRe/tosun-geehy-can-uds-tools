@@ -70,6 +70,8 @@ RULE_SHORT = {
     "board_attempts": "Попыток доводки",
     "finish_setpoint": "В конце уставка",
     "finish_stop": "В конце остановить",
+    "repeat_tolerance_counts": "Допуск повторяемости",
+    "repeat_full_cycle": "Повторяемость - полный цикл",
 }
 # Выдержка шага кнопками, мин.
 HOLD_CHOICES = (0, 5, 15, 30, 60)
@@ -437,7 +439,7 @@ def _rules(snapshot: dict, _arg, _can):
     for rule in rules:
         key, value, unit = rule["key"], rule.get("value"), rule.get("unit", "")
         short = RULE_SHORT.get(key, key)
-        if isinstance(value, bool) or key == "finish_stop":
+        if isinstance(value, bool) or key in ("finish_stop", "repeat_full_cycle"):
             rows.append([(("✓ " if value else "✗ ") + short,
                           _act("scenario_rules", {key: "нет" if value else "да"}, back=("rules", None)))])
             continue
