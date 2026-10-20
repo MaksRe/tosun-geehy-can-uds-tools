@@ -87,6 +87,8 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
     AUTO_GAP_HOLD_S = 600.0
     # «Плата не догоняет воздух» - только если она почти не движется к нему: инертная плата догоняет медленно.
     AUTO_GAP_MIN_RATE_C_MIN = 0.05
+    # Плата не дальше стольких градусов от места по модели «воздух -> плата» - отставание обычное.
+    AUTO_GAP_MODEL_C = 3.0
     AUTO_GAP_RATE_WINDOW_S = 300.0
     # Как часто напоминать о паузе и ожидании оператора, с.
     AUTO_REMIND_S = 1800.0
@@ -580,6 +582,16 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
                 toward = 1.0 if float(actual) > int(board) / 10.0 else -1.0
                 approach = toward * trend[0] / speed
             stuck = approach is None or approach < self.AUTO_GAP_MIN_RATE_C_MIN
+            # Плата в коробке на холоде отстаёт от воздуха на 15-17 °C - это её обычное место по модели
+            # «воздух -> плата» этого прогона, а не беда (стенд 19.10, шаг -40). Беда - если она далеко от модели.
+            # Модели верим, только если в ней есть другие шаги: построенная по одному этому шагу, она
+            # «объяснила» бы любую беду самой собой (плата застряла - модель так и запомнит).
+            model_fn = getattr(self, "_climate_run_board_model", None)
+            other_steps = any(pair.get("step") != self._climate_run_index
+                              for pair in getattr(self, "_climate_run_board_pairs", []) or [])
+            model = model_fn() if model_fn is not None and board is not None and other_steps else None
+            if model is not None and abs(model[0] * float(actual) + model[1] - int(board) / 10.0) <= self.AUTO_GAP_MODEL_C:
+                stuck = False
             far = self._climate_auto_since(
                 "gap_since", stage == "settle" and gap is not None and gap > gap_limit and stuck, now)
             approach_text = "" if approach is None else f", а к воздуху она идёт лишь {approach:+.3f} °C/мин".replace(".", ",")

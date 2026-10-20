@@ -205,3 +205,88 @@ def test_repeat_failure_only_warns_when_rule_is_off(tmp_path: Path):
     texts = [text for _level, text in stub.events]
     assert any("нарушена" in text for text in texts) and not any("полный цикл с новым журналом:" in text for text in texts)
     assert len(stub._chamber_points) == 9
+
+
+# ------------------------------------------------------------------ по второму прогону 19-20.10
+
+
+# Стенд 19.10, шаг +50 °C, уставка +48,1: плата с начала устаивания, раз в ~10 с (журнал хода прогона).
+# Через 20 мин прогноз по всем данным дал 51,1 - и доводка началась; плата доползла до 52,0.
+STAND_PLUS50 = [31.65, 32.36, 32.99, 33.6, 34.27, 34.84, 35.44, 35.96, 36.45, 36.91, 37.4, 37.88, 38.3, 38.71, 39.1,
+                39.5, 39.86, 40.21, 40.54, 40.86, 41.17, 41.46, 41.77, 42.05, 42.29, 42.59, 42.81, 43.04, 43.3, 43.5,
+                43.71, 43.94, 44.12, 44.33, 44.49, 44.67, 44.88, 45.04, 45.18, 45.36, 45.49, 45.64, 45.77, 45.92, 46.05,
+                46.2, 46.33, 46.45, 46.55, 46.67, 46.8, 46.89, 47.0, 47.12, 47.2, 47.31, 47.4, 47.51, 47.61, 47.7,
+                47.75, 47.84, 47.9, 48.0, 48.09, 48.16, 48.21, 48.3, 48.39, 48.46, 48.5, 48.56, 48.65, 48.7, 48.79,
+                48.81, 48.9, 48.96, 49.0, 49.09, 49.11, 49.2, 49.24, 49.3, 49.38, 49.4, 49.48, 49.5, 49.52, 49.6,
+                49.62, 49.7, 49.71, 49.8, 49.8, 49.89, 49.9, 49.92, 49.98, 50.0, 50.04, 50.1, 50.1, 50.16, 50.2,
+                50.2, 50.29, 50.3, 50.3, 50.4, 50.4, 50.44, 50.5, 50.5, 50.5, 50.6, 50.6, 50.6, 50.67, 50.7, 50.7,
+                50.79, 50.8, 50.8, 50.84, 50.9, 50.9, 50.9, 50.98, 51.0, 51.0, 51.0, 51.09, 51.1]
+
+
+def test_forecast_is_not_trusted_while_the_tail_still_creeps(tmp_path: Path):
+    """Данные стенда 19.10 (+50 °C): плата в коробке быстро к ~51, затем медленно к 52. Прогнозу рано верить."""
+    import math
+    from collections import deque
+
+    from tests.test_climate_supervisor import _ready
+
+    from ui.qml.controller.stability import predict_final
+
+    stub = _ready(tmp_path, "50")
+    start = 1000.0
+    stub._climate_run_since = start
+    step_s = 1370.0 / (len(STAND_PLUS50) - 1)
+    points = [(start + index * step_s, value) for index, value in enumerate(STAND_PLUS50)]
+    stub._climate_board = deque(points)
+    # Сверка с прогнозом 2 мин назад его бы пропустила (как на стенде), а прогноз по хвосту - на градус выше.
+    stub.CLIMATE_FORECAST_CHECK_S = 120.0
+    now = points[-1][0]
+    full = predict_final(points, start, now, max_tau_s=36000.0)
+    earlier = predict_final(points, start, now - 120.0, max_tau_s=36000.0)
+    tail = predict_final(points, start + (now - start) / 2.0, now, max_tau_s=36000.0)
+    assert abs(full[0] - earlier[0]) <= 0.5 and tail[0] - full[0] > 1.0, (full, earlier, tail)
+    assert stub._climate_run_board_forecast(now) is None, "хвост ещё ползёт - прогнозу не верить"
+    # Одна скорость (без хвоста): прогноз есть и точный.
+    stub._climate_board = deque((start + s, round(51.0 - 51.0 * math.exp(-s / 300.0), 2)) for s in range(0, 2401, 10))
+    final = stub._climate_run_board_forecast(start + 20 * 60)
+    assert final is not None and abs(final - 51.0) < 0.3
+
+
+def test_old_firmware_clamped_point_is_flagged_and_not_compared(tmp_path: Path):
+    """Точка «+85,0 / топливо +80,0» - упор прошивки до 1.0.1: помечена, повторяемость с ней не сверяется."""
+    app, own, _source = _layout(tmp_path)
+    stub = _Stub(app)
+    journal = own / "chamber_20261013_151722.csv"
+    journal.write_text(JOURNAL.replace("02:39:46;0/0;4540;4456;80,0;85,0", "02:39:46;0/0;4540;4456;80,0;85,0"),
+                       encoding="utf-8")
+    item = next(entry for entry in stub._chamber_journals(fresh=True) if entry["name"] == journal.name)
+    ok, text = stub._chamber_open_journal(item["id"])
+    assert ok and "02:39:46" in text and "упоре" in text
+    assert any(level == "warn" and "упоре датчиков" in message for level, message in stub.events)
+    assert stub._chamber_rows()[0]["node"].endswith("(упор)") and not stub._chamber_rows()[0]["nodeOk"]
+    stub.events.clear()
+    stub._chamber_label = "0/0"
+    stub._chamber_samples = [{"main": 4537, "media": 4449, "fuel_temp": 827, "board_temp": 861}]
+    stub._chamber_store_point()
+    assert not any("повторяемость" in message for _level, message in stub.events), stub.events
+
+
+def test_migration_relinks_current_scenario_to_the_new_folder(tmp_path: Path, monkeypatch):
+    import json
+
+    from ui.qml import app_paths
+
+    old = tmp_path / "tool_v1.0.16"
+    config = old / "_internal" / "ui" / "config"
+    config.mkdir(parents=True)
+    (old / "scenarios").mkdir()
+    (old / "scenarios" / "Цикл.json").write_text("{}", encoding="utf-8")
+    (config / "climate_scenario_current.json").write_text(
+        json.dumps({"scenario": {}, "path": str(old / "scenarios" / "Цикл.json")}, ensure_ascii=False), encoding="utf-8")
+    new = tmp_path / "tool_v1.0.19"
+    new.mkdir()
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(new / "tool_v1.0.19.exe"))
+    assert app_paths.data_root() == new
+    stored = json.loads((new / "config" / "climate_scenario_current.json").read_text(encoding="utf-8"))
+    assert Path(stored["path"]) == new / "scenarios" / "Цикл.json"

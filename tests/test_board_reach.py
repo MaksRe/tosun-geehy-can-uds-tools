@@ -134,13 +134,27 @@ def test_slow_board_is_brought_by_forecast(tmp_path: Path):
 
 
 def test_board_far_and_still_is_reported(tmp_path: Path):
-    """Плата стоит на 15 °C теплее воздуха и не движется: предупреждение «не догоняет»."""
-    stub = _ready(tmp_path, "-40, 25")
+    """Плата почти не следует за воздухом (будто лежит вне камеры): предупреждение «не догоняет»."""
+    stub = _ready(tmp_path, "25, -40")
+    # Окно устаивания длиннее, чтобы плата успела «застрять» дольше 10 минут до решения по точке.
+    stub._climate_settings.update({"board_max_shift_c": 0.0, "settle_min": 30.0})
+    stub.sim.leak = 0.8
+    assert stub._climate_run_start()
+    _walk(stub, limit=20000)
+    assert any("не догоняет" in text for _level, text in stub.events)
+
+
+def test_usual_lag_of_the_board_is_not_an_alarm(tmp_path: Path):
+    """Плата в коробке всегда на 15 °C теплее воздуха: по модели с прошлых шагов это её обычное место (стенд 19.10)."""
+    stub = _ready(tmp_path, "25, -40")
     stub._climate_settings.update({"board_max_shift_c": 0.0})
     stub.sim.self_heating_c = 15.0
     assert stub._climate_run_start()
     _walk(stub, limit=20000)
-    assert any("не догоняет" in text for _level, text in stub.events)
+    texts = [text for _level, text in stub.events]
+    # На первом шаге сравнить не с чем - предупреждение там уместно; дальше модель знает обычное место платы.
+    after_first = texts[next(i for i, text in enumerate(texts) if "пройден за" in text):]
+    assert not any("не догоняет" in text for text in after_first), after_first
 
 
 def test_board_model_from_the_stand():

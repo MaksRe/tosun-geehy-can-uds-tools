@@ -460,7 +460,8 @@ class AppControllerChamberMixin(AppControllerContract):
             return ""
         earlier = [item for item in self._chamber_points[:-1]
                    if not item.get("rehearsal") and item["note"] == point["note"]
-                   and chamber_fit.nearest_node(item["board_temp_x10"]) == node]
+                   and chamber_fit.nearest_node(item["board_temp_x10"]) == node
+                   and not self._chamber_point_old_clamp(item)]
         if not earlier:
             return ""
         parts, worst = [], 0.0
@@ -490,6 +491,23 @@ class AppControllerChamberMixin(AppControllerContract):
         if event is not None:
             event(text, level)
         return text if level == "warn" else ""
+
+    # Края шкал датчиков в прошивке до 1.0.1: плата -40...+85, топливо -40...+80 °C (0,1 °C).
+    CHAMBER_OLD_BOARD_EDGES_X10 = (-400, 850)
+    CHAMBER_OLD_FUEL_EDGES_X10 = (-400, 800)
+
+    def _chamber_point_old_clamp(self, point: dict) -> bool:
+        """Точка снята прошивкой до 1.0.1 при упоре обоих датчиков в край старой шкалы.
+
+        Такая точка недостоверна: плата была за краем (на стенде 13.10 «+85,0» на деле
+        около +91 °C). Признак - оба датчика ровно на краю старой шкалы (плата +85,0 и
+        топливо +80,0, или оба -40,0): с новой шкалой -55...+125 так совпасть не может.
+        Со старой точкой нельзя сверять повторяемость - на стенде 19.10 сверка с ней
+        ошибочно сочла, что установка изменилась.
+        """
+        board, fuel = int(point.get("board_temp_x10", 0)), int(point.get("fuel_temp_x10", 0))
+        return ((board, fuel) == (self.CHAMBER_OLD_BOARD_EDGES_X10[1], self.CHAMBER_OLD_FUEL_EDGES_X10[1])
+                or (board, fuel) == (self.CHAMBER_OLD_BOARD_EDGES_X10[0], self.CHAMBER_OLD_FUEL_EDGES_X10[0]))
 
     def _chamber_repeat_tolerance(self) -> float:
         """Допуск повторяемости, отсчётов: из правил сценария, иначе по умолчанию."""
@@ -603,7 +621,18 @@ class AppControllerChamberMixin(AppControllerContract):
         if not self._chamber_load_file(str(target)):
             return False, str(self._chamber_status)
         self._chamber_journals_cache = None
-        return True, f"открыт журнал {target.name}{copied}: точек {len(self._chamber_points)}. Новые точки допишутся к нему."
+        clamped = [point for point in self._chamber_points if self._chamber_point_old_clamp(point)]
+        warning = ""
+        if clamped:
+            times = ", ".join(point["time"] for point in clamped)
+            warning = (f" Внимание: точки {times} сняты при упоре датчиков в край старой шкалы (плата и топливо "
+                       "ровно на краю) - они недостоверны, уберите их (✕).")
+            event = getattr(self, "_climate_event", None)
+            if event is not None:
+                event(f"в журнале {target.name} есть точки при упоре датчиков в край старой шкалы: {times}. "
+                      "Они недостоверны - уберите их, иначе таблица исказится.", "warn")
+        return True, (f"открыт журнал {target.name}{copied}: точек {len(self._chamber_points)}. "
+                      f"Новые точки допишутся к нему.{warning}")
 
     def _chamber_remove_point(self, index: int, stamp: str = "") -> tuple[bool, str]:
         """Убирает любую точку журнала. stamp - время точки: защита от удаления не той, если журнал сдвинулся."""
@@ -1002,8 +1031,9 @@ class AppControllerChamberMixin(AppControllerContract):
                 "boardTemp": f"{point['board_temp_x10'] / 10:+.1f}",
                 "chamberTemp": ("-" if point.get("chamber_temp_x10") is None
                                 else f"{point['chamber_temp_x10'] / 10:+.1f}"),
-                "node": "вне сетки" if node is None else chamber_fit.node_text(node),
-                "nodeOk": node is not None,
+                "node": ("вне сетки" if node is None else chamber_fit.node_text(node))
+                        + (" (упор)" if self._chamber_point_old_clamp(point) else ""),
+                "nodeOk": node is not None and not self._chamber_point_old_clamp(point),
             })
         return rows
 

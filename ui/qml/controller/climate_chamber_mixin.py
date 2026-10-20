@@ -1118,9 +1118,14 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         """Где устоится плата на этом шаге (°C) или None, если прогнозу пока нельзя верить.
 
         Данные - с начала устаивания (камера уже на уставке, плата подходит к своему
-        пределу по экспоненте). Прогноз считается дважды: по всем данным и по данным
-        5 минут назад; если они расходятся больше чем на 0,5 °C - кривая ещё не
-        ясна, прогноза нет.
+        пределу по экспоненте). Прогноз считается трижды: по всем данным, по данным
+        5 минут назад и по второй половине данных («хвосту»); если хоть два из них
+        расходятся больше чем на 0,5 °C - кривая ещё не ясна, прогноза нет.
+
+        Хвост нужен для платы в коробке: у неё две скорости - быстрый подход за
+        первые 15-20 минут и медленное доползание ещё на градус за полчаса. Прогноз
+        по всем данным видит только быструю часть и называет предел слишком рано:
+        на стенде 19.10 на +50 °C он дал 50,8, по хвосту - 52,0, плата дошла до 52,0.
         """
         speed = self._climate_speed()
         start = self._climate_run_since
@@ -1131,6 +1136,9 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         latest = predict_final(samples, start, now, max_tau_s=max_tau)
         earlier = predict_final(samples, start, now - self.CLIMATE_FORECAST_CHECK_S / speed, max_tau_s=max_tau)
         if latest is None or earlier is None or abs(latest[0] - earlier[0]) > self.CLIMATE_FORECAST_AGREE_C:
+            return None
+        tail = predict_final(samples, start + (now - start) / 2.0, now, max_tau_s=max_tau)
+        if tail is not None and abs(tail[0] - latest[0]) > self.CLIMATE_FORECAST_AGREE_C:
             return None
         return round(latest[0], 2)
 

@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import sys
@@ -79,6 +80,26 @@ def previous_version_roots(root: Path) -> list[Path]:
         return []
 
 
+def _relink_current_scenario(path: Path, old_root: Path, root: Path):
+    """Текущий сценарий ссылался на файл в папке прежней версии - ссылка на такой же файл в новой.
+
+    Иначе «Сохранить» писало бы сценарий в папку прежней версии (так было на стенде 19.10).
+    """
+    try:
+        stored = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    old_path = str(stored.get("path") or "") if isinstance(stored, dict) else ""
+    if not old_path:
+        return
+    try:
+        relative = Path(old_path).resolve().relative_to(old_root.resolve())
+    except ValueError:
+        return
+    stored["path"] = str(root / relative)
+    path.write_text(json.dumps(stored, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def migrate_previous_settings(root: Path) -> str:
     """Первый запуск новой версии: копирует настройки и сценарии из прошлой версии.
 
@@ -102,6 +123,7 @@ def migrate_previous_settings(root: Path) -> str:
         for item in scenarios.glob("*.json"):
             if item.is_file():
                 shutil.copy2(item, root / "scenarios" / item.name)
+    _relink_current_scenario(target / "climate_scenario_current.json", sibling, root)
     (target / "перенесено_из.txt").write_text(f"Настройки перенесены из {sibling}\n", encoding="utf-8")
     LOG.info("настройки перенесены из %s", sibling)
     return sibling.name
