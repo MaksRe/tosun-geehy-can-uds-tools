@@ -256,6 +256,7 @@
     </div>
     <div class="card">
       <h2>Журнал <span id="journal"></span></h2>
+      <div class="wrap"><table class="points" id="boards"></table></div>
       <div id="run"></div>
       <div class="nodes" id="nodes" style="margin-top:8px"></div>
       <div id="report"></div>
@@ -809,6 +810,14 @@
 
     const journal = s.run || {};
     $("journal").textContent = `точек: ${journal.points ?? 0}`;
+    // Несколько плат в камере: у каждой свои показания, точки и профиль.
+    const boards = journal.boards || [];
+    $("boards").innerHTML = boards.length
+      ? "<tr><th>Плата</th><th>°C</th><th>Основной</th><th>Вид</th><th>Точек</th><th>Профиль</th></tr>" +
+        boards.map((b) => `<tr><td class="${b.fresh ? "" : "warn"}">${b.active ? "● " : ""}${esc(b.name)} <span class="soft">${esc(b.saText)}</span></td>` +
+          `<td>${esc(b.boardTemp)}</td><td>${esc(b.main)}</td><td>${esc(b.media)}</td><td>${esc(b.points)}</td>` +
+          `<td class="soft">${esc(b.profile || (b.tablesComplete ? "таблицы готовы" : ""))}</td></tr>`).join("")
+      : "";
     $("run").innerHTML =
       `<div class="soft">${esc(journal.file || "журнал ещё не сохранён")}</div>` +
       `<div style="color:${esc(journal.statusColor)}">${esc(journal.status)}</div>` +

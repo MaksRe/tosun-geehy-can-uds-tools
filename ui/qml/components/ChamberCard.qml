@@ -793,6 +793,153 @@ Card {
                 }
             }
 
+            // --- Несколько плат в камере: у каждой свой журнал, таблицы и профиль ---
+            Spoiler {
+                id: boardsSpoiler
+                readonly property var mb: root.appController ? root.appController.chamberBoards : ({})
+                title: "Несколько плат в камере"
+                hintText: (boardsSpoiler.mb.enabled ? "включено: плат " + (boardsSpoiler.mb.boards || []).length
+                           : "выключено: одна плата") + (boardsSpoiler.mb.status ? "  ·  " + boardsSpoiler.mb.status : "")
+                expanded: boardsSpoiler.mb.enabled === true
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    FancySwitch {
+                        checked: boardsSpoiler.mb.configured === true
+                        enabled: root.appController !== null && !root.busy
+                        onToggled: if (root.appController) root.appController.setChamberMultiEnabled(checked)
+                    }
+                    Text {
+                        text: "Несколько плат сразу"
+                        color: root.textMain
+                        font.pixelSize: 13
+                        font.family: "Bahnschrift"
+                    }
+                    InfoMark {
+                        tip: "<b>Несколько плат в камере</b><br>У каждой платы свой адрес на шине CAN (SA), свой журнал "
+                             + "точек (файл с её именем), свои таблицы и свой профиль. Камера одна: доводка идёт по средней "
+                             + "температуре плат, точка шага снимается у каждой платы.<br><br>"
+                             + "<b>Адреса.</b> Платы с одинаковым адресом на одной шине мешают друг другу. Перед прогоном "
+                             + "подключите их по одной и задайте разные адреса (раздел «Протокол», смена SA).<br><br>"
+                             + "<b>Свободная шина.</b> На время прогона обычная рассылка J1939 у плат выключается одной "
+                             + "командой всем (CommunicationControl 0x28) и после прогона включается обратно.<br><br>"
+                             + "<b>Профиль</b> в конце пишется в каждую плату по очереди."
+                    }
+                    Item { Layout.preferredWidth: 16 }
+                    FancySwitch {
+                        checked: boardsSpoiler.mb.quietBus === true
+                        onToggled: if (root.appController) root.appController.setChamberQuietBus(checked)
+                    }
+                    Caption { text: "выключать рассылку J1939 плат на время прогона" }
+                    Item { Layout.fillWidth: true }
+                }
+
+                // Платы: адрес, имя, температура, контуры, точки, профиль.
+                Repeater {
+                    model: boardsSpoiler.mb.boards || []
+
+                    RowLayout {
+                        id: boardRow
+                        required property var modelData
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        Rectangle {
+                            Layout.preferredWidth: 10
+                            Layout.preferredHeight: 10
+                            radius: 5
+                            color: boardRow.modelData.fresh ? "#16a34a" : "#f59e0b"
+                        }
+                        Text {
+                            Layout.preferredWidth: 150
+                            text: (boardRow.modelData.active ? "● " : "") + boardRow.modelData.name + "  " + boardRow.modelData.saText
+                            color: boardRow.modelData.active ? "#0f6ab4" : root.textMain
+                            font.pixelSize: 13
+                            font.bold: boardRow.modelData.active === true
+                            font.family: "Bahnschrift"
+                            elide: Text.ElideRight
+                        }
+                        Caption { text: "плата " + boardRow.modelData.boardTemp }
+                        Caption { text: "осн " + boardRow.modelData.main + " / вид " + boardRow.modelData.media }
+                        Caption { text: "точек " + boardRow.modelData.points }
+                        Caption {
+                            Layout.fillWidth: true
+                            text: boardRow.modelData.profile || boardRow.modelData.tables
+                            elide: Text.ElideRight
+                        }
+                        SmallButton {
+                            Layout.preferredWidth: 100
+                            text: boardRow.modelData.active ? "Показана" : "Показать"
+                            toolTipText: "Журнал, таблицы и профиль этой платы - в окне"
+                            enabled: boardRow.modelData.active !== true && !root.busy
+                            onClicked: if (root.appController) root.appController.selectChamberBoard(boardRow.modelData.sa)
+                        }
+                        SmallButton {
+                            Layout.preferredWidth: 34
+                            text: "✕"
+                            tone: "#94a3b8"; toneHover: "#dc2626"; tonePressed: "#b91c1c"
+                            toolTipText: "Убрать плату из списка (её журнал на диске останется)"
+                            onClicked: if (root.appController) root.appController.removeChamberBoard(boardRow.modelData.sa)
+                        }
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    Caption { text: "Добавить плату: адрес" }
+                    FancyTextField {
+                        id: boardSaField
+                        Layout.preferredWidth: 90
+                        Layout.preferredHeight: 30
+                        placeholderText: "0x80"
+                        textColor: root.textMain
+                        bgColor: root.inputBg
+                        borderColor: root.inputBorder
+                        focusBorderColor: root.inputFocus
+                    }
+                    Caption { text: "имя" }
+                    FancyTextField {
+                        id: boardNameField
+                        Layout.preferredWidth: 140
+                        Layout.preferredHeight: 30
+                        placeholderText: "П1"
+                        textColor: root.textMain
+                        bgColor: root.inputBg
+                        borderColor: root.inputBorder
+                        focusBorderColor: root.inputFocus
+                    }
+                    SmallButton {
+                        Layout.preferredWidth: 110
+                        text: "Добавить"
+                        enabled: boardSaField.text.length > 0
+                        onClicked: {
+                            if (root.appController) root.appController.addChamberBoard(boardSaField.text, boardNameField.text)
+                            boardSaField.text = ""
+                            boardNameField.text = ""
+                        }
+                    }
+                    Caption {
+                        visible: (boardsSpoiler.mb.candidates || []).length > 0
+                        text: "  на шине: "
+                    }
+                    Repeater {
+                        model: boardsSpoiler.mb.candidates || []
+                        SmallButton {
+                            required property string modelData
+                            Layout.preferredWidth: 70
+                            text: modelData
+                            toolTipText: "Добавить плату с этим адресом"
+                            onClicked: if (root.appController) root.appController.addChamberBoard(modelData, "")
+                        }
+                    }
+                    Item { Layout.fillWidth: true }
+                }
+            }
+
             // --- Журналы и таблицы: журнал и так сохраняется сам после каждой точки ---
             Spoiler {
                 title: "Журналы и таблицы"

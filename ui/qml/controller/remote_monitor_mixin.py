@@ -773,6 +773,10 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
                 # Точки журнала (свежие сверху, с номером и временем - по ним точку убирают издалека).
                 "rows": self._chamber_rows()[:40],
                 # Журналы на диске: свои и прошлых версий - открыть одной кнопкой с сайта и из бота.
+                # Несколько плат в камере: у каждой свои показания, точки и профиль.
+                "boards": [{key: row[key] for key in ("name", "saText", "active", "fresh", "boardTemp", "main", "media",
+                                                      "points", "tablesComplete", "profile")}
+                           for row in self._remote_boards_rows()],
                 "journals": [{key: item[key] for key in ("id", "name", "folder", "points", "modified", "current")}
                              for item in self._chamber_journals()],
             },
@@ -813,6 +817,13 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             lines.append("Автопрогон не идёт.")
         lines.append(f"Точек в журнале: {(snapshot.get('run') or {}).get('points', 0)}.")
         return "\n".join(line for line in lines if line)
+
+    def _remote_boards_rows(self) -> list[dict]:
+        """Платы в камере для страницы и бота - только когда идёт работа с несколькими платами."""
+        multi = getattr(self, "_mb_on", None)
+        if not callable(multi) or not multi():
+            return []
+        return list(self._mb_view()["boards"])
 
     def _remote_climate_snapshot(self) -> dict:
         """Камера для страницы: температура, уставка, авария и ход автопрогона."""

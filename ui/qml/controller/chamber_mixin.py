@@ -716,7 +716,10 @@ class AppControllerChamberMixin(AppControllerContract):
             folder = self._chamber_autosave_directory()
             if folder is None:
                 return ""
-            path = str(folder / f"chamber_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+            # Несколько плат: у каждой свой файл - имя и адрес платы в хвосте имени.
+            suffix_fn = getattr(self, "_mb_journal_suffix", None)
+            suffix = suffix_fn() if suffix_fn is not None else ""
+            path = str(folder / f"chamber_{datetime.now().strftime('%Y%m%d_%H%M%S')}{suffix}.csv")
         if self._chamber_write_csv(path) is not None:
             return ""
         self._chamber_file_path = path

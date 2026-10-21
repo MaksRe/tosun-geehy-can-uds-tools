@@ -41,6 +41,7 @@ from .controller import (
     AppControllerLiveFreshnessMixin,
     AppControllerMarkMediaMixin,
     AppControllerMediaWizardMixin,
+    AppControllerMultiBoardMixin,
     AppControllerNodeLiveMixin,
     AppControllerNodeTrendMixin,
     AppControllerOptionsMixin,
@@ -72,6 +73,7 @@ class AppController(
     AppControllerChamberLiveMixin,
     AppControllerChamberChainMixin,
     AppControllerChamberTestMixin,
+    AppControllerMultiBoardMixin,
     AppControllerRemoteMonitorMixin,
     AppControllerClimateChamberMixin,
     AppControllerClimateControlMixin,
@@ -618,6 +620,8 @@ class AppController(
         self._init_chamber_chain_state()
         # Тестовый режим прогона: камера на столе, температуру задаёт эмуляция в приборе.
         self._init_chamber_test_state()
+        # Несколько плат в камере: у каждой свой набор полей прогона, поэтому - после прогона и профиля.
+        self._init_multiboard_state()
         # Пробная калибровка опирается на прогон и профиль, поэтому готовится последней.
         self._init_trial_state()
         # Контроль сохранения замечает записи всех разделов, поэтому готовится после них.

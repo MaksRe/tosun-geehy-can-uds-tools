@@ -907,11 +907,22 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         if now - self._climate_last_board_s < self.CLIMATE_BOARD_STEP_S:
             return
         self._climate_last_board_s = now
+        if self._climate_multi():
+            # Несколько плат: камера одна - устаивание и доводка по средней температуре плат.
+            value = self._mb_board_temp_x10(now)
+            if value is not None:
+                self._climate_board.append((now, round(float(value) / 10.0, 3)))
+            return
         if not self._chamber_live_fresh("board_temp", now):
             return
         stats = self._chamber_live_stats("board_temp", now)
         value = stats["mean"] if stats is not None else int(self._chamber_live_last["board_temp"])
         self._climate_board.append((now, round(float(value) / 10.0, 3)))
+
+    def _climate_multi(self) -> bool:
+        """Идёт ли прогон нескольких плат (multiboard_mixin)."""
+        multi = getattr(self, "_mb_on", None)
+        return bool(multi is not None and multi())
 
     def _climate_board_mean(self, now: float, span_s: float) -> float:
         """Средняя температура платы за последние span_s секунд (по средним за окно усреднения)."""
@@ -1375,6 +1386,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         if not self._climate_run_stage:
             return
         self._climate_run_stage = ""
+        if self._climate_multi():
+            self._mb_quiet_release()
         self._climate_run_set(f"Автоматический прогон {reason}. Уставка камеры оставлена как есть.", "#d97706")
         self._climate_event(f"автоматический прогон {reason}.", "warn")
         self._climate_hook("_climate_auto_on_stop", reason)
@@ -1547,6 +1560,14 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             label = self._climate_run_order[self._climate_run_label_index]
             self._chamber_label = label
             self.chamberChanged.emit()
+            if self._climate_multi():
+                # Несколько плат: точка шага у каждой, по её средним; ждём всех (не дольше минуты).
+                if self._mb_run_capture(now, self._climate_run_node()):
+                    self._climate_run_label_index += 1
+                    self._climate_run_enter("points", now)
+                else:
+                    self._climate_run_set(f"Узел {where}: записываю точки плат «{label}»...")
+                return
             self._climate_run_points = len(self._chamber_points)
             if self._chamber_capture_from_average():
                 self._climate_run_enter("capturing", now)
@@ -1579,7 +1600,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         """
         result = getattr(self, "_chamber_repeat_last", None)
         scenario = getattr(self, "_climate_scenario", None) or {}
-        if not result or result["ok"] or not bool(scenario.get("repeat_full_cycle", True)):
+        if not result or result["ok"] or not bool(scenario.get("repeat_full_cycle", True)) or self._climate_multi():
             return False
         node = result["node"]
         retries = getattr(self, "_climate_run_repeat_retries", None)
@@ -1748,6 +1769,9 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         self._climate_run_set(f"Автоматический прогон закончен: пройдено {len(self._climate_run_done)} температур.{tail}",
                               "#16a34a")
         self._climate_event(f"автоматический прогон закончен: {len(self._climate_run_done)} температур.{tail}", "ok")
+        if self._climate_multi():
+            self._mb_quiet_release()
+            self._mb_start_profiles()
         self._climate_hook("_climate_auto_on_finish")
 
     # ------------------------------------------------------------------ показ

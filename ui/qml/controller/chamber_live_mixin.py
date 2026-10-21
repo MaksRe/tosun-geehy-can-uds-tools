@@ -335,6 +335,11 @@ class AppControllerChamberLiveMixin(AppControllerContract):
         # Пока калибровка открывает сессию и доступ, лишние запросы на шину не нужны.
         if bool(getattr(self, "_calibration_active", False)) and not bool(getattr(self, "_calibration_session_ready", True)):
             return
+        # Несколько плат в камере: опрос по кругу по всем платам (multiboard_mixin).
+        multi = getattr(self, "_mb_on", None)
+        if multi is not None and multi():
+            self._mb_live_tick(now)
+            return
 
         picked = self._chamber_live_next_request()
         if picked is None:
@@ -361,6 +366,16 @@ class AppControllerChamberLiveMixin(AppControllerContract):
 
     def _handle_chamber_live_frame(self, identifier: int, payload):
         """Подхватывает показания точки из любого ответа прибора, кто бы их ни запросил."""
+        # Несколько плат: ответ идёт в средние той платы, от которой пришёл.
+        multi = getattr(self, "_mb_on", None)
+        if multi is not None and multi():
+            if self._chamber_live_wanted:
+                self._mb_handle_live_frame(identifier, payload)
+            return
+        self._chamber_live_frame_apply(identifier, payload)
+
+    def _chamber_live_frame_apply(self, identifier: int, payload):
+        """Разбор ответа целевой платы: показание - в её окно среднего."""
         if not self._chamber_live_wanted:
             return
         if not isinstance(payload, (list, tuple)) or len(payload) < 4:

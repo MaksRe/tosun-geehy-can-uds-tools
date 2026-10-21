@@ -18,6 +18,7 @@ from .diagnostics_mixin import AppControllerDiagnosticsMixin
 from .live_freshness_mixin import AppControllerLiveFreshnessMixin
 from .mark_media_mixin import AppControllerMarkMediaMixin
 from .media_wizard_mixin import AppControllerMediaWizardMixin
+from .multiboard_mixin import AppControllerMultiBoardMixin
 from .node_live_mixin import AppControllerNodeLiveMixin
 from .node_trend_mixin import AppControllerNodeTrendMixin
 from .options_mixin import AppControllerOptionsMixin
@@ -37,6 +38,7 @@ __all__ = [
     "AppControllerChamberLiveMixin",
     "AppControllerChamberMixin",
     "AppControllerChamberTestMixin",
+    "AppControllerMultiBoardMixin",
     "AppControllerClimateChamberMixin",
     "AppControllerClimateControlMixin",
     "AppControllerClimateScenarioMixin",

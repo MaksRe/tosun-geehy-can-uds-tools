@@ -143,6 +143,10 @@ class AppControllerChamberChainMixin(AppControllerContract):
             return
         if not self._chamber_tables_complete:
             return
+        # Несколько плат: профили пишутся по очереди после прогона, а не посреди него.
+        hold = getattr(self, "_mb_hold_chain", None)
+        if hold is not None and hold():
+            return
         self._chamber_chain_start(automatic=True)
 
     # ------------------------------------------------------------------ ход

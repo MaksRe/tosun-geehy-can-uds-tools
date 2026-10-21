@@ -86,6 +86,13 @@ def status_report(snapshot: dict) -> str:
         rows.append(("Прогон", "не идёт"))
     rows.append(("Точек", journal.get("points", 0)))
     text = f"<b>Прогон в камере</b> · {escape(str(snapshot.get('time', '')))}\n" + pre(_pairs(rows))
+    boards = journal.get("boards") or []
+    if boards:
+        # Несколько плат: у каждой своя температура, контур и число точек.
+        text += "\n<b>Платы</b>\n" + pre(table(
+            ["плата", "°C", "осн", "точ"],
+            [[("●" if row.get("fresh") else "○") + str(row.get("name", "")), str(row.get("boardTemp", "")).replace(" °C", ""),
+              row.get("main", ""), row.get("points", 0)] for row in boards], right=(1, 2, 3)))
     lines = []
     if stability.get("text"):
         lines.append(("✅ " if stability.get("ok") else "⏳ ") + str(stability["text"]))

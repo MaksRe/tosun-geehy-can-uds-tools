@@ -286,10 +286,18 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
                 else f"Пределы аварии камеры {_c(alarm_low)} ... {_c(alarm_high)} не охватывают узлы: камера "
                      f"откажет в уставке. Поправьте их в «Ручном управлении ESPEC»")
 
-        board_fresh = self._chamber_live_fresh("board_temp", time.monotonic())
-        add("device", board_fresh,
-            "Прибор на связи, температура платы приходит" if board_fresh
-            else "Прибор не присылает температуру платы: подключите адаптер CAN и откройте прибор")
+        multi = getattr(self, "_mb_on", None)
+        if multi is not None and multi():
+            silent = self._mb_silent_boards(time.monotonic())
+            boards = len(self._mb_boards)
+            add("device", not silent,
+                f"Все {boards} платы на связи, температура приходит" if not silent
+                else f"Не присылают температуру платы: {', '.join(silent)}. Проверьте адреса и подключение")
+        else:
+            board_fresh = self._chamber_live_fresh("board_temp", time.monotonic())
+            add("device", board_fresh,
+                "Прибор на связи, температура платы приходит" if board_fresh
+                else "Прибор не присылает температуру платы: подключите адаптер CAN и откройте прибор")
 
         test_on = bool(getattr(self, "_chamber_test_mode", False))
         if settings["driver"] == DRIVER_SIMULATOR:
@@ -705,6 +713,10 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         """После последнего узла: дождаться записи профиля и прислать итог прогона."""
         chain_busy = bool(getattr(self, "_chamber_chain_stage", ""))
         waited = now - self._climate_auto_finish_since
+        profiles = getattr(self, "_mb_profiles_busy", None)
+        boards = max(1, len(getattr(self, "_mb_boards", []) or []))
+        if profiles is not None and profiles() and waited < self.AUTO_FINISH_WAIT_S * boards:
+            return
         if chain_busy and waited < self.AUTO_FINISH_WAIT_S:
             return
         if waited < 2.0 and getattr(self, "_chamber_auto_write", False) and getattr(self, "_chamber_tables_complete",
@@ -719,7 +731,7 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         text = (f"ИТОГ ПРОГОНА: пройдено {len(self._climate_auto_durations)} из {len(self._climate_run_nodes)} "
                 f"температур за {duration_text(elapsed)}. Точек в журнале: "
                 f"{len(getattr(self, '_chamber_points', []) or [])}. По узлам: {self._climate_auto_nodes_text()}. "
-                f"Таблицы: {tables} Профиль: {chain} "
+                f"Таблицы: {tables} Профиль: {chain}{self._climate_hook('_mb_summary_text') or ''} "
                 + (f"Проблем за прогон: {len(problems)}." if problems else "Проблем за прогон не было."))
         self._climate_event(text, "ok" if not problems and getattr(self, "_chamber_tables_complete", False) else "warn")
         if problems:

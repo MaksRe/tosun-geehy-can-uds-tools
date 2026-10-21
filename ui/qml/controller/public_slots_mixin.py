@@ -3577,6 +3577,51 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         """Цель функции в очистке журнала прогона, затем она готовит окно к новому прогону."""
         self._chamber_clear_points()
 
+    @Slot(bool)
+    def setChamberMultiEnabled(self, enabled):
+        """Цель функции в включении прогона нескольких плат сразу: у каждой свой журнал и профиль."""
+        ok, text = self._mb_set_enabled(bool(enabled))
+        self._mb_status = text[:1].upper() + text[1:] + "."
+        if not ok:
+            self.infoMessage.emit("Несколько плат", self._mb_status)
+        self._mb_changed()
+
+    @Slot(bool)
+    def setChamberQuietBus(self, enabled):
+        """Цель функции в выборе: выключать ли рассылку J1939 плат на время прогона, чтобы шина была свободна."""
+        self._mb_quiet_bus = bool(enabled)
+        self._mb_save()
+        self._mb_changed()
+
+    @Slot(str, str)
+    def addChamberBoard(self, sa_text, name):
+        """Цель функции в добавлении платы в камеру по адресу на шине (0x80 или 128) и имени."""
+        ok, text = self._mb_add_board(str(sa_text), str(name))
+        self._mb_status = text[:1].upper() + text[1:] + "."
+        if not ok:
+            self.infoMessage.emit("Несколько плат", self._mb_status)
+        self._mb_changed()
+
+    @Slot(int)
+    def removeChamberBoard(self, sa):
+        """Цель функции в удалении платы из списка камеры (её журнал на диске остаётся)."""
+        ok, text = self._mb_remove_board(int(sa))
+        self._mb_status = text[:1].upper() + text[1:] + "."
+        if not ok:
+            self.infoMessage.emit("Несколько плат", self._mb_status)
+        self._mb_changed()
+
+    @Slot(int, str)
+    def renameChamberBoard(self, sa, name):
+        """Цель функции в понятном имени платы: оно в имени её журнала и в сообщениях."""
+        self._mb_rename_board(int(sa), str(name))
+
+    @Slot(int)
+    def selectChamberBoard(self, sa):
+        """Цель функции в показе платы: её журнал, таблицы и профиль - в окне."""
+        if not self._mb_activate(int(sa)):
+            self.infoMessage.emit("Несколько плат", "Идёт обмен с прибором: переключитесь через несколько секунд.")
+
     @Slot(str)
     def openChamberJournal(self, path):
         """Цель функции в открытии журнала из списка, затем новые точки допишутся к нему; действие в журнале."""

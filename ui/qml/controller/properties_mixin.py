@@ -1040,6 +1040,11 @@ class AppControllerPropertiesMixin(AppControllerContract):
         """Цель функции в способе расчёта по одной ёмкости, затем видно, растяжение это или сдвиг."""
         return str(self._chamber_single_model)
 
+    @Property("QVariantMap", notify=chamberLiveChanged)
+    def chamberBoards(self):
+        """Цель функции в списке плат в камере с их показаниями, точками и профилем, затем окно показывает все платы."""
+        return self._mb_view()
+
     @Property("QVariantList", notify=chamberChanged)
     def chamberJournals(self):
         """Цель функции в списке журналов точек (свои и прошлых версий), затем любой открывается одной кнопкой."""
