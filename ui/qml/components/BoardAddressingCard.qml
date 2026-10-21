@@ -9,6 +9,8 @@ import "."
   - мастер назначает каждой новой плате свой адрес на шине CAN: оператор
     подключает платы по одной, мастер сам находит новую, записывает адрес,
     проверяет его чтением, выключает рассылку J1939 платы и проверяет тишину;
+  - адрес выбирает мастер (следующий свободный) или оператор: в ручном режиме
+    мастер, найдя плату, ждёт адрес и имя;
   - каждый шаг с таймаутом и повторами, при сбое - причина и кнопка повтора;
   - карточки всех плат камеры: адрес, температуры, контуры, профиль.
 
@@ -29,6 +31,23 @@ Card {
 
     readonly property var addr: root.appController ? root.appController.boardAddressing : ({})
     readonly property bool active: !!root.addr.active
+    readonly property bool manual: root.addr.mode === "manual"
+    readonly property bool asking: !!root.addr.asking
+
+    // Мастер нашёл плату и ждёт адрес: поля заполняются подсказкой, курсор - в поле адреса.
+    onAskingChanged: {
+        if (!root.asking)
+            return
+        manualSaField.text = root.addr.newSa || ""
+        manualNameField.text = root.addr.suggestName || ""
+        manualSaField.forceActiveFocus()
+        manualSaField.selectAll()
+    }
+
+    function confirmManual() {
+        if (root.appController)
+            root.appController.confirmBoardAddress(manualSaField.text, manualNameField.text)
+    }
     readonly property var toneColors: ({ "ok": "#16a34a", "bad": "#dc2626", "normal": "#64748b" })
 
     cardColor: "#ffffff"
@@ -271,6 +290,8 @@ Card {
                 }
                 InfoMark {
                     tip: "Для прогона нескольких плат в камере у каждой нужен свой адрес на шине CAN.<br><br>"
+                         + "Адрес новой плате выбирает мастер (<b>Автоматически</b>: следующий свободный, начиная с "
+                         + "первого) или вы (<b>Вручную</b>: найдя плату, мастер ждёт адрес и имя).<br><br>"
                          + "Запустите мастер и подключайте платы <b>по одной</b>. Для каждой мастер сам: находит её, "
                          + "открывает доступ, записывает новый адрес, проверяет его чтением, выключает рассылку J1939 "
                          + "платы (чтобы она не мешала найти следующую) и проверяет, что на шине тихо. "
@@ -296,11 +317,41 @@ Card {
                     anchors.margins: 14
                     spacing: 12
 
+                    // Кто выбирает адрес новой плате: мастер или оператор.
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 10
 
-                        Caption { text: "Первый адрес" }
+                        Caption { text: "Адрес новой плате" }
+                        Row {
+                            spacing: 0
+                            Repeater {
+                                model: [{ "key": "auto", "title": "Автоматически" }, { "key": "manual", "title": "Вручную" }]
+
+                                FancyButton {
+                                    required property var modelData
+                                    width: 130
+                                    height: 30
+                                    fontPixelSize: 12
+                                    text: modelData.title
+                                    toolTipText: modelData.key === "auto"
+                                                 ? "Мастер сам берёт следующий свободный адрес, начиная с первого"
+                                                 : "Найдя плату, мастер ждёт адрес и имя от вас (подсказывает следующий свободный)"
+                                    tone: (root.addr.mode || "auto") === modelData.key ? "#0284c7" : "#cbd5e1"
+                                    toneHover: "#0369a1"
+                                    tonePressed: "#075985"
+                                    onClicked: if (root.appController) root.appController.setBoardAddressingMode(modelData.key)
+                                }
+                            }
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+
+                        Caption { text: root.manual ? "Подсказывать с" : "Первый адрес" }
                         FancyTextField {
                             id: startField
                             Layout.preferredWidth: 80
@@ -359,11 +410,68 @@ Card {
                             font.family: "Bahnschrift"
                         }
                         Text {
-                            text: (root.addr.candidate || "") + "  →  " + (root.addr.newSa || "")
+                            text: (root.addr.candidate || "") + "  →  " + (root.asking ? "?" : (root.addr.newSa || ""))
                             color: "#1d4ed8"
                             font.pixelSize: 15
                             font.bold: true
                             font.family: "Consolas"
+                        }
+                    }
+
+                    // Ручной режим: плата найдена, мастер ждёт адрес и имя.
+                    Rectangle {
+                        Layout.fillWidth: true
+                        visible: root.asking
+                        Layout.preferredHeight: askLayout.implicitHeight + 20
+                        radius: 10
+                        color: "#eff6ff"
+                        border.width: 1
+                        border.color: "#93c5fd"
+
+                        RowLayout {
+                            id: askLayout
+                            anchors.fill: parent
+                            anchors.margins: 10
+                            spacing: 10
+
+                            Caption { text: "Новый адрес" }
+                            FancyTextField {
+                                id: manualSaField
+                                Layout.preferredWidth: 80
+                                Layout.preferredHeight: 30
+                                placeholderText: "0x81"
+                                textColor: root.textMain
+                                bgColor: "#ffffff"
+                                borderColor: root.inputBorder
+                                focusBorderColor: root.inputFocus
+                                onAccepted: root.confirmManual()
+                            }
+                            Caption { text: "Имя" }
+                            FancyTextField {
+                                id: manualNameField
+                                Layout.preferredWidth: 160
+                                Layout.preferredHeight: 30
+                                placeholderText: "П1"
+                                textColor: root.textMain
+                                bgColor: "#ffffff"
+                                borderColor: root.inputBorder
+                                focusBorderColor: root.inputFocus
+                                onAccepted: root.confirmManual()
+                            }
+                            FancyButton {
+                                Layout.preferredWidth: 120
+                                Layout.preferredHeight: 30
+                                fontPixelSize: 13
+                                text: "Назначить"
+                                tone: "#16a34a"; toneHover: "#15803d"; tonePressed: "#166534"
+                                onClicked: root.confirmManual()
+                            }
+                            Item { Layout.fillWidth: true }
+                            SmallButton {
+                                Layout.preferredWidth: 140
+                                text: "Пропустить плату"
+                                onClicked: if (root.appController) root.appController.skipBoardAddressingBoard()
+                            }
                         }
                     }
 

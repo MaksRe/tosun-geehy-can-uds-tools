@@ -13,7 +13,10 @@
 - плата, продолжающая рассылку после команды, не считается готовой;
 - настроенная плата после перезапуска питания снова выключается сама;
 - «Вернуть рассылку всем» - функциональный 0x28 0x00 и остановка мастера;
-- пока мастер обменивается с платой, остальные разделы шину не трогают.
+- пока мастер обменивается с платой, остальные разделы шину не трогают;
+- ручной режим: найдя плату, мастер ждёт адрес и имя, занятый и заводской
+  адрес не принимает, дальше идёт сам; режим и первый адрес сохраняются;
+- пропущенная плата не берётся снова, пока её не отключат.
 """
 
 from __future__ import annotations
@@ -301,3 +304,69 @@ def test_bus_guard_sees_wizard_exchange(tmp_path: Path, monkeypatch):
     assert uds_exchange_busy(stub, ignore=("board_addressing",)) == ""
     stub._addr_stop()
     assert uds_exchange_busy(stub) == ""
+
+
+def test_manual_mode_waits_for_operator_address_and_name(tmp_path: Path, monkeypatch):
+    stub = _stub(tmp_path, monkeypatch)
+    assert stub._addr_set_mode("manual")
+    assert stub._addr_start("")[0]
+    first = _Board(0x80)
+    _connect_and_wait(stub, first, 3.0)
+    assert stub._addr_stage == "ask" and first.sa == 0x80
+    view = stub._addr_view()
+    assert view["asking"] and view["newSa"] == "0x81" and view["suggestName"] == "П1"
+    assert not [frame for _ident, frame in stub.sent if frame[1] == 0x10], "без адреса к плате не обращались"
+    assert stub._addr_confirm("0x90", "Левая")[0]
+    stub.run(6.0)
+    assert first.sa == 0x90 and not first.comm_on
+    assert [(b["sa"], b["name"]) for b in stub._mb_boards] == [(0x90, "Левая")]
+
+    second = _Board(0x80)
+    _connect_and_wait(stub, second, 3.0)
+    assert stub._addr_stage == "ask"
+    for bad, reason in (("0x90", "занят"), ("0x80", "заводской"), ("0xF1", "программы"), ("0xF5", "от 0x01"),
+                        ("abc", "число")):
+        ok, text = stub._addr_confirm(bad, "")
+        assert not ok and reason in text, (bad, text)
+    assert stub._addr_stage == "ask"
+    assert stub._addr_confirm("145", "")[0]
+    stub.run(6.0)
+    assert second.sa == 0x91
+    assert [(b["sa"], b["name"]) for b in stub._mb_boards] == [(0x90, "Левая"), (0x91, "П2")]
+
+
+def test_switching_to_auto_while_asking_continues_with_suggestion(tmp_path: Path, monkeypatch):
+    stub = _stub(tmp_path, monkeypatch)
+    assert stub._addr_set_mode("manual")
+    assert stub._addr_start("0x85")[0]
+    board = _Board(0x80)
+    _connect_and_wait(stub, board, 3.0)
+    assert stub._addr_stage == "ask"
+    assert stub._addr_set_mode("auto")
+    stub.run(6.0)
+    assert board.sa == 0x85 and stub._addr_stage == "wait"
+
+
+def test_mode_and_start_address_survive_restart(tmp_path: Path, monkeypatch):
+    stub = _stub(tmp_path, monkeypatch)
+    assert stub._addr_set_mode("manual")
+    assert stub._addr_start("0x88")[0]
+    again = _AddrStub(tmp_path)
+    assert again._addr_mode == "manual" and again._addr_start_sa == 0x88
+
+
+def test_skipped_board_is_not_taken_again_until_disconnected(tmp_path: Path, monkeypatch):
+    stub = _stub(tmp_path, monkeypatch)
+    assert stub._addr_set_mode("manual")
+    assert stub._addr_start("")[0]
+    skipped = _Board(0x80)
+    _connect_and_wait(stub, skipped, 3.0)
+    assert stub._addr_skip()
+    stub.run(3.0)
+    assert stub._addr_stage == "wait" and stub._addr_candidate_sa is None
+    stub.boards.remove(skipped)
+    stub.run(3.0)
+    fresh = _Board(0x80)
+    _connect_and_wait(stub, fresh, 3.0)
+    assert stub._addr_stage == "ask" and stub._addr_candidate_sa == 0x80
+    assert stub._addr_view()["suggestName"] == "П1"

@@ -3593,6 +3593,18 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         if not ok:
             self.infoMessage.emit("Адреса плат", text[:1].upper() + text[1:] + ".")
 
+    @Slot(str)
+    def setBoardAddressingMode(self, mode):
+        """Цель функции в выборе режима мастера: адрес выбирает он сам («auto») или оператор («manual»)."""
+        self._addr_set_mode(str(mode))
+
+    @Slot(str, str)
+    def confirmBoardAddress(self, sa_text, name):
+        """Цель функции в адресе и имени найденной платы от оператора (ручной режим)."""
+        ok, text = self._addr_confirm(str(sa_text), str(name))
+        if not ok:
+            self.infoMessage.emit("Адреса плат", text[:1].upper() + text[1:] + ".")
+
     @Slot()
     def stopBoardAddressing(self):
         """Цель функции в остановке мастера адресов; настроенные платы остаются как есть."""

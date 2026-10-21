@@ -74,6 +74,8 @@ Card {
             var boards = (addr.cards || []).length
             if (addr.failed)
                 return "Мастер остановлен: шаг не пройден"
+            if (addr.asking)
+                return "Плата " + addr.candidate + " найдена: введите адрес"
             if (addr.active)
                 return (addr.candidate ? "Настраиваю " + addr.candidate + " → " + addr.newSa : "Жду новую плату")
                        + " · готово плат: " + boards
