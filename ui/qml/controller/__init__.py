@@ -1,3 +1,4 @@
+from .board_addressing_mixin import AppControllerBoardAddressingMixin
 from .calibration_log_mixin import AppControllerCalibrationLogMixin
 from .calibration_mixin import AppControllerCalibrationMixin
 from .can_mixin import AppControllerCanMixin
@@ -30,6 +31,7 @@ from .runtime_mixin import AppControllerRuntimeMixin
 from .workers import FirmwareLoadWorker, UdsOptionProxy
 
 __all__ = [
+    "AppControllerBoardAddressingMixin",
     "AppControllerCalibrationLogMixin",
     "AppControllerCalibrationMixin",
     "AppControllerCanMixin",

@@ -35,6 +35,7 @@ def uds_exchange_busy(ctrl, ignore: tuple[str, ...] = ()) -> str:
          or bool(flag("_calibration_dump_capture_active"))
          or bool(flag("_calibration_backup_all_nodes_active"))),
         ("source_address", bool(flag("_source_address_busy"))),
+        ("board_addressing", bool(callable(flag("_addr_exchange_busy", None)) and ctrl._addr_exchange_busy())),
         ("programming", bool(flag("_programming_active"))),
         ("eeprom_commit", float(flag("_eeprom_commit_request_s", 0.0) or 0.0) > 0.0),
     )

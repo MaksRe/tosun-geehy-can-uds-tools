@@ -70,6 +70,17 @@ Card {
         }
 
         if (index === 3) {
+            var addr = root.appController.boardAddressing
+            var boards = (addr.cards || []).length
+            if (addr.failed)
+                return "Мастер остановлен: шаг не пройден"
+            if (addr.active)
+                return (addr.candidate ? "Настраиваю " + addr.candidate + " → " + addr.newSa : "Жду новую плату")
+                       + " · готово плат: " + boards
+            return boards > 0 ? "Плат с адресами: " + boards : "Каждой плате свой адрес на шине"
+        }
+
+        if (index === 4) {
             if (root.appController.chamberBusy)
                 return "Идёт замер точки"
             if (root.appController.chamberChain.busy)
@@ -77,7 +88,7 @@ Card {
             return "Снято точек: " + root.appController.chamberPointCount
         }
 
-        if (index === 4) {
+        if (index === 5) {
             var climate = root.appController.climate
             if (climate.run && climate.run.active)
                 return "Автопрогон: " + climate.run.stage
@@ -89,7 +100,7 @@ Card {
             return name + (climate.ok ? ": " + climate.actualText : ": нет связи")
         }
 
-        if (index === 5) {
+        if (index === 6) {
             if (root.appController.trialBusy)
                 return "Идёт проверка"
             return root.appController.trialSummaryText
@@ -236,6 +247,10 @@ Card {
                             "hint": "Таблицы из климатической камеры"
                         },
                         {
+                            "title": "Адреса плат",
+                            "hint": "Плата за платой: свой адрес и тишина на шине"
+                        },
+                        {
                             "title": "Прогон в камере",
                             "hint": "Снятие точек и расчёт таблиц"
                         },
@@ -359,6 +374,18 @@ Card {
                     inputFocus: root.inputFocus
                     onSaveProfileRequested: root.saveProfileRequested()
                     onLoadProfileRequested: root.loadProfileRequested()
+                }
+
+                // Перед прогоном нескольких плат каждой нужен свой адрес на шине.
+                BoardAddressingCard {
+                    appController: root.appController
+                    cardColor: root.cardColor
+                    cardBorder: root.cardBorder
+                    textMain: root.textMain
+                    textSoft: root.textSoft
+                    inputBg: root.inputBg
+                    inputBorder: root.inputBorder
+                    inputFocus: root.inputFocus
                 }
 
                 ChamberCard {

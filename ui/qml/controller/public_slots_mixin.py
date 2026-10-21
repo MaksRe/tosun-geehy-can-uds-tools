@@ -3586,6 +3586,39 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             self.infoMessage.emit("Несколько плат", self._mb_status)
         self._mb_changed()
 
+    @Slot(str)
+    def startBoardAddressing(self, start_text):
+        """Цель функции в запуске мастера адресов: платы подключаются по одной, адреса назначаются сами."""
+        ok, text = self._addr_start(str(start_text))
+        if not ok:
+            self.infoMessage.emit("Адреса плат", text[:1].upper() + text[1:] + ".")
+
+    @Slot()
+    def stopBoardAddressing(self):
+        """Цель функции в остановке мастера адресов; настроенные платы остаются как есть."""
+        self._addr_stop()
+
+    @Slot()
+    def retryBoardAddressingStep(self):
+        """Цель функции в повторе непройденного шага мастера с той же платой."""
+        self._addr_retry()
+
+    @Slot()
+    def skipBoardAddressingBoard(self):
+        """Цель функции в пропуске платы после сбоя, затем мастер ждёт следующую."""
+        self._addr_skip()
+
+    @Slot(int)
+    def refreshBoardInfo(self, sa):
+        """Цель функции в повторном чтении данных карточки платы (отрицательный адрес - всех плат)."""
+        self._addr_refresh_info(None if int(sa) < 0 else int(sa))
+
+    @Slot()
+    def releaseBoardsTraffic(self):
+        """Цель функции в возврате обычной рассылки J1939 всем платам на шине."""
+        if not self._addr_release_all():
+            self.infoMessage.emit("Адреса плат", "Не удалось отправить команду: проверьте адаптер CAN.")
+
     @Slot(bool)
     def setChamberQuietBus(self, enabled):
         """Цель функции в выборе: выключать ли рассылку J1939 плат на время прогона, чтобы шина была свободна."""

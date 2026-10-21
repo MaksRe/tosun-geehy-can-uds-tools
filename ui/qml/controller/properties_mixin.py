@@ -71,6 +71,7 @@ class AppControllerPropertiesMixin(AppControllerContract):
     profileChanged = Signal()
     chamberChanged = Signal()
     chamberLiveChanged = Signal()
+    boardAddressingChanged = Signal()
     remoteMonitorChanged = Signal()
     climateChanged = Signal()
     trialChanged = Signal()
@@ -1039,6 +1040,11 @@ class AppControllerPropertiesMixin(AppControllerContract):
     def chamberSingleModel(self):
         """Цель функции в способе расчёта по одной ёмкости, затем видно, растяжение это или сдвиг."""
         return str(self._chamber_single_model)
+
+    @Property("QVariantMap", notify=boardAddressingChanged)
+    def boardAddressing(self):
+        """Цель функции в состоянии мастера адресов и карточках плат, затем окно показывает шаги и данные плат."""
+        return self._addr_view()
 
     @Property("QVariantMap", notify=chamberLiveChanged)
     def chamberBoards(self):

@@ -63,6 +63,7 @@ class AppControllerCanMixin(AppControllerContract):
 
         if direction == "RX":
             self._handle_source_address_frame(identifier, payload)
+            self._handle_board_addressing_frame(identifier, payload)
             self._handle_communication_control_frame(identifier, payload)
             self._handle_service_access_frame(identifier, payload)
             self._handle_options_frame(identifier, payload)

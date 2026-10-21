@@ -1,0 +1,676 @@
+"""Мастер адресов плат: каждой новой подключённой плате - свой адрес на шине и тишина.
+
+ЗАЧЕМ
+Для прогона нескольких плат в камере у каждой платы должен быть свой адрес на
+шине CAN (SA). С завода у всех плат адрес одинаковый, и вместе они мешают друг
+другу. Раньше адрес меняли вручную в разделе «Протокол» за четыре шага (сессия,
+доступ, запись, проверка) - для каждой платы.
+
+КАК
+Оператор подключает платы к одной шине по одной. Мастер сам:
+ 1. находит новую плату - ту, что шлёт обычную рассылку J1939 (уже настроенные
+    платы молчат, поэтому новая видна сразу; две новые сразу - просьба
+    подключать по одной);
+ 2. читает её адрес (DID 0x0011) - подтверждение, что плата отвечает;
+ 3. открывает расширенный сеанс (0x10 0x03);
+ 4. открывает доступ (0x27: seed, ключ);
+ 5. записывает новый адрес (0x2E DID 0x0011) - прибор применяет его сразу и
+    сохраняет в EEPROM;
+ 6. читает адрес уже по новому адресу - проверка, что запись действительно
+    прошла;
+ 7. возвращает обычный сеанс (0x10 0x01): иначе через 30 с без запросов прибор
+    сбросил бы сеанс и сам вернул рассылку;
+ 8. выключает обычную рассылку J1939 (CommunicationControl 0x28 0x01 0x01, с
+    подтверждением) - чтобы она не мешала найти следующую плату;
+ 9. 3 секунды слушает шину: от платы не должно быть ни одного кадра рассылки;
+10. читает данные платы для карточки (температуры, контуры, профиль);
+11. добавляет плату в «Платы в камере» и ждёт следующую.
+На каждом шаге - таймаут 1,5 с и до 3 попыток; ответ «подождите» (NRC 0x78)
+продлевает ожидание; отказ (другой NRC) или молчание - шаг не пройден, мастер
+останавливается и показывает причину; «Повторить шаг» продолжает с него же.
+
+Отключение рассылки держится до перезагрузки питания платы (в обычном сеансе
+прибор его не сбрасывает). Если настроенная плата снова зашумела (перезапуск
+питания), мастер сам выключает её рассылку ещё раз. Вернуть рассылку всем -
+кнопкой «Вернуть рассылку всем».
+"""
+
+from __future__ import annotations
+
+import time
+
+from PySide6.QtCore import QTimer
+
+from j1939.j1939_can_identifier import J1939CanIdentifier
+from uds.uds_identifiers import UdsIdentifiers
+
+from .bus_guard import background_request_recent, note_background_request, uds_exchange_busy
+from .contract import AppControllerContract
+
+# Шаги одной платы: ключ - подпись для окна.
+ADDR_STEPS = (
+    ("found", "Плата найдена на шине"),
+    ("identify", "Плата отвечает, адрес прочитан"),
+    ("session", "Расширенный сеанс"),
+    ("seed", "Доступ: запрос"),
+    ("key", "Доступ: ключ принят"),
+    ("write", "Новый адрес записан"),
+    ("verify", "Проверено чтением по новому адресу"),
+    ("default", "Обычный сеанс"),
+    ("quiet", "Рассылка выключена"),
+    ("check_quiet", "Тишина на шине проверена"),
+)
+ADDR_STEP_TITLES = dict(ADDR_STEPS)
+# Шаги с запросом к плате и ожиданием ответа.
+ADDR_REQUEST_STEPS = ("identify", "session", "seed", "key", "write", "verify", "default", "quiet")
+# Данные платы для карточки: DID, ключ, размер в байтах, со знаком, делитель (0,1 °C -> °C).
+ADDR_INFO_DIDS = (
+    (0x003B, "boardTemp", 2, True, 10.0),
+    (0x0019, "fuelTemp", 2, True, 10.0),
+    (0x0014, "main", 2, False, 1.0),
+    (0x0067, "media", 2, False, 1.0),
+    (0x005E, "profileCrc", 2, False, 1.0),
+    (0x005D, "profileGeneration", 2, False, 1.0),
+    (0x0060, "profileStatus", 1, False, 1.0),
+    (0x001A, "program", 1, False, 1.0),
+)
+
+
+class AppControllerBoardAddressingMixin(AppControllerContract):
+    ADDR_STEP_TIMEOUT_S = 1.5
+    ADDR_ATTEMPTS = 3
+    # Сколько слушать шину после выключения рассылки: ни одного кадра от платы.
+    ADDR_QUIET_CHECK_S = 3.0
+    # Кадр, пришедший в первые мгновения после команды, ещё мог быть в пути.
+    ADDR_QUIET_GRACE_S = 0.3
+    # Плата «на шине», если её кадр рассылки был не раньше стольких секунд назад.
+    ADDR_SEEN_S = 2.0
+    # Настроенная плата снова шумит: повтор выключения рассылки не чаще, с.
+    ADDR_REQUIET_EVERY_S = 2.0
+    # Ответ на чтение данных для карточки ждём столько, с.
+    ADDR_INFO_WAIT_S = 0.6
+    ADDR_TICK_MS = 100
+
+    # ------------------------------------------------------------------ состояние
+
+    def _init_board_addressing_state(self):
+        """Цель функции в подготовке мастера адресов, затем его таймер тикает и работает, только когда мастер запущен."""
+        self._addr_active = False
+        self._addr_stage = ""
+        self._addr_failed_stage = ""
+        self._addr_steps: dict[str, str] = {}
+        self._addr_status = "Мастер не запущен."
+        self._addr_status_color = "#64748b"
+        self._addr_candidate_sa: int | None = None
+        self._addr_new_sa: int | None = None
+        self._addr_start_sa = 0x81
+        self._addr_seen: dict[int, float] = {}
+        self._addr_done_sas: set[int] = set()
+        self._addr_factory_sas: set[int] = set()
+        self._addr_requiet_s: dict[int, float] = {}
+        self._addr_attempt = 0
+        self._addr_quiet_retries = 0
+        self._addr_quiet_since = 0.0
+        self._addr_sent_s = 0.0
+        self._addr_seed = 0
+        self._addr_board_number = 0
+        self._addr_info: dict[int, dict] = {}
+        self._addr_info_queue: list[tuple] = []
+        self._addr_info_sa: int | None = None
+        self._addr_info_current: tuple | None = None
+        self._addr_info_sent_s = 0.0
+        self._addr_start_timer()
+
+    def _addr_start_timer(self):
+        """Цель функции в такте мастера раз в 100 мс, затем таймауты и проверки идут без участия оператора."""
+        self._addr_timer = QTimer(self)
+        self._addr_timer.setInterval(self.ADDR_TICK_MS)
+        self._addr_timer.timeout.connect(self._on_addr_tick)
+        self._addr_timer.start()
+
+    @staticmethod
+    def _addr_clock() -> float:
+        """Цель функции в часах мастера, затем проверки подменяют их и не ждут настоящие секунды."""
+        return time.monotonic()
+
+    def _addr_tester_sas(self) -> set[int]:
+        """Цель функции в адресах самой программы на шине, затем их не принимают за плату."""
+        return {int(UdsIdentifiers.tx.src) & 0xFF, int(UdsIdentifiers.rx.dst) & 0xFF}
+
+    def _addr_exchange_busy(self) -> bool:
+        """Цель функции в признаке обмена мастера с платой, затем другие опросы не вклиниваются в него."""
+        stepping = bool(self._addr_active) and self._addr_stage in ADDR_REQUEST_STEPS
+        return stepping or self._addr_info_sa is not None
+
+    def _addr_set_status(self, text: str, color: str = "#0f6ab4"):
+        """Цель функции в строке состояния мастера, затем окно показывает, что он делает или ждёт."""
+        self._addr_status = str(text)
+        self._addr_status_color = str(color)
+        self._addr_changed()
+
+    def _addr_changed(self):
+        """Цель функции в оповещении окна, затем шаги и карточки перерисовываются."""
+        signal = getattr(self, "boardAddressingChanged", None)
+        if signal is not None:
+            signal.emit()
+
+    def _addr_log(self, text: str, color: str = "#0f6ab4"):
+        """Цель функции в записи события мастера в общий журнал, затем его видно и после."""
+        log = getattr(self, "_append_log", None)
+        if log is None:
+            return
+        try:
+            log(f"Адреса плат: {text}", color)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------ обмен
+
+    def _addr_tx_identifier(self, sa: int) -> int:
+        """Цель функции в идентификаторе физического запроса плате sa, затем ответит только она."""
+        tx = J1939CanIdentifier(int(UdsIdentifiers.tx.identifier))
+        tx.dst = int(sa) & 0xFF
+        return int(tx.identifier)
+
+    def _addr_bus_send(self, identifier: int, frame: list[int]) -> bool:
+        """Цель функции в отправке кадра в шину через адаптер, затем ошибка адаптера не роняет мастер."""
+        from app_can.CanDevice import CanDevice
+
+        try:
+            CanDevice.instance().send_async(int(identifier), 8, list(frame)[:8])
+        except Exception:
+            return False
+        return True
+
+    def _addr_send(self, sa: int, data: list[int]) -> bool:
+        """Цель функции в отправке одиночного кадра UDS плате sa, затем кадр: длина, данные, добивка 0xFF."""
+        frame = [len(data) & 0x0F] + [int(byte) & 0xFF for byte in data]
+        frame += [0xFF] * (8 - len(frame))
+        return self._addr_bus_send(self._addr_tx_identifier(sa), frame)
+
+    def _addr_key(self) -> int:
+        """Цель функции в ключе доступа по seed, затем расчёт тот же, что у прибора и в разделе «Протокол»."""
+        seed = int(self._addr_seed) & 0xFFFF
+        return ((seed ^ 0xAA55) | seed) & 0xFFFF
+
+    def _addr_request(self, now: float):
+        """Цель функции в запросе текущего шага (первый раз или повтор), затем отсчитывается его таймаут."""
+        stage = self._addr_stage
+        cand, new = self._addr_candidate_sa, self._addr_new_sa
+        key = self._addr_key()
+        requests = {
+            "identify": (cand, [0x22, 0x00, 0x11]),
+            "session": (cand, [0x10, 0x03]),
+            "seed": (cand, [0x27, 0x01]),
+            "key": (cand, [0x27, 0x02, (key >> 8) & 0xFF, key & 0xFF]),
+            "write": (cand, [0x2E, 0x00, 0x11, int(new or 0) & 0xFF]),
+            "verify": (new, [0x22, 0x00, 0x11]),
+            "default": (new, [0x10, 0x01]),
+            "quiet": (new, [0x28, 0x01, 0x01]),
+        }
+        if stage not in requests:
+            return
+        sa, data = requests[stage]
+        self._addr_attempt += 1
+        self._addr_sent_s = now
+        self._addr_send(int(sa), data)
+
+    def _addr_enter(self, stage: str, now: float | None = None):
+        """Цель функции в переходе к шагу, затем его запрос уходит сразу."""
+        now = self._addr_clock() if now is None else now
+        self._addr_stage = stage
+        self._addr_attempt = 0
+        if stage in ADDR_STEP_TITLES:
+            self._addr_steps[stage] = "run"
+        if stage == "check_quiet":
+            self._addr_quiet_since = now
+        self._addr_changed()
+        self._addr_request(now)
+
+    def _addr_step_ok(self, stage: str, next_stage: str, now: float, text: str = ""):
+        """Цель функции в отметке пройденного шага, затем мастер переходит к следующему."""
+        self._addr_steps[stage] = "ok"
+        if text:
+            self._addr_set_status(text, "#0f6ab4")
+        self._addr_enter(next_stage, now)
+
+    def _addr_fail(self, text: str):
+        """Цель функции в остановке на непройденном шаге, затем оператор видит причину и может повторить шаг."""
+        if self._addr_stage in ADDR_STEP_TITLES:
+            self._addr_steps[self._addr_stage] = "fail"
+        self._addr_failed_stage = self._addr_stage
+        self._addr_stage = "failed"
+        self._addr_set_status(text, "#dc2626")
+        self._addr_log(text, "#dc2626")
+
+    # ------------------------------------------------------------------ кадры с шины
+
+    def _handle_board_addressing_frame(self, identifier: int, payload):
+        """Цель функции в разборе кадра с шины, затем рассылка отмечает плату на шине, а ответ двигает шаг."""
+        if not self._addr_active and self._addr_info_sa is None:
+            return
+        try:
+            parsed = J1939CanIdentifier(int(identifier))
+        except Exception:
+            return
+        src = int(parsed.src) & 0xFF
+        pgn = int(parsed.pgn) & 0x3FFFF
+        now = self._addr_clock()
+        if (pgn >> 8) & 0xFF not in (0xDA, 0xDB):
+            # Обычная рассылка: плата src на шине и шумит.
+            if src not in self._addr_tester_sas():
+                self._addr_seen[src] = now
+            return
+        if pgn != (int(UdsIdentifiers.rx.pgn) & 0x3FFFF):
+            return
+        if not isinstance(payload, (list, tuple)) or len(payload) < 2 or ((int(payload[0]) >> 4) & 0x0F) != 0:
+            return
+        length = int(payload[0]) & 0x0F
+        body = [int(value) & 0xFF for value in payload[1:1 + length]]
+        if not body:
+            return
+        if self._addr_info_sa is not None and src == self._addr_info_sa:
+            self._addr_info_answer(body)
+            return
+        if self._addr_active and self._addr_stage in ADDR_REQUEST_STEPS:
+            self._addr_answer(src, body, now)
+
+    def _addr_answer(self, src: int, body: list[int], now: float):
+        """Цель функции в разборе ответа на запрос шага, затем подтверждение, отказ или «подождите»."""
+        stage = self._addr_stage
+        cand, new = self._addr_candidate_sa, self._addr_new_sa
+        sids = {"identify": 0x22, "session": 0x10, "seed": 0x27, "key": 0x27,
+                "write": 0x2E, "verify": 0x22, "default": 0x10, "quiet": 0x28}
+        sid = sids[stage]
+        # Ответ на запись адреса может прийти и со старого, и уже с нового адреса.
+        if stage == "write":
+            allowed = {cand, new}
+        elif stage in ("identify", "session", "seed", "key"):
+            allowed = {cand}
+        else:
+            allowed = {new}
+        if src not in allowed:
+            return
+        if body[0] == 0x7F and len(body) >= 3 and body[1] == sid:
+            if body[2] == 0x78:
+                # Прибор просит подождать: ожидание продлевается, попытка не тратится.
+                self._addr_sent_s = now
+                return
+            describe = getattr(self, "_uds_nrc_description", None)
+            nrc = f"NRC 0x{body[2]:02X}"
+            if describe is not None:
+                try:
+                    nrc += f" ({describe(body[2])})"
+                except Exception:
+                    pass
+            self._addr_fail(f"{ADDR_STEP_TITLES.get(stage, stage)}: плата отказала, {nrc}.")
+            return
+        if body[0] != (sid | 0x40):
+            return
+        if stage == "identify" and len(body) >= 4 and body[1:3] == [0x00, 0x11]:
+            self._addr_step_ok("identify", "session", now,
+                               f"Плата 0x{cand:02X} отвечает. Назначаю адрес 0x{new:02X}...")
+        elif stage == "session" and len(body) >= 2 and body[1] == 0x03:
+            self._addr_step_ok("session", "seed", now)
+        elif stage == "seed" and len(body) >= 4 and body[1] == 0x01:
+            # Прибор шлёт seed младшим байтом вперёд: 67 01 seed_lo seed_hi.
+            self._addr_seed = (body[3] << 8) | body[2]
+            if self._addr_seed == 0:
+                # Нулевой seed - доступ уже открыт: ключ не нужен.
+                self._addr_steps["key"] = "ok"
+                self._addr_step_ok("seed", "write", now)
+            else:
+                self._addr_step_ok("seed", "key", now)
+        elif stage == "key" and len(body) >= 2 and body[1] == 0x02:
+            self._addr_step_ok("key", "write", now)
+        elif stage == "write" and len(body) >= 3 and body[1:3] == [0x00, 0x11]:
+            self._addr_step_ok("write", "verify", now)
+        elif stage == "verify" and len(body) >= 4 and body[1:3] == [0x00, 0x11]:
+            if body[3] != new:
+                self._addr_fail(f"Проверка не пройдена: плата сообщает адрес 0x{body[3]:02X}, "
+                                f"а записывали 0x{new:02X}.")
+                return
+            self._addr_step_ok("verify", "default", now, f"Адрес 0x{new:02X} записан и проверен чтением.")
+        elif stage == "default" and len(body) >= 2 and body[1] == 0x01:
+            self._addr_step_ok("default", "quiet", now)
+        elif stage == "quiet" and len(body) >= 2 and body[1] == 0x01:
+            self._addr_step_ok("quiet", "check_quiet", now)
+
+    # ------------------------------------------------------------------ такт
+
+    def _on_addr_tick(self):
+        """Цель функции в такте мастера, затем таймауты, поиск новой платы, проверка тишины и чтение карточек."""
+        now = self._addr_clock()
+        self._addr_info_tick(now)
+        if not self._addr_active:
+            return
+        stage = self._addr_stage
+        if stage == "wait":
+            self._addr_requiet_done(now)
+            self._addr_wait_board(now)
+        elif stage == "check_quiet":
+            self._addr_check_quiet(now)
+        elif stage in ADDR_REQUEST_STEPS:
+            if now - self._addr_sent_s < self.ADDR_STEP_TIMEOUT_S:
+                return
+            if self._addr_attempt >= self.ADDR_ATTEMPTS:
+                timeout = str(self.ADDR_STEP_TIMEOUT_S).replace(".", ",")
+                self._addr_fail(f"{ADDR_STEP_TITLES.get(stage, stage)}: плата не ответила за "
+                                f"{self.ADDR_ATTEMPTS} попытки по {timeout} с.")
+                return
+            self._addr_request(now)
+
+    def _addr_check_quiet(self, now: float):
+        """Цель функции в проверке тишины после команды, затем рассылка не мешает искать следующую плату."""
+        noisy = [sa for sa in (self._addr_new_sa, self._addr_candidate_sa)
+                 if sa is not None and self._addr_seen.get(sa, 0.0) > self._addr_quiet_since + self.ADDR_QUIET_GRACE_S]
+        if noisy:
+            if self._addr_quiet_retries < self.ADDR_ATTEMPTS - 1:
+                # Рассылка ещё идёт: команда повторяется (отдельный счёт, чтобы не зациклиться).
+                self._addr_quiet_retries += 1
+                self._addr_seen.pop(noisy[0], None)
+                self._addr_steps["check_quiet"] = ""
+                self._addr_enter("quiet", now)
+                return
+            self._addr_fail(f"Плата 0x{noisy[0]:02X} продолжает рассылку после команды выключить её.")
+            return
+        if now - self._addr_quiet_since >= self.ADDR_QUIET_CHECK_S:
+            self._addr_steps["check_quiet"] = "ok"
+            self._addr_finish_board()
+
+    def _addr_requiet_done(self, now: float):
+        """Цель функции в повторном выключении рассылки у настроенной платы, если она снова шумит (перезапуск питания)."""
+        for sa in sorted(self._addr_done_sas):
+            stamp = self._addr_seen.get(sa)
+            if stamp is None or now - stamp > self.ADDR_SEEN_S:
+                continue
+            if now - self._addr_requiet_s.get(sa, 0.0) < self.ADDR_REQUIET_EVERY_S:
+                continue
+            self._addr_requiet_s[sa] = now
+            # 0x28 с подавлением ответа: шаг мастера не ждёт его.
+            self._addr_send(sa, [0x28, 0x81, 0x01])
+            self._addr_log(f"настроенная плата 0x{sa:02X} снова шлёт рассылку - выключаю повторно.", "#d97706")
+
+    def _addr_wait_board(self, now: float):
+        """Цель функции в поиске новой платы, затем мастер берёт ту, что шлёт рассылку и ещё не настроена."""
+        fresh = sorted(sa for sa, stamp in self._addr_seen.items()
+                       if now - stamp <= self.ADDR_SEEN_S and sa not in self._addr_done_sas
+                       and sa not in self._addr_tester_sas())
+        if not fresh:
+            return
+        if len(fresh) > 1:
+            listed = ", ".join(f"0x{sa:02X}" for sa in fresh)
+            text = (f"На шине несколько ненастроенных плат ({listed}). Подключайте платы по одной: "
+                    "отключите лишние.")
+            if self._addr_status != text:
+                self._addr_set_status(text, "#d97706")
+            return
+        cand = fresh[0]
+        self._addr_candidate_sa = cand
+        self._addr_factory_sas.add(cand)
+        self._addr_new_sa = self._addr_next_free_sa()
+        if self._addr_new_sa is None:
+            self._addr_fail("Свободных адресов не осталось.")
+            return
+        self._addr_board_number += 1
+        self._addr_quiet_retries = 0
+        self._addr_steps = {key: "" for key, _title in ADDR_STEPS}
+        self._addr_steps["found"] = "ok"
+        self._addr_set_status(f"Плата {self._addr_board_number} найдена: адрес 0x{cand:02X}. Проверяю связь...",
+                              "#0f6ab4")
+        self._addr_log(f"плата {self._addr_board_number} найдена на шине: 0x{cand:02X}, "
+                       f"назначаю 0x{self._addr_new_sa:02X}.")
+        self._addr_enter("identify", now)
+
+    def _addr_used_sas(self) -> set[int]:
+        """Цель функции в занятых адресах, затем новый адрес не совпадёт ни с одной платой и программой."""
+        used = set(self._addr_done_sas) | set(self._addr_factory_sas) | self._addr_tester_sas()
+        used |= {int(board["sa"]) for board in getattr(self, "_mb_boards", []) or []}
+        if self._addr_candidate_sa is not None:
+            used.add(int(self._addr_candidate_sa))
+        return used
+
+    def _addr_next_free_sa(self) -> int | None:
+        """Цель функции в следующем свободном адресе от первого заданного, затем заводской адрес новых плат пропускается."""
+        used = self._addr_used_sas()
+        start = int(self._addr_start_sa)
+        for sa in list(range(start, 0xF0)) + list(range(0x01, start)):
+            if sa not in used:
+                return sa
+        return None
+
+    def _addr_finish_board(self):
+        """Цель функции в завершении платы, затем она в «Платах в камере», данные читаются, мастер ждёт следующую."""
+        new, old = int(self._addr_new_sa), int(self._addr_candidate_sa)
+        # Старый (заводской) адрес в настроенные не попадает: следующая плата придёт с ним же.
+        self._addr_done_sas.add(new)
+        self._addr_seen.pop(old, None)
+        name = f"П{self._addr_board_number}"
+        board_of = getattr(self, "_mb_board", None)
+        add = getattr(self, "_mb_add_board", None)
+        if add is not None and board_of is not None and board_of(new) is None:
+            add(f"0x{new:02X}", name)
+        board = board_of(new) if board_of is not None else None
+        name = board["name"] if board else name
+        info = self._addr_info.setdefault(new, {})
+        info.update({"oldSa": old, "quiet": True, "addressedAt": time.strftime("%d.%m %H:%M")})
+        self._addr_queue_info(new)
+        self._addr_stage = "wait"
+        self._addr_candidate_sa = None
+        self._addr_new_sa = None
+        self._addr_set_status(f"Плата «{name}» готова: адрес 0x{new:02X}, рассылка выключена. Подключите "
+                              f"плату {self._addr_board_number + 1}.", "#16a34a")
+        self._addr_log(f"плата «{name}»: 0x{old:02X} -> 0x{new:02X}, записано, проверено, рассылка выключена.",
+                       "#16a34a")
+
+    # ------------------------------------------------------------------ данные для карточки
+
+    def _addr_queue_info(self, sa: int):
+        """Цель функции в очереди чтения данных платы для карточки, затем DID читаются по одному с таймаутом."""
+        sa = int(sa) & 0xFF
+        self._addr_info_queue = [item for item in self._addr_info_queue if item[0] != sa]
+        self._addr_info_queue += [(sa,) + item for item in ADDR_INFO_DIDS]
+        self._addr_changed()
+
+    def _addr_info_tick(self, now: float):
+        """Цель функции в очередном чтении для карточки, затем оно не мешает шагам мастера и другим разделам."""
+        if self._addr_info_sa is not None:
+            if now - self._addr_info_sent_s < self.ADDR_INFO_WAIT_S:
+                return
+            # Не ответила - значение остаётся прежним, очередь идёт дальше.
+            self._addr_info_sa = None
+            if not self._addr_info_queue:
+                self._addr_changed()
+        if not self._addr_info_queue:
+            return
+        if self._addr_active and self._addr_stage in ADDR_REQUEST_STEPS + ("check_quiet",):
+            return
+        if uds_exchange_busy(self, ignore=("board_addressing",)) or background_request_recent(self):
+            return
+        sa, did, key, size, signed, divider = self._addr_info_queue.pop(0)
+        self._addr_info_sa = sa
+        self._addr_info_current = (did, key, size, signed, divider)
+        self._addr_info_sent_s = now
+        note_background_request(self)
+        self._addr_send(sa, [0x22, (did >> 8) & 0xFF, did & 0xFF])
+
+    def _addr_info_answer(self, body: list[int]):
+        """Цель функции в разборе ответа на чтение для карточки, затем число попадает в карточку платы."""
+        if self._addr_info_current is None:
+            self._addr_info_sa = None
+            return
+        did, key, size, signed, divider = self._addr_info_current
+        if body[0] == 0x7F:
+            # «Подождите» - ждём дальше; другой отказ - параметра нет, очередь идёт дальше.
+            if len(body) >= 3 and body[1] == 0x22 and body[2] != 0x78:
+                self._addr_info_sa = None
+            return
+        if body[0] != 0x62 or len(body) < 3 + size or did not in ((body[1] << 8) | body[2], (body[2] << 8) | body[1]):
+            return
+        sa = self._addr_info_sa
+        self._addr_info_sa = None
+        raw = 0
+        for shift, byte in enumerate(body[3:3 + size]):
+            raw |= (int(byte) & 0xFF) << (8 * shift)
+        if signed:
+            limit = 1 << (8 * size)
+            if raw >= limit >> 1:
+                raw -= limit
+        info = self._addr_info.setdefault(sa, {})
+        info[key] = raw / divider if divider != 1.0 else raw
+        info["readAt"] = time.strftime("%H:%M:%S")
+        self._addr_changed()
+
+    # ------------------------------------------------------------------ управление
+
+    def _addr_start(self, start_text: str = "") -> tuple[bool, str]:
+        """Цель функции в запуске мастера, затем он ждёт первую плату и назначает адреса с заданного."""
+        if self._addr_active:
+            return False, "мастер уже запущен"
+        text = str(start_text or "").strip()
+        if text:
+            try:
+                start = int(text, 16) if text.lower().startswith("0x") else int(text)
+            except ValueError:
+                return False, "первый адрес - число, например 0x81 или 129"
+            if not 0x01 <= start <= 0xEF:
+                return False, "первый адрес - от 0x01 до 0xEF"
+            if start in self._addr_tester_sas():
+                return False, f"0x{start:02X} - адрес самой программы на шине"
+            self._addr_start_sa = start
+        can = getattr(self, "_can", None)
+        if can is not None and (not getattr(can, "is_connect", False) or not getattr(can, "is_trace", False)):
+            return False, "подключите адаптер CAN и включите трассировку"
+        if getattr(self, "_climate_run_stage", ""):
+            return False, "идёт прогон в камере: адреса меняются до или после него"
+        busy = uds_exchange_busy(self, ignore=("board_addressing",))
+        if busy:
+            return False, f"идёт обмен с прибором в другом разделе ({busy}): подождите"
+        self._addr_active = True
+        self._addr_seen = {}
+        self._addr_requiet_s = {}
+        self._addr_done_sas = {int(board["sa"]) for board in getattr(self, "_mb_boards", []) or []}
+        self._addr_steps = {key: "" for key, _title in ADDR_STEPS}
+        self._addr_board_number = len(self._addr_done_sas)
+        self._addr_candidate_sa = None
+        self._addr_new_sa = None
+        self._addr_stage = "wait"
+        self._addr_set_status(f"Подключите плату {self._addr_board_number + 1} к шине CAN и подайте питание. "
+                              f"Адреса - с 0x{self._addr_start_sa:02X}.", "#0f6ab4")
+        self._addr_log(f"мастер запущен, адреса с 0x{self._addr_start_sa:02X}.")
+        return True, "мастер запущен"
+
+    def _addr_stop(self):
+        """Цель функции в остановке мастера, затем назначенные адреса и выключенная рассылка остаются как есть."""
+        was_stepping = self._addr_active and self._addr_stage in ADDR_REQUEST_STEPS + ("check_quiet",)
+        self._addr_active = False
+        self._addr_stage = ""
+        self._addr_candidate_sa = None
+        self._addr_new_sa = None
+        text = "Мастер остановлен."
+        if was_stepping:
+            text += " Плата, с которой шла работа, могла остаться с прежним адресом - проверьте её."
+        self._addr_set_status(text, "#64748b")
+
+    def _addr_retry(self) -> bool:
+        """Цель функции в повторе непройденного шага, затем плата и адреса те же, что были."""
+        if not self._addr_active or self._addr_stage != "failed":
+            return False
+        stage = self._addr_failed_stage or "wait"
+        if stage not in ADDR_REQUEST_STEPS + ("check_quiet",) or self._addr_candidate_sa is None:
+            self._addr_stage = "wait"
+            self._addr_set_status("Жду плату...", "#0f6ab4")
+            return True
+        if stage == "check_quiet":
+            stage = "quiet"
+            self._addr_quiet_retries = 0
+        self._addr_set_status(f"Повторяю шаг «{ADDR_STEP_TITLES.get(stage, stage)}»...", "#0f6ab4")
+        self._addr_enter(stage)
+        return True
+
+    def _addr_skip(self) -> bool:
+        """Цель функции в пропуске платы после сбоя, затем мастер снова ждёт новую плату."""
+        if not self._addr_active or self._addr_stage != "failed":
+            return False
+        if self._addr_candidate_sa is not None:
+            self._addr_seen.pop(self._addr_candidate_sa, None)
+        if self._addr_new_sa is not None:
+            self._addr_seen.pop(self._addr_new_sa, None)
+        self._addr_candidate_sa = None
+        self._addr_new_sa = None
+        self._addr_board_number = max(0, self._addr_board_number - 1)
+        self._addr_steps = {key: "" for key, _title in ADDR_STEPS}
+        self._addr_stage = "wait"
+        self._addr_set_status(f"Плата пропущена. Отключите её и подключите плату {self._addr_board_number + 1}.",
+                              "#d97706")
+        return True
+
+    def _addr_refresh_info(self, sa: int | None = None):
+        """Цель функции в повторном чтении данных карточек (одной платы или всех), затем видно свежие значения."""
+        boards = [int(board["sa"]) for board in getattr(self, "_mb_boards", []) or []]
+        for board_sa in boards if sa is None else [int(sa) & 0xFF]:
+            self._addr_queue_info(board_sa)
+
+    def _addr_release_all(self) -> bool:
+        """Цель функции в возврате рассылки всем платам, затем CommunicationControl 0x28 0x00 уходит функционально."""
+        tx_identifier = int(UdsIdentifiers.tx.identifier)
+        functional = (((tx_identifier >> 26) & 0x07) << 26) | (0xDBFF << 8) | (tx_identifier & 0xFF)
+        if not self._addr_bus_send(functional, [0x03, 0x28, 0x80, 0x01, 0xFF, 0xFF, 0xFF, 0xFF]):
+            return False
+        # Мастер не должен тут же выключить её обратно.
+        if self._addr_active:
+            self._addr_stop()
+        for info in self._addr_info.values():
+            info["quiet"] = False
+        self._addr_set_status("Всем платам отправлено «вернуть рассылку J1939».", "#0f6ab4")
+        self._addr_log("всем платам отправлено «вернуть рассылку J1939».")
+        return True
+
+    # ------------------------------------------------------------------ показ
+
+    def _addr_view(self) -> dict:
+        """Цель функции в данных мастера и карточек плат для окна, затем окно ничего не считает само."""
+        def temp(value):
+            return "—" if value is None else f"{float(value):+.1f} °C".replace(".", ",")
+
+        def number(value):
+            return "—" if value is None else str(int(value))
+
+        cards = []
+        for board in getattr(self, "_mb_boards", []) or []:
+            sa = int(board["sa"])
+            info = self._addr_info.get(sa, {})
+            status = info.get("profileStatus")
+            crc = info.get("profileCrc")
+            old = info.get("oldSa")
+            if status is None:
+                profile_text, profile_tone = "—", "normal"
+            elif not int(status) & 0x01:
+                profile_text, profile_tone = "пустой", "normal"
+            elif int(status) & 0x08:
+                profile_text, profile_tone = "применяется", "ok"
+            else:
+                profile_text, profile_tone = "не применяется", "bad"
+            program = info.get("program")
+            cards.append({
+                "sa": sa, "saText": f"0x{sa:02X}", "name": str(board.get("name", "")),
+                "oldSa": "" if old is None else f"0x{int(old):02X}",
+                "boardTemp": temp(info.get("boardTemp")), "fuelTemp": temp(info.get("fuelTemp")),
+                "main": number(info.get("main")), "media": number(info.get("media")),
+                "profileCrc": "—" if crc is None else f"0x{int(crc):04X}",
+                "profileGeneration": number(info.get("profileGeneration")),
+                "profileText": profile_text, "profileTone": profile_tone,
+                "quiet": bool(info.get("quiet", False)),
+                "program": "—" if program is None else ("основная" if int(program) == 0 else "загрузчик"),
+                "readAt": str(info.get("readAt", "")), "addressedAt": str(info.get("addressedAt", "")),
+                "reading": any(item[0] == sa for item in self._addr_info_queue) or self._addr_info_sa == sa,
+            })
+        steps = [{"key": key, "title": title, "state": self._addr_steps.get(key, "")} for key, title in ADDR_STEPS]
+        return {
+            "active": bool(self._addr_active), "stage": self._addr_stage, "status": self._addr_status,
+            "statusColor": self._addr_status_color, "steps": steps, "startText": f"0x{int(self._addr_start_sa):02X}",
+            "candidate": "" if self._addr_candidate_sa is None else f"0x{self._addr_candidate_sa:02X}",
+            "newSa": "" if self._addr_new_sa is None else f"0x{self._addr_new_sa:02X}",
+            "failed": self._addr_stage == "failed", "waiting": self._addr_stage == "wait",
+            "cards": cards, "boardNumber": int(self._addr_board_number),
+        }

@@ -22,6 +22,7 @@ from ui.qml.options_table_model import OptionsTableModel
 from uds.option_values import INPUT_VALUE
 
 from .controller import (
+    AppControllerBoardAddressingMixin,
     AppControllerCalibrationLogMixin,
     AppControllerCalibrationMixin,
     AppControllerCanMixin,
@@ -74,6 +75,7 @@ class AppController(
     AppControllerChamberChainMixin,
     AppControllerChamberTestMixin,
     AppControllerMultiBoardMixin,
+    AppControllerBoardAddressingMixin,
     AppControllerRemoteMonitorMixin,
     AppControllerClimateChamberMixin,
     AppControllerClimateControlMixin,
@@ -622,6 +624,8 @@ class AppController(
         self._init_chamber_test_state()
         # Несколько плат в камере: у каждой свой набор полей прогона, поэтому - после прогона и профиля.
         self._init_multiboard_state()
+        # Мастер адресов плат дописывает настроенные платы в список камеры, поэтому - после него.
+        self._init_board_addressing_state()
         # Пробная калибровка опирается на прогон и профиль, поэтому готовится последней.
         self._init_trial_state()
         # Контроль сохранения замечает записи всех разделов, поэтому готовится после них.

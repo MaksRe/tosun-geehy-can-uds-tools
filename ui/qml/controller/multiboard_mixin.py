@@ -292,7 +292,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         return sorted(sa for sa in found - testers if self._mb_board(sa) is None)
 
     def _mb_changed(self):
-        for name in ("chamberChanged", "climateChanged"):
+        for name in ("chamberChanged", "climateChanged", "boardAddressingChanged"):
             signal = getattr(self, name, None)
             if signal is not None:
                 signal.emit()
