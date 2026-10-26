@@ -42,6 +42,21 @@
   режиме работает (прошивка пропускает её мимо этих запретов).
 - На шине видно, передаёт ли плата кадры J1939 сейчас и сколько в секунду.
 
+НА ШИНЕ ЛИ ПЛАТА
+Пока раздел открыт, программа по кругу спрашивает адрес у каждой платы списка
+(чтение 0x0011, раз в 0,4 с одной плате): плата на шине, если за последние 6 с
+ответила на любой запрос или передавала кадры J1939. Карточки показываются
+только для плат на шине (плата с выключенной передачей молчит, поэтому нужен
+именно запрос).
+
+СБРОС АДРЕСОВ
+«Сбросить адреса» возвращает каждой подключённой плате списка заводской адрес
+0x6A (сеанс, доступ, запись 0x0011) и проверяет, что по старому адресу она
+больше не отвечает; список плат и их история очищаются, и мастер снова
+назначает адреса по порядку подключения. Адреса плат, которых при сбросе не
+было на шине, мастер обходит (иначе две платы получили бы один адрес); когда
+такая плата появится, мастер назначит ей новый адрес.
+
 Режим трафика держится до перезагрузки питания платы (в обычном сеансе прибор
 его не сбрасывает). Пока мастер запущен, настроенную плату с выключенной
 передачей, которая снова начала передавать (перезапуск питания), он выключает
@@ -75,12 +90,17 @@ ADDR_STEPS = (
     ("default", "Обычный сеанс"),
     ("quiet", "Передача J1939 выключена (0x28)"),
     ("check_quiet", "Тишина на шине проверена"),
+    ("gone", "Старый адрес больше не отвечает"),
 )
 ADDR_STEP_TITLES = dict(ADDR_STEPS)
 # Шаги смены адреса уже настроенной платы: без поиска и без выключения передачи.
 READDRESS_STEPS = ("identify", "session", "seed", "key", "write", "verify", "default")
+# Шаги сброса адреса к заводскому: проверка - старый адрес молчит (по заводскому могут ответить несколько плат).
+RESET_STEPS = ("identify", "session", "seed", "key", "write", "gone")
 # Шаги с запросом к плате и ожиданием ответа.
-ADDR_REQUEST_STEPS = ("identify", "session", "seed", "key", "write", "verify", "default", "quiet")
+ADDR_REQUEST_STEPS = ("identify", "session", "seed", "key", "write", "verify", "default", "quiet", "gone")
+# Заводской адрес плат (UDS_ECU_SA_DEFAULT прошивки): к нему возвращает сброс.
+FACTORY_SA = 0x6A
 # Режимы выбора адреса: мастер сам или оператор для каждой платы.
 ADDR_MODES = ("auto", "manual")
 # Режимы CommunicationControl (0x28) прошивки: номер, кнопка, состояние, пояснение.
@@ -140,6 +160,13 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
     ADDR_COMM_CHECK_S = 2.5
     # Окно подсчёта кадров J1939 платы в секунду, с.
     ADDR_RATE_WINDOW_S = 2.0
+    # Плата на шине, если ответила на запрос не раньше стольких секунд назад.
+    ADDR_PRESENT_S = 6.0
+    # Опрос «на шине ли»: одной плате раз в столько секунд; плату, ответившую недавно, не спрашиваем.
+    ADDR_PING_EVERY_S = 0.4
+    ADDR_PING_FRESH_S = 2.0
+    # Сброс: сколько старый адрес должен молчать после записи заводского, с.
+    ADDR_GONE_S = 1.2
     ADDR_TICK_MS = 100
 
     # ------------------------------------------------------------------ состояние
@@ -180,6 +207,17 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         # Команды трафика платам из карточек: очередь и текущая.
         self._addr_comm_queue: list[tuple[int, int]] = []
         self._addr_comm: dict | None = None
+        # Кто на шине: последний ответ на любой запрос по адресу платы; опрос - пока раздел открыт.
+        self._addr_answered: dict[int, float] = {}
+        self._addr_visible = False
+        self._addr_visible_since = 0.0
+        self._addr_ping_index = 0
+        self._addr_ping_s = 0.0
+        self._addr_pinged: dict[int, float] = {}
+        # Сброс адресов: очередь плат и адреса плат, которых при сбросе не было на шине.
+        self._addr_reset_queue: list[int] = []
+        self._addr_reset_done: list[str] = []
+        self._addr_reserved: set[int] = set()
         self._addr_load_settings()
         self._addr_start_timer()
 
@@ -197,6 +235,11 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
             return
         if payload.get("mode") in ADDR_MODES:
             self._addr_mode = payload["mode"]
+        for value in payload.get("reserved") or []:
+            try:
+                self._addr_reserved.add(int(value) & 0xFF)
+            except (TypeError, ValueError):
+                continue
         for key, item in (payload.get("boards") or {}).items():
             try:
                 sa = int(key) & 0xFF
@@ -225,7 +268,8 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps({"mode": self._addr_mode, "start_sa": int(self._addr_start_sa),
-                                        "boards": boards}, ensure_ascii=False, indent=2), encoding="utf-8")
+                                        "boards": boards, "reserved": sorted(self._addr_reserved)},
+                                       ensure_ascii=False, indent=2), encoding="utf-8")
         except OSError:
             pass
 
@@ -253,7 +297,11 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         """Цель функции в признаке обмена мастера с платой, затем другие опросы не вклиниваются в него."""
         stepping = bool(self._addr_active) and self._addr_stage in ADDR_REQUEST_STEPS
         comm_waiting = self._addr_comm is not None and self._addr_comm.get("stage") == "ack"
-        return stepping or comm_waiting or self._addr_info_sa is not None
+        return stepping or comm_waiting or self._addr_info_sa is not None or self._addr_ping_pending()
+
+    def _addr_ping_pending(self) -> bool:
+        """Цель функции в признаке опроса «на шине ли», ответ на который ещё в пути."""
+        return self._addr_clock() - self._addr_ping_s < 0.15
 
     def _addr_set_status(self, text: str, color: str = "#0f6ab4"):
         """Цель функции в строке состояния мастера, затем окно показывает, что он делает или ждёт."""
@@ -331,6 +379,7 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
             "verify": (new, [0x22, 0x00, 0x11]),
             "default": (new, [0x10, 0x01]),
             "quiet": (new, [0x28, 0x01, 0x01]),
+            "gone": (cand, [0x22, 0x00, 0x11]),
         }
         if stage not in requests:
             return
@@ -411,6 +460,8 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         body = [int(value) & 0xFF for value in payload[1:1 + length]]
         if not body:
             return
+        # Любой ответ по адресу платы: она на шине (даже с выключенной передачей J1939).
+        self._addr_answered[src] = now
         comm = self._addr_comm
         if comm is not None and comm.get("stage") == "ack" and src == comm["sa"] and \
                 (body[0] == 0x68 or (body[0] == 0x7F and len(body) >= 2 and body[1] == 0x28)):
@@ -427,16 +478,21 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         stage = self._addr_stage
         cand, new = self._addr_candidate_sa, self._addr_new_sa
         sids = {"identify": 0x22, "session": 0x10, "seed": 0x27, "key": 0x27,
-                "write": 0x2E, "verify": 0x22, "default": 0x10, "quiet": 0x28}
+                "write": 0x2E, "verify": 0x22, "default": 0x10, "quiet": 0x28, "gone": 0x22}
         sid = sids[stage]
         # Ответ на запись адреса может прийти и со старого, и уже с нового адреса.
         if stage == "write":
             allowed = {cand, new}
-        elif stage in ("identify", "session", "seed", "key"):
+        elif stage in ("identify", "session", "seed", "key", "gone"):
             allowed = {cand}
         else:
             allowed = {new}
         if src not in allowed:
+            return
+        if stage == "gone":
+            # Сброс: по старому адресу никто не должен отвечать.
+            if body[0] == 0x62 and len(body) >= 4 and body[1:3] == [0x00, 0x11]:
+                self._addr_fail(f"Плата по-прежнему отвечает по старому адресу 0x{cand:02X}: сброс не прошёл.")
             return
         if body[0] == 0x7F and len(body) >= 3 and body[1] == sid:
             if body[2] == 0x78:
@@ -444,6 +500,14 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
                 self._addr_sent_s = now
                 return
             self._addr_fail(f"{ADDR_STEP_TITLES.get(stage, stage)}: плата отказала, {self._addr_nrc_text(body[2])}.")
+            return
+        if stage in ("key", "write") and body[0] == 0x67 and len(body) >= 4 and body[1] == 0x01                 and ((body[3] << 8) | body[2]) != self._addr_seed:
+            # Второй, другой seed по тому же адресу: отвечают несколько плат (например, все после сброса).
+            # «Повторить шаг» начнёт доступ заново - с запроса seed.
+            self._addr_steps[stage] = ""
+            self._addr_stage = "seed"
+            self._addr_fail(f"По адресу 0x{cand:02X} отвечают несколько плат. Оставьте на шине одну новую плату "
+                            "и повторите шаг.")
             return
         if body[0] != (sid | 0x40):
             return
@@ -464,7 +528,7 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         elif stage == "key" and len(body) >= 2 and body[1] == 0x02:
             self._addr_step_ok("key", "write", now)
         elif stage == "write" and len(body) >= 3 and body[1:3] == [0x00, 0x11]:
-            self._addr_step_ok("write", "verify", now)
+            self._addr_step_ok("write", "gone" if self._addr_job == "reset" else "verify", now)
         elif stage == "verify" and len(body) >= 4 and body[1:3] == [0x00, 0x11]:
             if body[3] != new:
                 self._addr_fail(f"Проверка не пройдена: плата сообщает адрес 0x{body[3]:02X}, "
@@ -487,9 +551,15 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         now = self._addr_clock()
         self._addr_comm_tick(now)
         self._addr_info_tick(now)
+        self._addr_presence_tick(now)
         if not self._addr_active:
             return
         stage = self._addr_stage
+        if stage == "gone":
+            if now - self._addr_sent_s >= self.ADDR_GONE_S:
+                self._addr_steps["gone"] = "ok"
+                self._addr_finish_reset_board()
+            return
         if stage == "wait":
             self._addr_requiet_done(now)
             self._addr_wait_board(now)
@@ -616,6 +686,8 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         if board is not None or sa in self._addr_done_sas:
             owner = f"плата «{board['name']}»" if board is not None else "уже настроенная плата"
             return None, f"0x{sa:02X} уже занят: {owner}"
+        if sa in self._addr_reserved:
+            return None, f"0x{sa:02X} оставлен плате, которой не было на шине при сбросе адресов"
         if sa in self._addr_seen:
             return None, f"0x{sa:02X} уже есть на шине: его использует другое устройство"
         return sa, ""
@@ -649,6 +721,8 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
     def _addr_used_sas(self) -> set[int]:
         """Цель функции в занятых адресах, затем новый адрес не совпадёт ни с одной платой и программой."""
         used = set(self._addr_done_sas) | set(self._addr_factory_sas) | self._addr_tester_sas()
+        # Адреса плат, которых не было на шине при сбросе: такая плата может появиться с ним.
+        used |= set(self._addr_reserved)
         used |= {int(board["sa"]) for board in getattr(self, "_mb_boards", []) or []}
         # Адреса, замеченные на шине (другие устройства), тоже заняты.
         used |= set(self._addr_seen)
@@ -670,6 +744,8 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         new, old = int(self._addr_new_sa), int(self._addr_candidate_sa)
         # Старый (заводской) адрес в настроенные не попадает: следующая плата придёт с ним же.
         self._addr_done_sas.add(new)
+        # Плата, пропущенная сбросом, получила новый адрес: её прежний больше не держим.
+        self._addr_reserved.discard(old)
         self._addr_seen.pop(old, None)
         self._addr_frames.pop(old, None)
         name = self._addr_pending_name or f"П{self._addr_board_number}"
@@ -992,6 +1068,7 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         self._addr_return_active = False
         self._addr_candidate_sa = None
         self._addr_new_sa = None
+        self._addr_reset_queue = []
         text = "Мастер остановлен."
         if was_stepping:
             text += " Плата, с которой шла работа, могла остаться с прежним адресом - проверьте её."
@@ -1017,6 +1094,14 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         """Цель функции в пропуске платы после сбоя или без выбора адреса, затем мастер ждёт новую плату."""
         if not self._addr_active or self._addr_stage not in ("failed", "ask"):
             return False
+        if self._addr_job == "reset":
+            # Плата не сбросилась: её адрес остаётся занятым, сброс идёт к следующей.
+            sa = int(self._addr_candidate_sa)
+            self._addr_reserved.add(sa)
+            self._addr_reset_done.append(f"{self._addr_board_name(sa)} пропущена, её адрес оставлен занятым")
+            self._addr_reset_drop(sa)
+            self._addr_reset_next()
+            return True
         if self._addr_job == "readdress":
             # Смена адреса из карточки отменена: мастер возвращается к тому, что было.
             self._addr_restore_after_job()
@@ -1041,6 +1126,141 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         boards = [int(board["sa"]) for board in getattr(self, "_mb_boards", []) or []]
         for board_sa in boards if sa is None else [int(sa) & 0xFF]:
             self._addr_queue_info(board_sa)
+
+    # ------------------------------------------------------------------ на шине ли плата
+
+    def _addr_set_visible(self, visible: bool):
+        """Цель функции в признаке открытого раздела, затем опрос «на шине ли» идёт только пока его видно."""
+        visible = bool(visible)
+        if visible and not self._addr_visible:
+            self._addr_visible_since = self._addr_clock()
+            self._addr_pinged = {}
+        self._addr_visible = visible
+        self._addr_changed()
+
+    def _addr_present(self, sa: int, now: float) -> bool:
+        """Цель функции в признаке «плата на шине»: недавно ответила на запрос или передавала кадры J1939."""
+        answered = self._addr_answered.get(int(sa))
+        seen = self._addr_seen.get(int(sa))
+        return (answered is not None and now - answered <= self.ADDR_PRESENT_S) or \
+            (seen is not None and now - seen <= self.ADDR_SEEN_S)
+
+    def _addr_first_round_s(self) -> float:
+        """Цель функции во времени первого круга опроса, затем до его конца отсутствующие не объявляются."""
+        count = len(getattr(self, "_mb_boards", []) or [])
+        return max(1.5, count * self.ADDR_PING_EVERY_S + 1.0)
+
+    def _addr_presence_tick(self, now: float):
+        """Цель функции в опросе «на шине ли» по кругу, затем в окне видны только подключённые платы."""
+        if not self._addr_visible or now - self._addr_ping_s < self.ADDR_PING_EVERY_S:
+            return
+        boards = [int(board["sa"]) for board in getattr(self, "_mb_boards", []) or []]
+        if not boards or self._addr_stepping() or self._addr_info_sa is not None:
+            return
+        if self._addr_comm is not None and self._addr_comm.get("stage") == "ack":
+            return
+        can = getattr(self, "_can", None)
+        if can is not None and (not getattr(can, "is_connect", False) or not getattr(can, "is_trace", False)):
+            return
+        if getattr(self, "_climate_run_stage", ""):
+            # В прогоне платы и так опрашиваются: их ответы отмечают присутствие.
+            return
+        if uds_exchange_busy(self, ignore=("board_addressing",)) or background_request_recent(self):
+            return
+        for _attempt in range(len(boards)):
+            sa = boards[self._addr_ping_index % len(boards)]
+            self._addr_ping_index += 1
+            recent = max(self._addr_answered.get(sa, -1e9), self._addr_seen.get(sa, -1e9))
+            if now - recent < self.ADDR_PING_FRESH_S and sa in self._addr_pinged:
+                continue
+            self._addr_ping_s = now
+            self._addr_pinged[sa] = now
+            note_background_request(self)
+            self._addr_send(sa, [0x22, 0x00, 0x11])
+            return
+
+    # ------------------------------------------------------------------ сброс адресов
+
+    def _addr_reset_start(self) -> tuple[bool, str]:
+        """Цель функции в сбросе адресов: подключённым платам - заводской адрес, список и история - заново."""
+        if getattr(self, "_climate_run_stage", ""):
+            return False, "идёт прогон в камере: адреса сбрасываются до или после него"
+        if self._addr_stepping() or self._addr_stage in ("ask", "failed"):
+            return False, "мастер сейчас работает с платой: дождитесь конца или остановите его"
+        can = getattr(self, "_can", None)
+        if can is not None and (not getattr(can, "is_connect", False) or not getattr(can, "is_trace", False)):
+            return False, "подключите адаптер CAN и включите трассировку"
+        busy = uds_exchange_busy(self, ignore=("board_addressing",))
+        if busy:
+            return False, f"идёт обмен с прибором в другом разделе ({busy}): подождите"
+        if self._addr_active:
+            self._addr_stop()
+        now = self._addr_clock()
+        boards = [int(board["sa"]) for board in getattr(self, "_mb_boards", []) or []]
+        present = [sa for sa in boards if self._addr_present(sa, now)]
+        self._addr_reset_done = []
+        for sa in boards:
+            if sa not in present:
+                # Платы нет на шине: адрес не сбросить, поэтому мастер его обойдёт.
+                self._addr_reserved.add(sa)
+                self._addr_reset_done.append(f"{self._addr_board_name(sa)} не на шине, её адрес оставлен занятым")
+                self._addr_reset_drop(sa)
+        self._addr_reset_queue = present
+        self._addr_log("сброс адресов: " + (", ".join(f"0x{sa:02X}" for sa in present) or "плат на шине нет")
+                       + f" -> 0x{FACTORY_SA:02X}.")
+        self._addr_reset_next()
+        return True, "сброс адресов начат"
+
+    def _addr_reset_next(self):
+        """Цель функции в сбросе следующей платы очереди, затем итог, когда очередь кончилась."""
+        if not self._addr_reset_queue:
+            self._addr_reset_finish()
+            return
+        sa = self._addr_reset_queue.pop(0)
+        self._addr_job = "reset"
+        self._addr_return_active = False
+        self._addr_active = True
+        self._addr_candidate_sa = sa
+        self._addr_new_sa = FACTORY_SA
+        self._addr_steps = {key: "" for key, _title in ADDR_STEPS}
+        self._addr_set_status(f"Сброс адреса платы {self._addr_board_name(sa)} на заводской 0x{FACTORY_SA:02X}...",
+                              "#0f6ab4")
+        self._addr_enter("identify")
+
+    def _addr_reset_drop(self, sa: int):
+        """Цель функции в удалении платы из списка камеры и её истории при сбросе."""
+        remove = getattr(self, "_mb_remove_board", None)
+        if remove is not None:
+            remove(int(sa))
+        self._addr_info.pop(int(sa), None)
+        self._addr_done_sas.discard(int(sa))
+        for table in (self._addr_seen, self._addr_frames, self._addr_requiet_s, self._addr_answered, self._addr_pinged):
+            table.pop(int(sa), None)
+
+    def _addr_finish_reset_board(self):
+        """Цель функции в завершении сброса одной платы, затем она убрана из списка, сброс идёт дальше."""
+        sa = int(self._addr_candidate_sa)
+        name = self._addr_board_name(sa)
+        self._addr_reset_done.append(f"{name} -> 0x{FACTORY_SA:02X}")
+        self._addr_log(f"плата {name}: адрес сброшен на 0x{FACTORY_SA:02X}, старый адрес не отвечает.", "#16a34a")
+        self._addr_reserved.discard(sa)
+        self._addr_reset_drop(sa)
+        self._addr_reset_next()
+
+    def _addr_reset_finish(self):
+        """Цель функции в итоге сброса, затем мастер готов назначать адреса заново с П1."""
+        self._addr_job = "new"
+        self._addr_active = False
+        self._addr_stage = ""
+        self._addr_candidate_sa = None
+        self._addr_new_sa = None
+        self._addr_steps = {key: "" for key, _title in ADDR_STEPS}
+        self._addr_board_number = 0
+        self._addr_factory_sas = set()
+        self._addr_save_settings()
+        done = "; ".join(self._addr_reset_done) if self._addr_reset_done else "плат в списке не было"
+        self._addr_set_status(f"Адреса сброшены ({done}). Отключите все платы, запустите мастер и подключайте "
+                              "их по одной: адреса назначатся заново с П1.", "#16a34a")
 
     # ------------------------------------------------------------------ показ
 
@@ -1070,8 +1290,16 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         comm_sa = None if self._addr_comm is None else self._addr_comm["sa"]
         queued = {sa for sa, _mode in self._addr_comm_queue}
         cards = []
+        absent = []
+        checking = self._addr_visible and now - self._addr_visible_since < self._addr_first_round_s()
         for board in getattr(self, "_mb_boards", []) or []:
             sa = int(board["sa"])
+            # Пока раздел открыт, видны только платы на шине; остальные - строкой «нет на шине».
+            if self._addr_visible and not self._addr_present(sa, now) and not (
+                    self._addr_job in ("readdress", "reset") and self._addr_candidate_sa == sa):
+                if not checking:
+                    absent.append(f"«{board.get('name', '')}» (0x{sa:02X})")
+                continue
             info = self._addr_info.get(sa, {})
             status = info.get("profileStatus")
             crc = info.get("profileCrc")
@@ -1111,8 +1339,14 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
                 else "нет связи с шиной",
                 "readdressing": self._addr_job == "readdress" and self._addr_candidate_sa == sa,
             })
+        if self._addr_job == "readdress":
+            shown = READDRESS_STEPS + ("found", "choose")
+        elif self._addr_job == "reset":
+            shown = RESET_STEPS
+        else:
+            shown = tuple(key for key, _title in ADDR_STEPS if key != "gone")
         steps = [{"key": key, "title": title, "state": self._addr_steps.get(key, "")} for key, title in ADDR_STEPS
-                 if self._addr_job != "readdress" or key in READDRESS_STEPS + ("found", "choose")]
+                 if key in shown]
         return {
             "active": bool(self._addr_active), "stage": self._addr_stage, "status": self._addr_status,
             "statusColor": self._addr_status_color, "steps": steps, "startText": f"0x{int(self._addr_start_sa):02X}",
@@ -1123,6 +1357,9 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
             "readdress": self._addr_job == "readdress",
             "suggestName": self._addr_pending_name if self._addr_stage == "ask" else "",
             "cards": cards, "boardNumber": int(self._addr_board_number), "editable": bool(editable),
+            "absent": absent, "checking": bool(checking), "listed": len(getattr(self, "_mb_boards", []) or []),
+            "resetting": self._addr_job == "reset", "factorySa": f"0x{FACTORY_SA:02X}",
+            "reserved": [f"0x{sa:02X}" for sa in sorted(self._addr_reserved)],
             "commModes": [{"mode": mode, "button": button, "state": state, "hint": hint}
                           for mode, button, state, hint in COMM_MODES],
         }

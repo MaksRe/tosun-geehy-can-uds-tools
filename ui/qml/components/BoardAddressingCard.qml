@@ -42,6 +42,10 @@ Card {
     cardColor: "#ffffff"
     cardBorder: "#d6e2ef"
 
+    // Пока раздел открыт, программа опрашивает, какие платы на шине, и показывает только их.
+    onVisibleChanged: if (root.appController) root.appController.setBoardAddressingVisible(root.visible)
+    Component.onCompleted: if (root.appController) root.appController.setBoardAddressingVisible(root.visible)
+
     // Мастер нашёл плату и ждёт адрес: поля заполняются подсказкой, курсор - в поле адреса.
     onAskingChanged: {
         if (!root.asking)
@@ -477,6 +481,32 @@ Card {
         }
     }
 
+    Dialog {
+        id: resetConfirm
+        anchors.centerIn: Overlay.overlay
+        modal: true
+        title: "Сбросить адреса плат"
+        standardButtons: Dialog.Yes | Dialog.No
+        Text {
+            width: 460
+            wrapMode: Text.WordWrap
+            text: "Всем платам из списка, которые сейчас на шине, будет записан заводской адрес "
+                  + (root.addr.factorySa || "0x6A") + " (с проверкой, что старый адрес больше не отвечает). "
+                  + "Список плат и их история очистятся.
+
+"
+                  + "После сброса отключите ВСЕ платы, запустите мастер и подключайте их по одной: адреса "
+                  + "назначатся заново с П1.
+
+"
+                  + "Платы, которых сейчас нет на шине, сохранят свой адрес - мастер обойдёт его и назначит "
+                  + "такой плате новый, когда она появится."
+            font.pixelSize: 13
+            font.family: "Bahnschrift"
+        }
+        onAccepted: if (root.appController) root.appController.resetBoardAddresses()
+    }
+
     ScrollView {
         id: pageScroll
         anchors.fill: parent
@@ -735,8 +765,19 @@ Card {
                     font.bold: true
                     font.family: "Bahnschrift"
                 }
-                Caption { text: String((root.addr.cards || []).length) }
+                Caption {
+                    text: root.addr.checking ? "проверяю, какие платы на шине..."
+                          : "на шине " + (root.addr.cards || []).length + " из " + (root.addr.listed || 0)
+                }
                 Item { Layout.fillWidth: true }
+                SmallButton {
+                    Layout.preferredWidth: 150
+                    text: "Сбросить адреса..."
+                    enabled: !!root.addr.editable
+                    toolTipText: "Вернуть подключённым платам заводской адрес и назначить адреса заново по порядку"
+                    tone: "#dc2626"; toneHover: "#b91c1c"; tonePressed: "#991b1b"
+                    onClicked: resetConfirm.open()
+                }
                 SmallButton {
                     Layout.preferredWidth: 150
                     text: "Обновить показания"
@@ -763,9 +804,25 @@ Card {
             }
 
             Caption {
-                visible: (root.addr.cards || []).length === 0
+                visible: (root.addr.cards || []).length === 0 && !root.addr.checking
                 Layout.fillWidth: true
-                text: "Пока ни одной. Запустите мастер и подключите первую плату: после настройки она появится здесь."
+                text: (root.addr.listed || 0) > 0
+                      ? "Ни одна плата из списка сейчас не отвечает. Проверьте питание и подключение к шине CAN."
+                      : "Пока ни одной. Запустите мастер и подключите первую плату: после настройки она появится здесь."
+                wrapMode: Text.WordWrap
+            }
+            Caption {
+                visible: (root.addr.absent || []).length > 0
+                Layout.fillWidth: true
+                text: "Нет на шине (не отвечают 6 с): " + (root.addr.absent || []).join(", ")
+                color: "#b45309"
+                wrapMode: Text.WordWrap
+            }
+            Caption {
+                visible: (root.addr.reserved || []).length > 0
+                Layout.fillWidth: true
+                text: "Адреса оставлены занятыми (этих плат не было на шине при сбросе; при подключении мастер назначит "
+                      + "им новые): " + (root.addr.reserved || []).join(", ")
                 wrapMode: Text.WordWrap
             }
 

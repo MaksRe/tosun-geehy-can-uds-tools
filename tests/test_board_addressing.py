@@ -20,7 +20,12 @@
 - из карточки: смена адреса настроенной платы (с проверкой чтением, плата
   остаётся в списке камеры со своим именем), смена имени, любой из четырёх
   режимов трафика 0x28 с подтверждением платы и проверкой по шине;
-- история адреса и режим трафика переживают перезапуск программы.
+- история адреса и режим трафика переживают перезапуск программы;
+- пока раздел открыт, видны только платы на шине (опрос адреса по кругу);
+- сброс адресов: подключённым платам - заводской 0x6A с проверкой, что старый
+  адрес молчит; список очищается; адрес платы, которой не было на шине,
+  остаётся занятым, пока она не появится; назначение заново - с П1;
+- несколько плат на одном адресе (разные seed) - мастер останавливается.
 """
 
 from __future__ import annotations
@@ -124,6 +129,8 @@ class _AddrStub(AppControllerBoardAddressingMixin, _MbStub):
         self.now = 1000.0
         self.boards: list[_Board] = []
         self.sent: list[tuple[int, list[int]]] = []
+        self.bus_queue: list[tuple[int, list[int]]] = []
+        self.delivering = False
         self.log: list[str] = []
         self._init_board_addressing_state()
 
@@ -142,6 +149,8 @@ class _AddrStub(AppControllerBoardAddressingMixin, _MbStub):
         dst = int(parsed.dst) & 0xFF
         request = list(frame[1:1 + (frame[0] & 0x0F)])
         functional = ((int(parsed.pgn) >> 8) & 0xFF) == 0xDB
+        # Как на шине: запрос получают все платы сразу, их ответы приходят после.
+        replies = []
         for board in list(self.boards):
             if not functional and board.sa != dst:
                 continue
@@ -156,7 +165,19 @@ class _AddrStub(AppControllerBoardAddressingMixin, _MbStub):
                 # Ответ на запись адреса прибор шлёт уже с нового адреса.
                 src = board.sa if request[0] == 0x2E and answer[0] != 0x7F else old_sa
                 payload = [len(answer)] + answer + [0xAA] * (7 - len(answer))
-                self._handle_board_addressing_frame((0x18 << 24) | (0xDA << 16) | (TESTER << 8) | src, payload)
+                replies.append(((0x18 << 24) | (0xDA << 16) | (TESTER << 8) | src, payload))
+        # Общая очередь кадров шины: ответ на запрос, отправленный из обработчика ответа, приходит после
+        # уже стоящих в очереди ответов (как второй seed раньше ответа на ключ).
+        self.bus_queue.extend(replies)
+        if self.delivering:
+            return True
+        self.delivering = True
+        try:
+            while self.bus_queue:
+                identifier, payload = self.bus_queue.pop(0)
+                self._handle_board_addressing_frame(identifier, payload)
+        finally:
+            self.delivering = False
         return True
 
     def broadcast(self):
@@ -483,3 +504,72 @@ def test_all_boards_traffic_is_one_functional_command(tmp_path: Path, monkeypatc
     assert (ident >> 8) & 0xFFFF == 0xDBFF and frame[:4] == [0x03, 0x28, 0x82, 0x01]
     assert all(board.comm_mode == 0x02 and board.comm_on for board in boards)
     assert all(card["comm"] == 0x02 for card in stub._addr_view()["cards"])
+
+
+def test_only_boards_on_the_bus_are_shown(tmp_path: Path, monkeypatch):
+    stub, boards = _addressed(tmp_path, monkeypatch, count=3)
+    stub._addr_set_visible(True)
+    stub.run(3.0)
+    view = stub._addr_view()
+    assert [card["saText"] for card in view["cards"]] == ["0x81", "0x82", "0x83"] and not view["absent"]
+    stub.boards.remove(boards[1])
+    stub.run(8.0)
+    view = stub._addr_view()
+    assert [card["saText"] for card in view["cards"]] == ["0x81", "0x83"]
+    assert view["absent"] == ["«П2» (0x82)"] and view["listed"] == 3
+    stub.boards.append(boards[1])
+    stub.run(3.0)
+    assert len(stub._addr_view()["cards"]) == 3
+    stub._addr_set_visible(False)
+    assert len(stub._addr_view()["cards"]) == 3, "раздел закрыт - фильтра нет"
+
+
+def test_reset_returns_factory_address_and_reassigns_in_order(tmp_path: Path, monkeypatch):
+    stub, boards = _addressed(tmp_path, monkeypatch, count=3)
+    stub._addr_set_visible(True)
+    stub.boards.remove(boards[2])
+    stub.run(8.0)
+    ok, text = stub._addr_reset_start()
+    assert ok, text
+    stub.run(8.0)
+    assert boards[0].sa == 0x6A and boards[1].sa == 0x6A and boards[0].eeprom_sa == 0x6A
+    assert stub._mb_boards == [] and stub._addr_reserved == {0x83}
+    assert not stub._addr_active and "Отключите все платы" in stub._addr_status
+    assert "0x83" in stub._addr_status, "сказано, что плата 0x83 не сброшена"
+
+    # Назначение заново: платы по одной, отсутствовавшая при сбросе приходит со своим 0x83.
+    stub.boards = []
+    for board in boards[:2]:
+        board.power_cycle()
+    assert stub._addr_start("81")[0]
+    for board in (boards[1], boards[0], boards[2]):
+        board.power_cycle()
+        _connect_and_wait(stub, board)
+    assert (boards[1].sa, boards[0].sa, boards[2].sa) == (0x81, 0x82, 0x84), "0x83 обойдён, пока его плата не пришла"
+    assert [(b["sa"], b["name"]) for b in stub._mb_boards] == [(0x81, "П1"), (0x82, "П2"), (0x84, "П3")]
+    assert stub._addr_reserved == set()
+
+
+def test_reset_survives_a_board_that_refuses(tmp_path: Path, monkeypatch):
+    stub, boards = _addressed(tmp_path, monkeypatch, count=2)
+    stub._addr_set_visible(True)
+    stub.run(3.0)
+    boards[0].refuse[0x2E] = 0x22
+    assert stub._addr_reset_start()[0]
+    stub.run(3.0)
+    assert stub._addr_stage == "failed" and stub._addr_job == "reset"
+    assert stub._addr_skip()
+    stub.run(4.0)
+    assert boards[0].sa == 0x81 and boards[1].sa == 0x6A
+    assert stub._addr_reserved == {0x81} and stub._mb_boards == []
+
+
+def test_several_boards_on_one_address_stop_the_wizard(tmp_path: Path, monkeypatch):
+    stub = _stub(tmp_path, monkeypatch)
+    assert stub._addr_start("")[0]
+    first, second = _Board(0x6A, seed=0x1111), _Board(0x6A, seed=0x2222)
+    stub.boards += [first, second]
+    stub.run(4.0)
+    assert stub._addr_stage == "failed" and "несколько плат" in stub._addr_status
+    assert first.sa == 0x6A and second.sa == 0x6A, "ничего не записано"
+    assert stub._addr_failed_stage == "seed"

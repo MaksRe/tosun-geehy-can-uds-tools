@@ -3651,6 +3651,18 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         if not ok:
             self.infoMessage.emit("Адрес платы", text[:1].upper() + text[1:] + ".")
 
+    @Slot(bool)
+    def setBoardAddressingVisible(self, visible):
+        """Цель функции в признаке открытого раздела «Адреса плат»: пока он открыт, видны только платы на шине."""
+        self._addr_set_visible(bool(visible))
+
+    @Slot()
+    def resetBoardAddresses(self):
+        """Цель функции в сбросе адресов подключённых плат к заводскому и очистке списка - назначение заново."""
+        ok, text = self._addr_reset_start()
+        if not ok:
+            self.infoMessage.emit("Сброс адресов", text[:1].upper() + text[1:] + ".")
+
     @Slot(int, str)
     def renameAddressedBoard(self, sa, name):
         """Цель функции в смене имени платы из её карточки."""

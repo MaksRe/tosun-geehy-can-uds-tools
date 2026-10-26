@@ -79,7 +79,9 @@ Card {
             if (addr.active)
                 return (addr.candidate ? "Настраиваю " + addr.candidate + " → " + addr.newSa : "Жду новую плату")
                        + " · готово плат: " + boards
-            return boards > 0 ? "Плат с адресами: " + boards : "Каждой плате свой адрес на шине"
+            if (addr.resetting)
+                return "Сброс адресов: " + (addr.candidate || "")
+            return (addr.listed || 0) > 0 ? "Плат в списке: " + addr.listed : "Каждой плате свой адрес на шине"
         }
 
         if (index === 4) {
