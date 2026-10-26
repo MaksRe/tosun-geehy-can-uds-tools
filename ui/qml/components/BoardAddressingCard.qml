@@ -1001,13 +1001,6 @@ Card {
                       : "Пока ни одной. Запустите мастер и подключите первую плату: после настройки она появится здесь."
                 wrapMode: Text.WordWrap
             }
-            Caption {
-                visible: (root.addr.absent || []).length > 0
-                Layout.fillWidth: true
-                text: "Нет на шине (не отвечают 6 с): " + (root.addr.absent || []).join(", ")
-                color: "#b45309"
-                wrapMode: Text.WordWrap
-            }
             RowLayout {
                 visible: (root.addr.reserved || []).length > 0
                 Layout.fillWidth: true
@@ -1034,6 +1027,99 @@ Card {
                 Repeater {
                     model: root.addr.cards || []
                     BoardCard {}
+                }
+            }
+
+            // Платы с назначенным адресом, которых сейчас нет на шине: не пропадают, а ждут здесь.
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.topMargin: 6
+                visible: (root.addr.offline || []).length > 0
+                spacing: 8
+
+                Text {
+                    text: (root.addr.checking ? "Проверяю" : "Назначены, сейчас не на шине")
+                    color: root.textMain
+                    font.pixelSize: 14
+                    font.bold: true
+                    font.family: "Bahnschrift"
+                }
+                Caption { text: String((root.addr.offline || []).length) }
+                InfoMark {
+                    tip: "Адрес этим платам назначен и сохранён в плате и в списке. Плата считается отключённой, "
+                         + "если не ответила на два запроса подряд. Подключите её - карточка с показаниями появится "
+                         + "через 1-2 с."
+                }
+                Item { Layout.fillWidth: true }
+            }
+
+            Flow {
+                Layout.fillWidth: true
+                visible: (root.addr.offline || []).length > 0
+                spacing: 10
+
+                Repeater {
+                    model: root.addr.offline || []
+
+                    Rectangle {
+                        id: offlineCard
+                        required property var modelData
+                        width: 260
+                        height: offlineLayout.implicitHeight + 20
+                        radius: 10
+                        color: "#f8fafc"
+                        border.width: 1
+                        border.color: "#e2e8f0"
+
+                        ColumnLayout {
+                            id: offlineLayout
+                            anchors.fill: parent
+                            anchors.margins: 10
+                            spacing: 4
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 6
+
+                                Text {
+                                    text: offlineCard.modelData.name || offlineCard.modelData.saText
+                                    color: "#475569"
+                                    font.pixelSize: 14
+                                    font.bold: true
+                                    font.family: "Bahnschrift"
+                                    elide: Text.ElideRight
+                                    Layout.maximumWidth: 110
+                                }
+                                Chip {
+                                    text: offlineCard.modelData.saText
+                                    fg: "#475569"
+                                    bg: "#e2e8f0"
+                                }
+                                Item { Layout.fillWidth: true }
+                                Chip {
+                                    text: offlineCard.modelData.checking ? "проверяю" : "нет на шине"
+                                    fg: "#94a3b8"
+                                    bg: "#f1f5f9"
+                                }
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: offlineCard.modelData.history
+                                color: root.textSoft
+                                font.pixelSize: 11
+                                font.family: "Bahnschrift"
+                                elide: Text.ElideRight
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: "Трафик: " + offlineCard.modelData.commText
+                                color: root.textSoft
+                                font.pixelSize: 11
+                                font.family: "Bahnschrift"
+                                elide: Text.ElideRight
+                            }
+                        }
+                    }
                 }
             }
 

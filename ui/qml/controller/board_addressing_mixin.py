@@ -44,10 +44,12 @@
 
 НА ШИНЕ ЛИ ПЛАТА
 Пока раздел открыт, программа по кругу спрашивает адрес у каждой платы списка
-(чтение 0x0011, раз в 0,4 с одной плате): плата на шине, если за последние 6 с
-ответила на любой запрос или передавала кадры J1939. Карточки показываются
-только для плат на шине (плата с выключенной передачей молчит, поэтому нужен
-именно запрос).
+(чтение 0x0011, раз в 0,4 с одной плате; плата с выключенной передачей молчит,
+поэтому нужен именно запрос). Плата считается отключённой, только если не
+ответила на два таких запроса подряд: паузы опроса (пока мастер работает с
+другой платой) её не «теряют». Полные карточки - у плат на шине; платы, которым
+адрес назначен, но которых сейчас нет на шине, не пропадают, а показываются
+отдельной группой компактных карточек.
 
 СБРОС АДРЕСОВ
 «Сбросить адреса» возвращает каждой подключённой плате списка заводской адрес
@@ -165,6 +167,9 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
     # Опрос «на шине ли»: одной плате раз в столько секунд; плату, ответившую недавно, не спрашиваем.
     ADDR_PING_EVERY_S = 0.4
     ADDR_PING_FRESH_S = 2.0
+    # Ответ на запрос «на шине ли» ждём столько; столько запросов подряд без ответа - плата отключена.
+    ADDR_PING_ANSWER_S = 1.0
+    ADDR_PING_MISSES = 2
     # Сброс: сколько старый адрес должен молчать после записи заводского, с.
     ADDR_GONE_S = 1.2
     ADDR_TICK_MS = 100
@@ -214,6 +219,9 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         self._addr_ping_index = 0
         self._addr_ping_s = 0.0
         self._addr_pinged: dict[int, float] = {}
+        # Запросы «на шине ли», ждущие ответа, и сколько подряд осталось без ответа.
+        self._addr_ping_wait: dict[int, float] = {}
+        self._addr_misses: dict[int, int] = {}
         # Сброс адресов: очередь плат и адреса плат, которых при сбросе не было на шине.
         self._addr_reset_queue: list[int] = []
         self._addr_probe: dict | None = None
@@ -439,6 +447,7 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
     def _addr_note_traffic(self, src: int, now: float):
         """Цель функции в учёте кадров J1939 платы, затем видно, передаёт ли она и сколько кадров в секунду."""
         self._addr_seen[src] = now
+        self._addr_misses[src] = 0
         stamps = self._addr_frames.setdefault(src, [])
         stamps.append(now)
         if len(stamps) > 64:
@@ -469,6 +478,8 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
             return
         # Любой ответ по адресу платы: она на шине (даже с выключенной передачей J1939).
         self._addr_answered[src] = now
+        self._addr_misses[src] = 0
+        self._addr_ping_wait.pop(src, None)
         comm = self._addr_comm
         if comm is not None and comm.get("stage") == "ack" and src == comm["sa"] and \
                 (body[0] == 0x68 or (body[0] == 0x7F and len(body) >= 2 and body[1] == 0x28)):
@@ -1158,6 +1169,21 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         return (answered is not None and now - answered <= self.ADDR_PRESENT_S) or \
             (seen is not None and now - seen <= self.ADDR_SEEN_S)
 
+    def _addr_shown_present(self, sa: int, now: float) -> bool:
+        """Цель функции в признаке «плата на шине» для окна: отключённой считается только не ответившая дважды.
+
+        Время с последнего ответа здесь не решает: пока мастер работает с другой
+        платой, опрос стоит, а плата с выключенной передачей молчит - по таймеру
+        она пропадала бы с экрана, хотя на шине.
+        """
+        sa = int(sa)
+        seen = self._addr_seen.get(sa)
+        if seen is not None and now - seen <= self.ADDR_SEEN_S:
+            return True
+        if self._addr_misses.get(sa, 0) >= self.ADDR_PING_MISSES:
+            return False
+        return sa in self._addr_answered
+
     def _addr_first_round_s(self) -> float:
         """Цель функции во времени первого круга опроса, затем до его конца отсутствующие не объявляются."""
         count = len(getattr(self, "_mb_boards", []) or [])
@@ -1165,7 +1191,15 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
 
     def _addr_presence_tick(self, now: float):
         """Цель функции в опросе «на шине ли» по кругу, затем в окне видны только подключённые платы."""
-        if not self._addr_visible or now - self._addr_ping_s < self.ADDR_PING_EVERY_S:
+        if not self._addr_visible:
+            return
+        # Запрос без ответа за 1 с - промах; два промаха подряд - плата отключена.
+        for sa, sent in list(self._addr_ping_wait.items()):
+            if now - sent > self.ADDR_PING_ANSWER_S:
+                self._addr_ping_wait.pop(sa, None)
+                self._addr_misses[sa] = self._addr_misses.get(sa, 0) + 1
+                self._addr_changed()
+        if now - self._addr_ping_s < self.ADDR_PING_EVERY_S:
             return
         boards = [int(board["sa"]) for board in getattr(self, "_mb_boards", []) or []]
         if not boards or self._addr_stepping() or self._addr_info_sa is not None:
@@ -1186,8 +1220,12 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
             recent = max(self._addr_answered.get(sa, -1e9), self._addr_seen.get(sa, -1e9))
             if now - recent < self.ADDR_PING_FRESH_S and sa in self._addr_pinged:
                 continue
+            if sa in self._addr_ping_wait:
+                # Прежний запрос ещё ждёт ответа: новый сбросил бы его ожидание, и промах не засчитался бы.
+                continue
             self._addr_ping_s = now
             self._addr_pinged[sa] = now
+            self._addr_ping_wait[sa] = now
             note_background_request(self)
             self._addr_send(sa, [0x22, 0x00, 0x11])
             return
@@ -1285,7 +1323,8 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
             remove(int(sa))
         self._addr_info.pop(int(sa), None)
         self._addr_done_sas.discard(int(sa))
-        for table in (self._addr_seen, self._addr_frames, self._addr_requiet_s, self._addr_answered, self._addr_pinged):
+        for table in (self._addr_seen, self._addr_frames, self._addr_requiet_s, self._addr_answered, self._addr_pinged,
+                      self._addr_ping_wait, self._addr_misses):
             table.pop(int(sa), None)
 
     def _addr_finish_reset_board(self):
@@ -1342,16 +1381,26 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         queued = {sa for sa, _mode in self._addr_comm_queue}
         cards = []
         absent = []
+        offline = []
         checking = self._addr_visible and now - self._addr_visible_since < self._addr_first_round_s()
         for board in getattr(self, "_mb_boards", []) or []:
             sa = int(board["sa"])
-            # Пока раздел открыт, видны только платы на шине; остальные - строкой «нет на шине».
-            if self._addr_visible and not self._addr_present(sa, now) and not (
+            info = self._addr_info.get(sa, {})
+            # Пока раздел открыт, полные карточки - у плат на шине; остальные - компактной группой ниже.
+            if self._addr_visible and not self._addr_shown_present(sa, now) and not (
                     self._addr_job in ("readdress", "reset") and self._addr_candidate_sa == sa):
                 if not checking:
                     absent.append(f"«{board.get('name', '')}» (0x{sa:02X})")
+                old = info.get("oldSa")
+                offline.append({
+                    "sa": sa, "saText": f"0x{sa:02X}", "name": str(board.get("name", "")),
+                    "history": (f"прежний 0x{int(old):02X}" if old is not None else "история неизвестна")
+                               + (f" · {info['addressedAt']}" if info.get("addressedAt") else ""),
+                    "commText": COMM_STATE_TEXT.get(int(info["comm"]), "—") if info.get("comm") is not None
+                    else "трафик не задавался",
+                    "checking": bool(checking),
+                })
                 continue
-            info = self._addr_info.get(sa, {})
             status = info.get("profileStatus")
             crc = info.get("profileCrc")
             old = info.get("oldSa")
@@ -1408,7 +1457,8 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
             "readdress": self._addr_job == "readdress",
             "suggestName": self._addr_pending_name if self._addr_stage == "ask" else "",
             "cards": cards, "boardNumber": int(self._addr_board_number), "editable": bool(editable),
-            "absent": absent, "checking": bool(checking), "listed": len(getattr(self, "_mb_boards", []) or []),
+            "absent": absent, "offline": offline, "checking": bool(checking),
+            "listed": len(getattr(self, "_mb_boards", []) or []),
             "resetting": self._addr_job == "reset", "factorySa": f"0x{FACTORY_SA:02X}",
             "reserved": [f"0x{sa:02X}" for sa in sorted(self._addr_reserved)],
             "commModes": [{"mode": mode, "button": button, "state": state, "hint": hint}

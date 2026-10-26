@@ -21,7 +21,10 @@
   остаётся в списке камеры со своим именем), смена имени, любой из четырёх
   режимов трафика 0x28 с подтверждением платы и проверкой по шине;
 - история адреса и режим трафика переживают перезапуск программы;
-- пока раздел открыт, видны только платы на шине (опрос адреса по кругу);
+- пока раздел открыт, полные карточки - у плат на шине (опрос адреса по
+  кругу); плата с назначенным адресом, отключённая от шины, не пропадает, а
+  уходит в группу «не на шине»; отключённой плата считается только после двух
+  запросов без ответа, долгий шаг мастера её не прячет;
 - сброс адресов: подключённым платам - заводской 0x6A с проверкой, что старый
   адрес молчит; список очищается; адрес платы, которой не было на шине,
   остаётся занятым, пока она не появится; назначение заново - с П1;
@@ -617,3 +620,35 @@ def test_device_seen_long_ago_does_not_block_an_address(tmp_path: Path, monkeypa
     assert stub._addr_readdress(0x81, "95")[0]
     stub.run(4.0)
     assert board.sa == 0x95
+
+
+def test_boards_swapped_one_by_one_are_all_kept(tmp_path: Path, monkeypatch):
+    """Плата настроена и отсоединена, подключена следующая: прежняя не «затирается», а ждёт в группе «не на шине»."""
+    stub = _stub(tmp_path, monkeypatch)
+    stub._addr_set_visible(True)
+    assert stub._addr_start("")[0]
+    boards = [_Board(0x6A, seed=0x3000 + n) for n in range(3)]
+    for board in boards:
+        stub.boards = [board]
+        stub.run(10.0)
+    assert [board.sa for board in boards] == [0x81, 0x82, 0x83]
+    view = stub._addr_view()
+    assert [card["saText"] for card in view["cards"]] == ["0x83"]
+    assert [(item["saText"], item["name"]) for item in view["offline"]] == [("0x81", "П1"), ("0x82", "П2")]
+    assert "прежний 0x6A" in view["offline"][0]["history"]
+    stub.boards = boards
+    stub.run(4.0)
+    assert [card["saText"] for card in stub._addr_view()["cards"]] == ["0x81", "0x82", "0x83"]
+
+
+def test_long_wizard_step_does_not_hide_quiet_boards(tmp_path: Path, monkeypatch):
+    stub, boards = _addressed(tmp_path, monkeypatch, count=2)
+    stub._addr_set_visible(True)
+    stub.run(3.0)
+    assert len(stub._addr_view()["cards"]) == 2
+    stub.ADDR_STEP_TIMEOUT_S = 6.0
+    boards[0].silent_steps.add(0x10)
+    assert stub._addr_readdress(0x81, "A0")[0]
+    stub.run(12.0)
+    assert stub._addr_stage == "session", "шаг всё ещё идёт"
+    assert [card["saText"] for card in stub._addr_view()["cards"]] == ["0x81", "0x82"], "тихая 0x82 не пропала"
