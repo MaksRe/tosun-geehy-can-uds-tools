@@ -28,7 +28,10 @@
 - сброс адресов: подключённым платам - заводской 0x6A с проверкой, что старый
   адрес молчит; список очищается; адрес платы, которой не было на шине,
   остаётся занятым, пока она не появится; назначение заново - с П1;
-- несколько плат на одном адресе (разные seed) - мастер останавливается.
+- несколько плат на одном адресе (разные seed) - мастер останавливается;
+- новая плата пришла с адресом уже настроенной платы: мастер замечает два
+  ответа на один запрос и разделяет платы (доступ - только одной по её seed);
+  какая переехала - по трафику; обе остаются в списке со своими адресами.
 """
 
 from __future__ import annotations
@@ -652,3 +655,61 @@ def test_long_wizard_step_does_not_hide_quiet_boards(tmp_path: Path, monkeypatch
     stub.run(12.0)
     assert stub._addr_stage == "session", "шаг всё ещё идёт"
     assert [card["saText"] for card in stub._addr_view()["cards"]] == ["0x81", "0x82"], "тихая 0x82 не пропала"
+
+
+def _known_board_and_newcomer(tmp_path, monkeypatch, newcomer_first: bool):
+    stub = _stub(tmp_path, monkeypatch)
+    stub._addr_set_visible(True)
+    assert stub._addr_start("")[0]
+    known = _Board(0x6A, seed=0x1111)
+    _connect_and_wait(stub, known)
+    assert known.sa == 0x81 and not known.comm_on
+    # Новая плата уже носит 0x81 (с прошлого раза) и после включения передаёт кадры.
+    newcomer = _Board(0x81, seed=0x2222)
+    stub.boards = [newcomer, known] if newcomer_first else [known, newcomer]
+    stub.run(15.0)
+    return stub, known, newcomer
+
+
+def test_newcomer_with_a_taken_address_gets_its_own(tmp_path: Path, monkeypatch):
+    stub, known, newcomer = _known_board_and_newcomer(tmp_path, monkeypatch, newcomer_first=True)
+    assert stub._addr_stage == "wait", stub._addr_status
+    assert (known.sa, newcomer.sa) == (0x81, 0x82), "переехала новая плата"
+    assert not known.comm_on and not newcomer.comm_on, "передача выключена у обеих"
+    assert known.session == 0x01 and newcomer.session == 0x01
+    assert [(b["sa"], b["name"]) for b in stub._mb_boards] == [(0x81, "П1"), (0x82, "П2")]
+    assert any("разделены" in line for line in stub.log)
+
+
+def test_known_board_moves_and_newcomer_keeps_the_address(tmp_path: Path, monkeypatch):
+    stub, known, newcomer = _known_board_and_newcomer(tmp_path, monkeypatch, newcomer_first=False)
+    assert stub._addr_stage == "wait", stub._addr_status
+    assert (known.sa, newcomer.sa) == (0x82, 0x81), "переехала настроенная, новая осталась на 0x81"
+    assert not known.comm_on and not newcomer.comm_on
+    names = {b["sa"]: b["name"] for b in stub._mb_boards}
+    assert names == {0x82: "П1", 0x81: "П2"}, "карточка П1 ушла вместе со своей платой"
+
+
+def test_restart_of_a_known_board_is_not_a_conflict(tmp_path: Path, monkeypatch):
+    stub = _stub(tmp_path, monkeypatch)
+    assert stub._addr_start("")[0]
+    board = _Board(0x6A)
+    _connect_and_wait(stub, board)
+    board.power_cycle()
+    stub.run(3.0)
+    assert board.sa == 0x81 and not board.comm_on and stub._addr_stage == "wait"
+    assert [b["sa"] for b in stub._mb_boards] == [0x81]
+    assert not any("разделены" in line for line in stub.log)
+
+
+def test_identical_seeds_cannot_be_split(tmp_path: Path, monkeypatch):
+    stub = _stub(tmp_path, monkeypatch)
+    assert stub._addr_start("")[0]
+    known = _Board(0x6A, seed=0x1111)
+    _connect_and_wait(stub, known)
+    newcomer = _Board(0x81, seed=0x1111)
+    stub.boards.append(newcomer)
+    stub.run(5.0)
+    assert stub._addr_stage == "failed" and "одинаковый seed" in stub._addr_status
+    assert known.sa == 0x81 and newcomer.sa == 0x81, "ничего не записано"
+    assert stub._addr_skip() and stub._addr_stage == "wait"

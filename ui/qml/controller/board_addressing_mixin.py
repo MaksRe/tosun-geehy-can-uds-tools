@@ -51,6 +51,20 @@
 адрес назначен, но которых сейчас нет на шине, не пропадают, а показываются
 отдельной группой компактных карточек.
 
+ДВЕ ПЛАТЫ НА ОДНОМ АДРЕСЕ
+Если от адреса уже настроенной платы снова пошли кадры J1939, это либо та же
+плата после перезапуска питания, либо новая плата, пришедшая с тем же адресом.
+Мастер спрашивает адрес (0x0011) и считает ответы: один - перезапуск (передача
+выключается, как раньше), два - конфликт. Тогда он разделяет платы: обеим -
+расширенный сеанс и запрос seed (у плат он разный: считается от времени работы
+платы), ключ - по первому seed, поэтому доступ открывается только одной плате,
+и новый адрес записывает только она; проверка - по новому адресу отвечает ровно
+одна плата; обеим - обычный сеанс. Какая плата переехала, видно по трафику:
+новая передаёт кадры J1939, настроенная молчит. Переехала новая - она
+добавляется в список с новым адресом и выключенной передачей; переехала
+настроенная - её карточка переходит на новый адрес, а новую плату на старом
+адресе мастер настраивает обычным порядком.
+
 СБРОС АДРЕСОВ
 «Сбросить адреса» возвращает каждой подключённой плате списка заводской адрес
 0x6A (сеанс, доступ, запись 0x0011) и проверяет, что по старому адресу она
@@ -95,6 +109,18 @@ ADDR_STEPS = (
     ("gone", "Старый адрес больше не отвечает"),
 )
 ADDR_STEP_TITLES = dict(ADDR_STEPS)
+# Шаги разделения двух плат с одним адресом.
+DUP_STEPS = (
+    ("dup_probe", "Две платы на одном адресе"),
+    ("dup_session", "Расширенный сеанс обеим"),
+    ("dup_seed", "Получены разные seed"),
+    ("dup_key", "Доступ открыт одной плате"),
+    ("dup_write", "Новый адрес записан одной плате"),
+    ("dup_verify", "По новому адресу отвечает одна плата"),
+    ("dup_default", "Обычный сеанс обеим"),
+    ("dup_observe", "Определено, какая плата новая"),
+)
+DUP_STEP_TITLES = dict(DUP_STEPS)
 # Шаги смены адреса уже настроенной платы: без поиска и без выключения передачи.
 READDRESS_STEPS = ("identify", "session", "seed", "key", "write", "verify", "default")
 # Шаги сброса адреса к заводскому: проверка - старый адрес молчит (по заводскому могут ответить несколько плат).
@@ -172,6 +198,12 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
     ADDR_PING_MISSES = 2
     # Сброс: сколько старый адрес должен молчать после записи заводского, с.
     ADDR_GONE_S = 1.2
+    # Разделение двух плат с одним адресом: сколько собирать ответы на запрос, с; попыток на шаг;
+    # сколько смотреть на трафик, чтобы понять, какая плата новая, с; повторная проверка адреса не чаще, с.
+    ADDR_DUP_WAIT_S = 0.5
+    ADDR_DUP_ATTEMPTS = 3
+    ADDR_DUP_OBSERVE_S = 1.5
+    ADDR_DUP_RECHECK_S = 10.0
     ADDR_TICK_MS = 100
 
     # ------------------------------------------------------------------ состояние
@@ -225,6 +257,12 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         # Сброс адресов: очередь плат и адреса плат, которых при сбросе не было на шине.
         self._addr_reset_queue: list[int] = []
         self._addr_probe: dict | None = None
+        # Две платы на одном адресе: ход разделения, когда трафик адреса появился и когда его проверяли.
+        self._addr_dup: dict | None = None
+        self._addr_onset: dict[int, float] = {}
+        self._addr_dup_checked: dict[int, float] = {}
+        # Адрес, который новая плата сохраняет (она осталась на нём после разделения).
+        self._addr_keep_sa: int | None = None
         self._addr_reset_done: list[str] = []
         self._addr_reserved: set[int] = set()
         self._addr_load_settings()
@@ -300,11 +338,11 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
 
     def _addr_stepping(self) -> bool:
         """Цель функции в признаке шага с платой (адрес или выключение передачи), затем ничто не вклинивается."""
-        return bool(self._addr_active) and self._addr_stage in ADDR_REQUEST_STEPS + ("check_quiet", "probe")
+        return bool(self._addr_active) and self._addr_stage in ADDR_REQUEST_STEPS + ("check_quiet", "probe", "dup")
 
     def _addr_exchange_busy(self) -> bool:
         """Цель функции в признаке обмена мастера с платой, затем другие опросы не вклиниваются в него."""
-        stepping = bool(self._addr_active) and self._addr_stage in ADDR_REQUEST_STEPS + ("probe",)
+        stepping = bool(self._addr_active) and self._addr_stage in ADDR_REQUEST_STEPS + ("probe", "dup")
         comm_waiting = self._addr_comm is not None and self._addr_comm.get("stage") == "ack"
         return stepping or comm_waiting or self._addr_info_sa is not None or self._addr_ping_pending()
 
@@ -446,6 +484,10 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
 
     def _addr_note_traffic(self, src: int, now: float):
         """Цель функции в учёте кадров J1939 платы, затем видно, передаёт ли она и сколько кадров в секунду."""
+        last = self._addr_seen.get(src)
+        if last is None or now - last > self.ADDR_SEEN_S:
+            # Адрес начал передавать (включение питания, новая плата): повод проверить, не две ли там платы.
+            self._addr_onset[src] = now
         self._addr_seen[src] = now
         self._addr_misses[src] = 0
         stamps = self._addr_frames.setdefault(src, [])
@@ -480,6 +522,11 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         self._addr_answered[src] = now
         self._addr_misses[src] = 0
         self._addr_ping_wait.pop(src, None)
+        dup = self._addr_dup
+        if dup is not None and self._addr_stage == "dup" and src in (dup["sa"], dup.get("new")):
+            # Разделение: ответы собираются целиком - их может быть два на один запрос.
+            dup["rx"].append((src, body))
+            return
         comm = self._addr_comm
         if comm is not None and comm.get("stage") == "ack" and src == comm["sa"] and \
                 (body[0] == 0x68 or (body[0] == 0x7F and len(body) >= 2 and body[1] == 0x28)):
@@ -576,16 +623,19 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         if stage == "probe":
             self._addr_probe_tick(now)
             return
+        if stage == "dup":
+            self._addr_dup_tick(now)
+            return
         if stage == "gone":
             if now - self._addr_sent_s >= self.ADDR_GONE_S:
                 self._addr_steps["gone"] = "ok"
                 self._addr_finish_reset_board()
             return
         if stage == "wait":
+            if self._addr_check_known_traffic(now):
+                return
             self._addr_requiet_done(now)
             self._addr_wait_board(now)
-        elif stage == "ask":
-            self._addr_requiet_done(now)
         elif stage == "check_quiet":
             self._addr_check_quiet(now)
         elif stage in ADDR_REQUEST_STEPS:
@@ -657,8 +707,15 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         cand = fresh[0]
         self._addr_job = "new"
         self._addr_candidate_sa = cand
-        self._addr_factory_sas.add(cand)
-        self._addr_new_sa = self._addr_next_free_sa()
+        if cand == FACTORY_SA or cand < int(self._addr_start_sa):
+            # Заводской адрес новых плат в план не берётся; адрес из плана (плата пришла с ним) - снова свободен.
+            self._addr_factory_sas.add(cand)
+        if cand == self._addr_keep_sa:
+            # После разделения новая плата осталась на освободившемся адресе: он и остаётся за ней.
+            self._addr_new_sa = cand
+            self._addr_keep_sa = None
+        else:
+            self._addr_new_sa = self._addr_next_free_sa()
         if self._addr_new_sa is None:
             self._addr_fail("Свободных адресов не осталось.")
             return
@@ -1093,6 +1150,7 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         self._addr_new_sa = None
         self._addr_reset_queue = []
         self._addr_probe = None
+        self._addr_dup = None
         text = "Мастер остановлен."
         if was_stepping:
             text += " Плата, с которой шла работа, могла остаться с прежним адресом - проверьте её."
@@ -1103,6 +1161,10 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         if not self._addr_active or self._addr_stage != "failed":
             return False
         stage = self._addr_failed_stage or "wait"
+        if self._addr_job == "conflict" and self._addr_candidate_sa is not None:
+            # Разделение начинается заново - с проверки, сколько плат отвечает по адресу.
+            self._addr_dup_start(int(self._addr_candidate_sa))
+            return True
         if stage not in ADDR_REQUEST_STEPS + ("check_quiet",) or self._addr_candidate_sa is None:
             self._addr_stage = "wait"
             self._addr_set_status("Жду плату...", "#0f6ab4")
@@ -1125,6 +1187,12 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
             self._addr_reset_done.append(f"{self._addr_board_name(sa)} пропущена, её адрес оставлен занятым")
             self._addr_reset_drop(sa)
             self._addr_reset_next()
+            return True
+        if self._addr_job == "conflict":
+            # Разделение отложено: мастер ждёт дальше, адрес перепроверится не раньше чем через 10 с.
+            self._addr_dup_done()
+            self._addr_set_status("Разделение отложено. Отключите одну из плат с одинаковым адресом и подключите её "
+                                  "снова - мастер назначит ей свой адрес.", "#d97706")
             return True
         if self._addr_job == "readdress":
             # Смена адреса из карточки отменена: мастер возвращается к тому, что было.
@@ -1229,6 +1297,229 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
             note_background_request(self)
             self._addr_send(sa, [0x22, 0x00, 0x11])
             return
+
+    # ------------------------------------------------------------------ две платы на одном адресе
+
+    def _addr_check_known_traffic(self, now: float) -> bool:
+        """Цель функции в проверке адреса настроенной платы, который снова передаёт: перезапуск это или вторая плата.
+
+        Возвращает True, если началась проверка (такт мастера на этом заканчивается).
+        """
+        for sa in sorted(self._addr_done_sas):
+            stamp = self._addr_seen.get(sa)
+            if stamp is None or now - stamp > self.ADDR_SEEN_S:
+                continue
+            onset = self._addr_onset.get(sa, stamp)
+            checked = self._addr_dup_checked.get(sa)
+            if checked is not None and (onset <= checked or now - checked < self.ADDR_DUP_RECHECK_S):
+                continue
+            self._addr_dup_start(sa, now)
+            return True
+        return False
+
+    def _addr_dup_start(self, sa: int, now: float | None = None):
+        """Цель функции в начале проверки адреса: запрос 0x0011 и подсчёт ответов."""
+        now = self._addr_clock() if now is None else now
+        self._addr_dup_checked[int(sa)] = now
+        self._addr_job = "conflict"
+        self._addr_stage = "dup"
+        self._addr_candidate_sa = int(sa)
+        self._addr_new_sa = None
+        self._addr_dup = {"sa": int(sa), "new": None, "step": "", "rx": [], "sent": now, "attempt": 0,
+                          "seed": 0, "since": now}
+        self._addr_steps = {key: "" for key, _title in DUP_STEPS}
+        self._addr_dup_send("dup_probe", now)
+
+    def _addr_dup_send(self, step: str, now: float, retry: bool = False):
+        """Цель функции в запросе шага разделения, затем ответы собираются 0,5 с."""
+        dup = self._addr_dup
+        sa, new = dup["sa"], dup.get("new")
+        key = ((dup["seed"] ^ 0xAA55) | dup["seed"]) & 0xFFFF
+        dup["attempt"] = dup["attempt"] + 1 if retry else 1
+        dup["step"] = step
+        dup["rx"] = []
+        dup["sent"] = now
+        self._addr_steps[step] = "run"
+        requests = {
+            "dup_probe": [(sa, [0x22, 0x00, 0x11])],
+            "dup_session": [(sa, [0x10, 0x03])],
+            "dup_seed": [(sa, [0x27, 0x01])],
+            "dup_key": [(sa, [0x27, 0x02, (key >> 8) & 0xFF, key & 0xFF])],
+            "dup_write": [(sa, [0x2E, 0x00, 0x11, int(new or 0) & 0xFF])],
+            "dup_verify": [(new, [0x22, 0x00, 0x11])],
+            "dup_default": [(new, [0x10, 0x01]), (sa, [0x10, 0x01])],
+            "dup_observe": [],
+        }
+        for target, data in requests[step]:
+            self._addr_send(int(target), data)
+        self._addr_changed()
+
+    def _addr_dup_answers(self, src: int, prefix: list[int]) -> list[list[int]]:
+        """Цель функции в ответах шага разделения от адреса src, начинающихся с prefix."""
+        return [body for answer_src, body in self._addr_dup["rx"]
+                if answer_src == src and body[:len(prefix)] == prefix]
+
+    def _addr_dup_retry_or_fail(self, now: float, text: str):
+        """Цель функции в повторе шага разделения, затем после трёх попыток - остановка с причиной."""
+        dup = self._addr_dup
+        if dup["attempt"] < self.ADDR_DUP_ATTEMPTS:
+            self._addr_dup_send(dup["step"], now, retry=True)
+            return
+        self._addr_steps[dup["step"]] = "fail"
+        self._addr_fail(text)
+
+    def _addr_dup_tick(self, now: float):
+        """Цель функции в ходе разделения: по истечении окна ответов - решение и следующий шаг."""
+        dup = self._addr_dup
+        if dup is None or now - dup["sent"] < self.ADDR_DUP_WAIT_S:
+            return
+        sa, step = dup["sa"], dup["step"]
+        if step == "dup_probe":
+            answers = self._addr_dup_answers(sa, [0x62, 0x00, 0x11])
+            if len(answers) >= 2:
+                new = self._addr_next_free_sa()
+                if new is None:
+                    self._addr_fail(f"По адресу 0x{sa:02X} две платы, а свободных адресов не осталось.")
+                    return
+                dup["new"] = new
+                self._addr_new_sa = new
+                self._addr_steps["dup_probe"] = "ok"
+                text = (f"По адресу 0x{sa:02X} отвечают две платы: разделяю - одной из них будет записан "
+                        f"0x{new:02X}...")
+                self._addr_set_status(text, "#d97706")
+                self._addr_log(text, "#d97706")
+                self._addr_dup_send("dup_session", now)
+                return
+            if not answers and dup["attempt"] < 2:
+                self._addr_dup_send("dup_probe", now, retry=True)
+                return
+            # Одна плата (или никто): это перезапуск настроенной платы - как раньше.
+            self._addr_dup_done()
+            self._addr_requiet_s.pop(sa, None)
+            self._addr_requiet_done(now)
+            return
+        if step == "dup_session":
+            if self._addr_dup_answers(sa, [0x50, 0x03]):
+                self._addr_steps[step] = "ok"
+                self._addr_dup_send("dup_seed", now)
+            else:
+                self._addr_dup_retry_or_fail(now, f"Разделение: платы на 0x{sa:02X} не открыли расширенный сеанс.")
+            return
+        if step == "dup_seed":
+            answers = self._addr_dup_answers(sa, [0x67, 0x01])
+            seeds = []
+            for body in answers:
+                if len(body) >= 4:
+                    seed = (body[3] << 8) | body[2]
+                    if seed and seed not in seeds:
+                        seeds.append(seed)
+            if len(seeds) >= 2:
+                dup["seed"] = seeds[0]
+                self._addr_steps[step] = "ok"
+                self._addr_dup_send("dup_key", now)
+            elif len(answers) >= 2:
+                self._addr_steps[step] = "fail"
+                self._addr_fail(f"Платы на 0x{sa:02X} выдали одинаковый seed - разделить их программно нельзя. "
+                                "Отключите одну из них, назначьте ей адрес отдельно и подключите снова.")
+            else:
+                self._addr_dup_retry_or_fail(now, f"Разделение: на запрос доступа ответила не каждая плата на "
+                                                  f"0x{sa:02X}.")
+            return
+        if step == "dup_key":
+            granted = self._addr_dup_answers(sa, [0x67, 0x02])
+            if len(granted) == 1:
+                self._addr_steps[step] = "ok"
+                self._addr_dup_send("dup_write", now)
+            else:
+                # Ключ подошёл не ровно одной плате: доступ запрашивается заново, с новыми seed.
+                dup["key_rounds"] = dup.get("key_rounds", 0) + 1
+                if dup["key_rounds"] < self.ADDR_DUP_ATTEMPTS:
+                    self._addr_steps[step] = ""
+                    self._addr_dup_send("dup_seed", now)
+                else:
+                    self._addr_steps[step] = "fail"
+                    self._addr_fail(f"Разделение: доступ открылся не ровно одной плате на 0x{sa:02X}.")
+            return
+        if step == "dup_write":
+            written = [body for src, body in dup["rx"] if body[:3] == [0x6E, 0x00, 0x11]]
+            if written:
+                self._addr_steps[step] = "ok"
+                self._addr_dup_send("dup_verify", now)
+            else:
+                self._addr_dup_retry_or_fail(now, f"Разделение: ни одна плата не записала адрес 0x{dup['new']:02X}.")
+            return
+        if step == "dup_verify":
+            answers = self._addr_dup_answers(dup["new"], [0x62, 0x00, 0x11, dup["new"]])
+            if len(answers) == 1:
+                self._addr_steps[step] = "ok"
+                self._addr_dup_send("dup_default", now)
+            elif len(answers) >= 2:
+                self._addr_steps[step] = "fail"
+                self._addr_fail(f"По новому адресу 0x{dup['new']:02X} ответили обе платы - разделить их не удалось.")
+            else:
+                self._addr_dup_retry_or_fail(now, f"Разделение: по новому адресу 0x{dup['new']:02X} никто не "
+                                                  "ответил.")
+            return
+        if step == "dup_default":
+            self._addr_steps[step] = "ok"
+            dup["since"] = now
+            self._addr_dup_send("dup_observe", now)
+            return
+        if step == "dup_observe" and now - dup["since"] >= self.ADDR_DUP_OBSERVE_S:
+            self._addr_steps[step] = "ok"
+            self._addr_dup_finish(now)
+
+    def _addr_dup_finish(self, now: float):
+        """Цель функции в итоге разделения: по трафику видно, какая плата переехала, и список правится под это."""
+        dup = self._addr_dup
+        old, new = int(dup["sa"]), int(dup["new"])
+        moved_transmits = self._addr_seen.get(new, -1e9) >= dup["since"]
+        old_name = self._addr_board_name(old)
+        if moved_transmits:
+            # Переехала новая плата (она передаёт кадры): настроенная остаётся на старом адресе.
+            self._addr_board_number += 1
+            name = f"П{self._addr_board_number}"
+            add = getattr(self, "_mb_add_board", None)
+            if add is not None:
+                add(f"0x{new:02X}", name)
+            self._addr_done_sas.add(new)
+            info = self._addr_info.setdefault(new, {})
+            info.update({"oldSa": old, "addressedAt": time.strftime("%d.%m %H:%M")})
+            self._addr_save_settings()
+            self._addr_queue_info(new)
+            self._addr_set_comm(new, 0x01)
+            text = (f"Две платы на 0x{old:02X} разделены: новая плата получила 0x{new:02X} («{name}»), передача "
+                    f"J1939 у неё выключается; плата {old_name} осталась на 0x{old:02X}.")
+        else:
+            # Переехала настроенная плата: её карточка - на новый адрес; новая плата осталась на старом,
+            # и мастер настроит её обычным порядком (её адрес больше не числится настроенным).
+            change = getattr(self, "_mb_change_sa", None)
+            if change is not None:
+                change(old, new)
+            info = self._addr_info.pop(old, {})
+            info["oldSa"] = old
+            info["addressedAt"] = time.strftime("%d.%m %H:%M")
+            self._addr_info[new] = info
+            self._addr_done_sas.discard(old)
+            self._addr_done_sas.add(new)
+            self._addr_keep_sa = old
+            self._addr_save_settings()
+            self._addr_queue_info(new)
+            text = (f"Две платы на 0x{old:02X} разделены: плата {old_name} переехала на 0x{new:02X}; новую плату на "
+                    f"0x{old:02X} мастер настраивает сейчас.")
+        self._addr_dup_done()
+        self._addr_set_status(text, "#16a34a")
+        self._addr_log(text, "#16a34a")
+
+    def _addr_dup_done(self):
+        """Цель функции в возврате мастера к ожиданию плат после проверки или разделения адреса."""
+        self._addr_dup = None
+        self._addr_job = "new"
+        self._addr_stage = "wait"
+        self._addr_candidate_sa = None
+        self._addr_new_sa = None
+        self._addr_steps = {key: "" for key, _title in ADDR_STEPS}
+        self._addr_changed()
 
     # ------------------------------------------------------------------ сброс адресов
 
@@ -1439,14 +1730,18 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
                 else "нет связи с шиной",
                 "readdressing": self._addr_job == "readdress" and self._addr_candidate_sa == sa,
             })
-        if self._addr_job == "readdress":
+        if self._addr_job == "conflict":
+            steps = [{"key": key, "title": title, "state": self._addr_steps.get(key, "")} for key, title in DUP_STEPS]
+            shown = ()
+        elif self._addr_job == "readdress":
             shown = READDRESS_STEPS + ("found", "choose")
         elif self._addr_job == "reset":
             shown = RESET_STEPS
         else:
             shown = tuple(key for key, _title in ADDR_STEPS if key != "gone")
-        steps = [{"key": key, "title": title, "state": self._addr_steps.get(key, "")} for key, title in ADDR_STEPS
-                 if key in shown]
+        if self._addr_job != "conflict":
+            steps = [{"key": key, "title": title, "state": self._addr_steps.get(key, "")} for key, title in ADDR_STEPS
+                     if key in shown]
         return {
             "active": bool(self._addr_active), "stage": self._addr_stage, "status": self._addr_status,
             "statusColor": self._addr_status_color, "steps": steps, "startText": f"0x{int(self._addr_start_sa):02X}",
@@ -1454,7 +1749,7 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
             "newSa": "" if self._addr_new_sa is None else f"0x{self._addr_new_sa:02X}",
             "failed": self._addr_stage == "failed", "waiting": self._addr_stage == "wait",
             "mode": self._addr_mode, "asking": self._addr_stage == "ask",
-            "readdress": self._addr_job == "readdress",
+            "readdress": self._addr_job == "readdress", "conflict": self._addr_job == "conflict",
             "suggestName": self._addr_pending_name if self._addr_stage == "ask" else "",
             "cards": cards, "boardNumber": int(self._addr_board_number), "editable": bool(editable),
             "absent": absent, "offline": offline, "checking": bool(checking),

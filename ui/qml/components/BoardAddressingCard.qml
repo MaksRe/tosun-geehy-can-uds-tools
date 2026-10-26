@@ -817,7 +817,8 @@ Card {
                         spacing: 12
 
                         Text {
-                            text: root.readdress ? "Смена адреса" : "Плата " + (root.addr.boardNumber || 0)
+                            text: root.addr.conflict ? "Две платы на одном адресе"
+                                  : root.readdress ? "Смена адреса" : "Плата " + (root.addr.boardNumber || 0)
                             color: root.textMain
                             font.pixelSize: 15
                             font.bold: true
@@ -936,7 +937,7 @@ Card {
                         SmallButton {
                             visible: !!root.addr.failed
                             Layout.preferredWidth: 140
-                            text: root.readdress ? "Отменить смену" : "Пропустить плату"
+                            text: root.readdress ? "Отменить смену" : root.addr.conflict ? "Отложить" : "Пропустить плату"
                             onClicked: if (root.appController) root.appController.skipBoardAddressingBoard()
                         }
                     }
