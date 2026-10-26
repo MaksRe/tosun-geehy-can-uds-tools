@@ -3627,9 +3627,36 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot()
     def releaseBoardsTraffic(self):
-        """Цель функции в возврате обычной рассылки J1939 всем платам на шине."""
+        """Цель функции в возврате обычного трафика J1939 (RX+TX) всем платам на шине."""
         if not self._addr_release_all():
             self.infoMessage.emit("Адреса плат", "Не удалось отправить команду: проверьте адаптер CAN.")
+
+    @Slot(int)
+    def setAllBoardsTraffic(self, mode):
+        """Цель функции в режиме трафика J1939 (0x28: 0 RX+TX, 1 RX, 2 TX, 3 выкл) сразу всем платам."""
+        if not self._addr_comm_all(int(mode)):
+            self.infoMessage.emit("Адреса плат", "Не удалось отправить команду: проверьте адаптер CAN.")
+
+    @Slot(int, int)
+    def setBoardTraffic(self, sa, mode):
+        """Цель функции в режиме трафика J1939 одной платы с подтверждением и проверкой по шине."""
+        ok, text = self._addr_set_comm(int(sa), int(mode))
+        if not ok:
+            self.infoMessage.emit("Трафик платы", text[:1].upper() + text[1:] + ".")
+
+    @Slot(int, str)
+    def readdressBoard(self, sa, sa_text):
+        """Цель функции в смене адреса уже настроенной платы из её карточки (с проверкой чтением)."""
+        ok, text = self._addr_readdress(int(sa), str(sa_text))
+        if not ok:
+            self.infoMessage.emit("Адрес платы", text[:1].upper() + text[1:] + ".")
+
+    @Slot(int, str)
+    def renameAddressedBoard(self, sa, name):
+        """Цель функции в смене имени платы из её карточки."""
+        ok, text = self._addr_rename(int(sa), str(name))
+        if not ok:
+            self.infoMessage.emit("Имя платы", text[:1].upper() + text[1:] + ".")
 
     @Slot(bool)
     def setChamberQuietBus(self, enabled):

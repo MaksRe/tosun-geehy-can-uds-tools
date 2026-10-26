@@ -16,7 +16,11 @@
 - пока мастер обменивается с платой, остальные разделы шину не трогают;
 - ручной режим: найдя плату, мастер ждёт адрес и имя, занятый и заводской
   адрес не принимает, дальше идёт сам; режим и первый адрес сохраняются;
-- пропущенная плата не берётся снова, пока её не отключат.
+- пропущенная плата не берётся снова, пока её не отключат;
+- из карточки: смена адреса настроенной платы (с проверкой чтением, плата
+  остаётся в списке камеры со своим именем), смена имени, любой из четырёх
+  режимов трафика 0x28 с подтверждением платы и проверкой по шине;
+- история адреса и режим трафика переживают перезапуск программы.
 """
 
 from __future__ import annotations
@@ -103,7 +107,11 @@ class _Board:
         if sid == 0x28:
             if self.ignore_comm_control:
                 return [0x68, request[1] & 0x7F]
-            self.comm_on = (request[1] & 0x7F) == 0x00
+            # Режимы 0x28 прошивки: 0 RX+TX, 1 только RX, 2 только TX, 3 выкл - передают в 0 и 2.
+            self.comm_mode = request[1] & 0x7F
+            if self.comm_mode > 3:
+                return None if request[1] & 0x80 else [0x7F, 0x28, 0x12]
+            self.comm_on = self.comm_mode in (0x00, 0x02)
             return None if request[1] & 0x80 else [0x68, request[1] & 0x7F]
         return [0x7F, sid, 0x11]
 
@@ -191,7 +199,7 @@ def test_three_boards_one_by_one_get_own_addresses_and_go_quiet(tmp_path: Path, 
     view = stub._addr_view()
     assert all(step["state"] == "ok" for step in view["steps"])
     first = view["cards"][0]
-    assert first["saText"] == "0x81" and first["oldSa"] == "0x80" and first["quiet"]
+    assert first["saText"] == "0x81" and "прежний адрес 0x80" in first["history"] and first["comm"] == 1
     assert first["boardTemp"] == "+23,0 °C" and first["fuelTemp"] == "-12,5 °C"
     assert first["main"] == "5123" and first["media"] == "4410"
     assert first["profileCrc"] == "0x66E8" and first["profileGeneration"] == "7"
@@ -253,7 +261,7 @@ def test_board_that_keeps_broadcasting_is_not_ready(tmp_path: Path, monkeypatch)
     board.ignore_comm_control = True
     _connect_and_wait(stub, board, 12.0)
     assert stub._addr_stage == "failed"
-    assert "продолжает рассылку" in stub._addr_status
+    assert "продолжает передавать" in stub._addr_status
     assert stub._mb_boards == []
 
 
@@ -267,7 +275,7 @@ def test_addressed_board_power_cycled_is_quieted_again(tmp_path: Path, monkeypat
     stub.run(1.0)
     assert not board.comm_on, "мастер сам снова выключил рассылку"
     assert board.sa == 0x81 and stub._addr_stage == "wait"
-    assert any("снова шлёт рассылку" in line for line in stub.log)
+    assert any("снова передаёт" in line for line in stub.log)
 
 
 def test_factory_address_is_skipped_in_plan(tmp_path: Path, monkeypatch):
@@ -325,11 +333,12 @@ def test_manual_mode_waits_for_operator_address_and_name(tmp_path: Path, monkeyp
     _connect_and_wait(stub, second, 3.0)
     assert stub._addr_stage == "ask"
     for bad, reason in (("0x90", "занят"), ("0x80", "заводской"), ("0xF1", "программы"), ("0xF5", "от 0x01"),
-                        ("abc", "число")):
+                        ("abc", "число"), ("145", "шестнадцатеричное")):
         ok, text = stub._addr_confirm(bad, "")
         assert not ok and reason in text, (bad, text)
     assert stub._addr_stage == "ask"
-    assert stub._addr_confirm("145", "")[0]
+    # Адрес вводится шестнадцатеричным: «91» - это 0x91.
+    assert stub._addr_confirm("91", "")[0]
     stub.run(6.0)
     assert second.sa == 0x91
     assert [(b["sa"], b["name"]) for b in stub._mb_boards] == [(0x90, "Левая"), (0x91, "П2")]
@@ -370,3 +379,107 @@ def test_skipped_board_is_not_taken_again_until_disconnected(tmp_path: Path, mon
     _connect_and_wait(stub, fresh, 3.0)
     assert stub._addr_stage == "ask" and stub._addr_candidate_sa == 0x80
     assert stub._addr_view()["suggestName"] == "П1"
+
+
+def _addressed(tmp_path, monkeypatch, count=2):
+    stub = _stub(tmp_path, monkeypatch)
+    assert stub._addr_start("")[0]
+    boards = [_Board(0x80) for _ in range(count)]
+    for board in boards:
+        _connect_and_wait(stub, board)
+    stub._addr_stop()
+    return stub, boards
+
+
+def test_card_readdress_changes_address_and_keeps_the_board(tmp_path: Path, monkeypatch):
+    stub, (first, second) = _addressed(tmp_path, monkeypatch)
+    ok, text = stub._addr_readdress(0x81, "A0")
+    assert ok, text
+    stub.run(4.0)
+    assert first.sa == 0xA0 and first.eeprom_sa == 0xA0 and first.session == 0x01
+    assert not first.comm_on, "режим трафика платы при смене адреса не меняется"
+    assert [(b["sa"], b["name"]) for b in stub._mb_boards] == [(0xA0, "П1"), (0x82, "П2")]
+    assert not stub._addr_active, "мастер не был запущен - и после смены адреса не запущен"
+    card = stub._addr_view()["cards"][0]
+    assert card["saText"] == "0xA0" and "прежний адрес 0x81" in card["history"]
+    for bad, reason in (("82", "занят"), ("A0", "уже адрес"), ("80", "заводской"), ("xyz", "шестнадцатеричное")):
+        ok, text = stub._addr_readdress(0xA0, bad)
+        assert not ok and reason in text, (bad, text)
+
+
+def test_card_readdress_failure_can_be_cancelled(tmp_path: Path, monkeypatch):
+    stub, (first, _second) = _addressed(tmp_path, monkeypatch)
+    first.refuse[0x2E] = 0x31
+    assert stub._addr_readdress(0x81, "A0")[0]
+    stub.run(3.0)
+    assert stub._addr_stage == "failed" and "NRC 0x31" in stub._addr_status
+    assert stub._addr_skip()
+    assert not stub._addr_active and first.sa == 0x81
+    assert [b["sa"] for b in stub._mb_boards] == [0x81, 0x82]
+
+
+def test_card_rename(tmp_path: Path, monkeypatch):
+    stub, _boards = _addressed(tmp_path, monkeypatch)
+    assert stub._addr_rename(0x82, "У двери")[0]
+    assert not stub._addr_rename(0x82, "  ")[0]
+    assert stub._addr_view()["cards"][1]["name"] == "У двери"
+
+
+def test_each_traffic_mode_is_confirmed_and_checked_on_the_bus(tmp_path: Path, monkeypatch):
+    stub, (first, second) = _addressed(tmp_path, monkeypatch)
+    for mode, tx_on in ((0x00, True), (0x02, True), (0x03, False), (0x01, False)):
+        assert stub._addr_set_comm(0x81, mode)[0]
+        stub.run(3.5)
+        card = stub._addr_view()["cards"][0]
+        assert first.comm_mode == mode and first.comm_on == tx_on
+        assert card["comm"] == mode and card["commTone"] == "ok", card
+        assert ("идут" in card["commResult"]) == tx_on, card["commResult"]
+        assert card["onBus"] == tx_on
+    assert not second.comm_on, "команда - только своей плате"
+
+
+def test_traffic_refusal_and_lie_are_reported(tmp_path: Path, monkeypatch):
+    stub, (first, _second) = _addressed(tmp_path, monkeypatch)
+    first.refuse[0x28] = 0x22
+    assert stub._addr_set_comm(0x81, 0x00)[0]
+    stub.run(1.0)
+    card = stub._addr_view()["cards"][0]
+    assert card["commTone"] == "bad" and "NRC 0x22" in card["commResult"]
+    first.refuse.clear()
+    first.ignore_comm_control = True
+    first.comm_on = True
+    assert stub._addr_set_comm(0x81, 0x01)[0]
+    stub.run(3.0)
+    card = stub._addr_view()["cards"][0]
+    assert card["commTone"] == "bad" and "идут" in card["commResult"]
+
+
+def test_wizard_does_not_silence_a_board_switched_on_on_purpose(tmp_path: Path, monkeypatch):
+    stub, (first, second) = _addressed(tmp_path, monkeypatch)
+    assert stub._addr_set_comm(0x81, 0x00)[0]
+    stub.run(3.0)
+    assert stub._addr_start("")[0]
+    stub.run(3.0)
+    assert first.comm_on, "плата с включённым нарочно трафиком не выключается мастером"
+    second.power_cycle()
+    stub.run(1.0)
+    assert not second.comm_on, "а перезапущенная тихая плата снова выключается"
+
+
+def test_history_and_traffic_mode_survive_restart(tmp_path: Path, monkeypatch):
+    stub, _boards = _addressed(tmp_path, monkeypatch)
+    assert stub._addr_set_comm(0x82, 0x03)[0]
+    stub.run(3.0)
+    again = _AddrStub(tmp_path)
+    cards = again._addr_view()["cards"]
+    assert "прежний адрес 0x80" in cards[0]["history"] and cards[0]["comm"] == 0x01
+    assert cards[1]["comm"] == 0x03 and cards[1]["commText"] == "RX выкл · TX выкл"
+
+
+def test_all_boards_traffic_is_one_functional_command(tmp_path: Path, monkeypatch):
+    stub, boards = _addressed(tmp_path, monkeypatch)
+    assert stub._addr_comm_all(0x02)
+    ident, frame = stub.sent[-1]
+    assert (ident >> 8) & 0xFFFF == 0xDBFF and frame[:4] == [0x03, 0x28, 0x82, 0x01]
+    assert all(board.comm_mode == 0x02 and board.comm_on for board in boards)
+    assert all(card["comm"] == 0x02 for card in stub._addr_view()["cards"])

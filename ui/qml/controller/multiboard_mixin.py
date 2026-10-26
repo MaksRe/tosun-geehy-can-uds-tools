@@ -286,6 +286,24 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         self._mb_changed()
         return True
 
+    def _mb_change_sa(self, old: int, new: int) -> bool:
+        """Цель функции в новом адресе платы после его смены в приборе, затем её журнал, таблицы и профиль - с ней."""
+        old, new = int(old) & 0xFF, int(new) & 0xFF
+        board = self._mb_board(old)
+        if board is None or self._mb_board(new) is not None or getattr(self, "_climate_run_stage", ""):
+            return False
+        board["sa"] = new
+        if old in self._mb_contexts:
+            self._mb_contexts[new] = self._mb_contexts.pop(old)
+        if old in self._mb_profile_results:
+            self._mb_profile_results[new] = self._mb_profile_results.pop(old)
+        if self._mb_active_sa == old:
+            self._mb_active_sa = new
+            self._calibration_target_node_sa = new
+        self._mb_save()
+        self._mb_changed()
+        return True
+
     def _mb_bus_candidates(self) -> list[int]:
         """Адреса плат, замеченные на шине: из них удобно набрать список."""
         testers = {int(UdsIdentifiers.tx.src) & 0xFF, int(UdsIdentifiers.rx.dst) & 0xFF}

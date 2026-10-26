@@ -8,11 +8,13 @@ import "."
   Назначение:
   - мастер назначает каждой новой плате свой адрес на шине CAN: оператор
     подключает платы по одной, мастер сам находит новую, записывает адрес,
-    проверяет его чтением, выключает рассылку J1939 платы и проверяет тишину;
+    проверяет его чтением, выключает передачу J1939 платы и проверяет тишину;
   - адрес выбирает мастер (следующий свободный) или оператор: в ручном режиме
     мастер, найдя плату, ждёт адрес и имя;
   - каждый шаг с таймаутом и повторами, при сбое - причина и кнопка повтора;
-  - карточки всех плат камеры: адрес, температуры, контуры, профиль.
+  - карточки всех плат камеры одинакового вида: имя и адрес (меняются прямо в
+    карточке), показания, профиль, трафик J1939 - режим CommunicationControl
+    (0x28) с подтверждением платы и то, что видно на шине.
 
   Публичные свойства:
   - appController: контроллер приложения;
@@ -33,6 +35,12 @@ Card {
     readonly property bool active: !!root.addr.active
     readonly property bool manual: root.addr.mode === "manual"
     readonly property bool asking: !!root.addr.asking
+    readonly property bool readdress: !!root.addr.readdress
+    readonly property var toneColors: ({ "ok": "#16a34a", "bad": "#dc2626", "warn": "#d97706", "normal": "#64748b" })
+    readonly property int boardCardWidth: 300
+
+    cardColor: "#ffffff"
+    cardBorder: "#d6e2ef"
 
     // Мастер нашёл плату и ждёт адрес: поля заполняются подсказкой, курсор - в поле адреса.
     onAskingChanged: {
@@ -48,10 +56,6 @@ Card {
         if (root.appController)
             root.appController.confirmBoardAddress(manualSaField.text, manualNameField.text)
     }
-    readonly property var toneColors: ({ "ok": "#16a34a", "bad": "#dc2626", "normal": "#64748b" })
-
-    cardColor: "#ffffff"
-    cardBorder: "#d6e2ef"
 
     component Caption: Text {
         color: root.textSoft
@@ -60,10 +64,89 @@ Card {
         Layout.alignment: Qt.AlignVCenter
     }
 
+    component SectionTitle: Text {
+        color: root.textSoft
+        font.pixelSize: 11
+        font.bold: true
+        font.family: "Bahnschrift"
+        font.capitalization: Font.AllUppercase
+        font.letterSpacing: 0.6
+        Layout.topMargin: 2
+    }
+
     component SmallButton: FancyButton {
         Layout.preferredHeight: 30
         fontPixelSize: 12
         tone: "#64748b"; toneHover: "#475569"; tonePressed: "#334155"
+    }
+
+    component Divider: Rectangle {
+        Layout.fillWidth: true
+        Layout.preferredHeight: 1
+        color: "#eef2f7"
+    }
+
+    // Переключатель из нескольких вариантов: выбранный - синий, остальные - светлые с тёмным текстом.
+    component Segmented: Rectangle {
+        id: segmented
+        property var options: []
+        property var current
+        property bool active: true
+        property int itemWidth: 120
+        property int itemHeight: 30
+        property int fontSize: 12
+        signal picked(var key)
+        implicitWidth: segmentedRow.implicitWidth + 2
+        implicitHeight: segmented.itemHeight
+        Layout.preferredWidth: segmented.implicitWidth
+        Layout.preferredHeight: segmented.itemHeight
+        radius: 8
+        color: "#f1f5f9"
+        border.width: 1
+        border.color: "#d6e2ef"
+        opacity: segmented.active ? 1.0 : 0.55
+
+        Row {
+            id: segmentedRow
+            anchors.centerIn: parent
+            spacing: 0
+
+            Repeater {
+                model: segmented.options
+
+                Rectangle {
+                    id: segment
+                    required property var modelData
+                    readonly property bool selected: segmented.current === segment.modelData.key
+                    width: segmented.itemWidth
+                    height: segmented.itemHeight - 2
+                    radius: 7
+                    color: segment.selected ? "#0284c7" : (segmentArea.containsMouse && segmented.active ? "#e2e8f0" : "transparent")
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: segment.modelData.title
+                        color: segment.selected ? "#ffffff" : root.textMain
+                        font.pixelSize: segmented.fontSize
+                        font.bold: segment.selected
+                        font.family: "Bahnschrift"
+                    }
+
+                    MouseArea {
+                        id: segmentArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        enabled: segmented.active
+                        cursorShape: segmented.active ? Qt.PointingHandCursor : Qt.ArrowCursor
+                        onClicked: segmented.picked(segment.modelData.key)
+                    }
+
+                    ToolTip.visible: segmentArea.containsMouse && (segment.modelData.hint || "").length > 0
+                    ToolTip.delay: 400
+                    ToolTip.text: segment.modelData.hint || ""
+                }
+            }
+        }
     }
 
     // Шаг мастера: кружок состояния и подпись.
@@ -129,6 +212,7 @@ Card {
         property string value: ""
         property color valueColor: root.textMain
         Layout.fillWidth: true
+        Layout.preferredHeight: 18
         spacing: 6
 
         Text {
@@ -144,19 +228,58 @@ Card {
             font.pixelSize: 13
             font.family: "Bahnschrift"
             font.bold: true
+            elide: Text.ElideLeft
+            Layout.maximumWidth: 190
         }
     }
 
-    // Карточка платы: имя и адрес, состояние рассылки, показания и профиль.
+    // Метка-плашка: короткое состояние цветом.
+    component Chip: Rectangle {
+        id: chip
+        property string text: ""
+        property color fg: "#475569"
+        property color bg: "#f1f5f9"
+        Layout.preferredWidth: chipText.implicitWidth + 16
+        Layout.preferredHeight: 22
+        radius: 11
+        color: chip.bg
+
+        Text {
+            id: chipText
+            anchors.centerIn: parent
+            text: chip.text
+            color: chip.fg
+            font.pixelSize: 11
+            font.bold: true
+            font.family: "Bahnschrift"
+        }
+    }
+
+    // Карточка платы: у всех карточек одни и те же строки, поэтому они одной высоты.
     component BoardCard: Rectangle {
         id: boardCard
         required property var modelData
-        width: 268
+        property bool editingName: false
+        property bool editingSa: false
+        readonly property bool editable: !!root.addr.editable
+        width: root.boardCardWidth
         height: boardLayout.implicitHeight + 28
         radius: 12
         color: "#ffffff"
         border.width: 1
-        border.color: "#e2e8f0"
+        border.color: boardCard.modelData.readdressing ? "#93c5fd" : "#e2e8f0"
+
+        function saveName() {
+            if (root.appController && nameField.text !== boardCard.modelData.name)
+                root.appController.renameAddressedBoard(boardCard.modelData.sa, nameField.text)
+            boardCard.editingName = false
+        }
+
+        function saveSa() {
+            if (root.appController)
+                root.appController.readdressBoard(boardCard.modelData.sa, saField.text)
+            boardCard.editingSa = false
+        }
 
         ColumnLayout {
             id: boardLayout
@@ -164,11 +287,14 @@ Card {
             anchors.margins: 14
             spacing: 6
 
+            // Имя (меняется по щелчку), адрес и трафик J1939, видимый на шине.
             RowLayout {
                 Layout.fillWidth: true
+                Layout.preferredHeight: 30
                 spacing: 8
 
                 Text {
+                    visible: !boardCard.editingName
                     text: boardCard.modelData.name || boardCard.modelData.saText
                     color: root.textMain
                     font.pixelSize: 17
@@ -176,90 +302,176 @@ Card {
                     font.family: "Bahnschrift"
                     elide: Text.ElideRight
                     Layout.maximumWidth: 120
-                }
-                Rectangle {
-                    Layout.preferredWidth: saText.implicitWidth + 14
-                    Layout.preferredHeight: 22
-                    radius: 11
-                    color: "#eff6ff"
-                    Text {
-                        id: saText
-                        anchors.centerIn: parent
-                        text: boardCard.modelData.saText
-                        color: "#1d4ed8"
-                        font.pixelSize: 12
-                        font.bold: true
-                        font.family: "Consolas"
+
+                    MouseArea {
+                        id: nameArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.IBeamCursor
+                        onClicked: {
+                            nameField.text = boardCard.modelData.name
+                            boardCard.editingName = true
+                            nameField.forceActiveFocus()
+                            nameField.selectAll()
+                        }
                     }
+                    ToolTip.visible: nameArea.containsMouse
+                    ToolTip.delay: 500
+                    ToolTip.text: "Щёлкните, чтобы изменить имя"
+                }
+                FancyTextField {
+                    id: nameField
+                    visible: boardCard.editingName
+                    Layout.preferredWidth: 130
+                    Layout.preferredHeight: 30
+                    textColor: root.textMain
+                    bgColor: root.inputBg
+                    borderColor: root.inputBorder
+                    focusBorderColor: root.inputFocus
+                    onAccepted: boardCard.saveName()
+                    onActiveFocusChanged: if (!activeFocus && boardCard.editingName) boardCard.saveName()
+                    Keys.onEscapePressed: boardCard.editingName = false
+                }
+                Chip {
+                    text: boardCard.modelData.saText
+                    fg: "#1d4ed8"
+                    bg: "#eff6ff"
                 }
                 Item { Layout.fillWidth: true }
-                // Рассылка выключена - плата не мешает на шине.
-                Rectangle {
-                    Layout.preferredWidth: quietText.implicitWidth + 14
-                    Layout.preferredHeight: 22
-                    radius: 11
-                    color: boardCard.modelData.quiet ? "#f0fdf4" : "#fffbeb"
-                    Text {
-                        id: quietText
-                        anchors.centerIn: parent
-                        text: boardCard.modelData.quiet ? "тихая" : "рассылка"
-                        color: boardCard.modelData.quiet ? "#15803d" : "#b45309"
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                    }
+                Chip {
+                    text: !boardCard.modelData.listening ? "Трафик ?" : (boardCard.modelData.onBus ? "Трафик вкл" : "Трафик выкл")
+                    fg: !boardCard.modelData.listening ? "#64748b" : (boardCard.modelData.onBus ? "#b45309" : "#15803d")
+                    bg: !boardCard.modelData.listening ? "#f1f5f9" : (boardCard.modelData.onBus ? "#fffbeb" : "#f0fdf4")
                 }
             }
 
             Text {
                 Layout.fillWidth: true
-                visible: text.length > 0
-                text: (boardCard.modelData.oldSa ? "был " + boardCard.modelData.oldSa : "")
-                      + (boardCard.modelData.oldSa && boardCard.modelData.addressedAt ? " · " : "")
-                      + (boardCard.modelData.addressedAt ? "назначен " + boardCard.modelData.addressedAt : "")
+                text: boardCard.modelData.history
                 color: root.textSoft
                 font.pixelSize: 11
                 font.family: "Bahnschrift"
+                elide: Text.ElideRight
             }
 
-            Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: "#eef2f7" }
-
-            InfoRow { label: "Плата"; value: boardCard.modelData.boardTemp }
-            InfoRow { label: "Топливо"; value: boardCard.modelData.fuelTemp }
+            Divider {}
+            SectionTitle {
+                text: "Показания" + (boardCard.modelData.reading ? " · читаю..."
+                                     : (boardCard.modelData.readAt ? " · " + boardCard.modelData.readAt : ""))
+            }
+            InfoRow { label: "Температура платы"; value: boardCard.modelData.boardTemp }
+            InfoRow { label: "Температура топлива"; value: boardCard.modelData.fuelTemp }
             InfoRow { label: "Основной контур"; value: boardCard.modelData.main }
             InfoRow { label: "Контур вида топлива"; value: boardCard.modelData.media }
 
-            Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: "#eef2f7" }
-
+            Divider {}
+            SectionTitle { text: "Профиль" }
             InfoRow {
-                label: "Профиль"
+                label: "Состояние"
                 value: boardCard.modelData.profileText
                 valueColor: root.toneColors[boardCard.modelData.profileTone] || root.textMain
             }
-            InfoRow {
-                label: "Сумма · поколение"
-                value: boardCard.modelData.profileCrc + " · " + boardCard.modelData.profileGeneration
-            }
+            InfoRow { label: "Сумма · поколение"; value: boardCard.modelData.profileCrc + " · " + boardCard.modelData.profileGeneration }
             InfoRow { label: "Программа"; value: boardCard.modelData.program }
 
+            Divider {}
+            SectionTitle { text: "Трафик J1939 · UDS 0x28" }
+            InfoRow { label: "Режим"; value: boardCard.modelData.commText }
+            InfoRow {
+                label: "На шине"
+                value: boardCard.modelData.trafficText
+                valueColor: boardCard.modelData.onBus ? "#b45309" : root.textMain
+            }
+            Segmented {
+                Layout.topMargin: 2
+                options: (root.addr.commModes || []).map(function(item) {
+                    return { "key": item.mode, "title": item.button, "hint": item.state + ". " + item.hint }
+                })
+                current: boardCard.modelData.comm
+                active: !boardCard.modelData.commBusy && boardCard.editable
+                itemWidth: 67
+                itemHeight: 28
+                fontSize: 11
+                onPicked: (key) => { if (root.appController) root.appController.setBoardTraffic(boardCard.modelData.sa, key) }
+            }
+            Text {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 15
+                text: boardCard.modelData.commResult || " "
+                color: root.toneColors[boardCard.modelData.commTone] || root.textSoft
+                font.pixelSize: 11
+                font.family: "Bahnschrift"
+                elide: Text.ElideRight
+            }
+
+            Divider {}
+            // Низ карточки: обычные кнопки или поле нового адреса - одной высоты.
             RowLayout {
                 Layout.fillWidth: true
-                Layout.topMargin: 4
+                Layout.preferredHeight: 30
                 spacing: 6
+                visible: !boardCard.editingSa
 
-                Caption {
-                    Layout.fillWidth: true
-                    text: boardCard.modelData.reading ? "читаю..."
-                          : (boardCard.modelData.readAt ? "прочитано " + boardCard.modelData.readAt : "ещё не прочитано")
-                    font.pixelSize: 11
-                }
                 SmallButton {
-                    Layout.preferredWidth: 86
-                    Layout.preferredHeight: 26
+                    Layout.preferredWidth: 130
+                    Layout.preferredHeight: 28
+                    fontPixelSize: 11
+                    text: boardCard.modelData.readdressing ? "Меняю адрес..." : "Изменить адрес"
+                    enabled: boardCard.editable
+                    toolTipText: boardCard.editable ? "Записать плате другой адрес (с проверкой чтением)"
+                                                    : "Сейчас нельзя: идёт работа мастера или прогон"
+                    onClicked: {
+                        saField.text = boardCard.modelData.saText
+                        boardCard.editingSa = true
+                        saField.forceActiveFocus()
+                        saField.selectAll()
+                    }
+                }
+                Item { Layout.fillWidth: true }
+                SmallButton {
+                    Layout.preferredWidth: 100
+                    Layout.preferredHeight: 28
                     fontPixelSize: 11
                     text: "Обновить"
                     enabled: !boardCard.modelData.reading
                     tone: "#0284c7"; toneHover: "#0369a1"; tonePressed: "#075985"
                     onClicked: if (root.appController) root.appController.refreshBoardInfo(boardCard.modelData.sa)
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 30
+                spacing: 6
+                visible: boardCard.editingSa
+
+                Caption { text: "Новый адрес" }
+                FancyTextField {
+                    id: saField
+                    Layout.preferredWidth: 62
+                    Layout.preferredHeight: 28
+                    placeholderText: "A0"
+                    textColor: root.textMain
+                    bgColor: root.inputBg
+                    borderColor: root.inputBorder
+                    focusBorderColor: root.inputFocus
+                    onAccepted: boardCard.saveSa()
+                    Keys.onEscapePressed: boardCard.editingSa = false
+                }
+                Item { Layout.fillWidth: true }
+                SmallButton {
+                    Layout.preferredWidth: 78
+                    Layout.preferredHeight: 28
+                    fontPixelSize: 11
+                    text: "Записать"
+                    tone: "#16a34a"; toneHover: "#15803d"; tonePressed: "#166534"
+                    onClicked: boardCard.saveSa()
+                }
+                SmallButton {
+                    Layout.preferredWidth: 64
+                    Layout.preferredHeight: 28
+                    fontPixelSize: 11
+                    text: "Отмена"
+                    onClicked: boardCard.editingSa = false
                 }
             }
         }
@@ -290,19 +502,17 @@ Card {
                 }
                 InfoMark {
                     tip: "Для прогона нескольких плат в камере у каждой нужен свой адрес на шине CAN.<br><br>"
-                         + "Адрес новой плате выбирает мастер (<b>Автоматически</b>: следующий свободный, начиная с "
-                         + "первого) или вы (<b>Вручную</b>: найдя плату, мастер ждёт адрес и имя).<br><br>"
-                         + "Запустите мастер и подключайте платы <b>по одной</b>. Для каждой мастер сам: находит её, "
-                         + "открывает доступ, записывает новый адрес, проверяет его чтением, выключает рассылку J1939 "
-                         + "платы (чтобы она не мешала найти следующую) и проверяет, что на шине тихо. "
-                         + "Каждый шаг ждёт подтверждения платы до 1,5 с, до 3 попыток.<br><br>"
-                         + "Рассылка остаётся выключенной до перезагрузки питания платы. Если настроенная плата снова "
-                         + "зашумит, мастер выключит её рассылку сам. Готовые платы сразу попадают в «Платы в камере»."
+                         + "Запустите мастер и подключайте <b>новые</b> платы <b>по одной</b>. Для каждой мастер сам: "
+                         + "находит её, открывает доступ, записывает адрес, проверяет его чтением, выключает передачу "
+                         + "J1939 платы (чтобы она не мешала найти следующую) и проверяет тишину на шине. Каждый шаг "
+                         + "ждёт подтверждения платы до 1,5 с, до 3 попыток.<br><br>"
+                         + "Уже назначенной плате адрес и имя меняются в её карточке, там же - режим трафика J1939 "
+                         + "(UDS 0x28). Адреса вводятся в шестнадцатеричном виде: 85 или 0x85."
                 }
                 Item { Layout.fillWidth: true }
             }
 
-            // Мастер: первый адрес, запуск и остановка.
+            // Мастер: как выбирается адрес, запуск и остановка.
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: wizardLayout.implicitHeight + 28
@@ -317,32 +527,21 @@ Card {
                     anchors.margins: 14
                     spacing: 12
 
-                    // Кто выбирает адрес новой плате: мастер или оператор.
                     RowLayout {
                         Layout.fillWidth: true
-                        spacing: 10
+                        spacing: 12
 
-                        Caption { text: "Адрес новой плате" }
-                        Row {
-                            spacing: 0
-                            Repeater {
-                                model: [{ "key": "auto", "title": "Автоматически" }, { "key": "manual", "title": "Вручную" }]
-
-                                FancyButton {
-                                    required property var modelData
-                                    width: 130
-                                    height: 30
-                                    fontPixelSize: 12
-                                    text: modelData.title
-                                    toolTipText: modelData.key === "auto"
-                                                 ? "Мастер сам берёт следующий свободный адрес, начиная с первого"
-                                                 : "Найдя плату, мастер ждёт адрес и имя от вас (подсказывает следующий свободный)"
-                                    tone: (root.addr.mode || "auto") === modelData.key ? "#0284c7" : "#cbd5e1"
-                                    toneHover: "#0369a1"
-                                    tonePressed: "#075985"
-                                    onClicked: if (root.appController) root.appController.setBoardAddressingMode(modelData.key)
-                                }
-                            }
+                        Caption { text: "Адрес новой плате назначается" }
+                        Segmented {
+                            options: [
+                                { "key": "auto", "title": "Автоматически",
+                                  "hint": "Мастер сам берёт следующий свободный адрес, начиная с первого" },
+                                { "key": "manual", "title": "Вручную",
+                                  "hint": "Найдя новую плату, мастер ждёт от вас адрес и имя (подставляет свободный)" }
+                            ]
+                            current: root.addr.mode || "auto"
+                            itemWidth: 130
+                            onPicked: (key) => { if (root.appController) root.appController.setBoardAddressingMode(key) }
                         }
                         Item { Layout.fillWidth: true }
                     }
@@ -351,9 +550,13 @@ Card {
                         Layout.fillWidth: true
                         spacing: 10
 
-                        Caption { text: root.manual ? "Подсказывать с" : "Первый адрес" }
+                        Caption {
+                            visible: !root.manual
+                            text: "Первый адрес (HEX)"
+                        }
                         FancyTextField {
                             id: startField
+                            visible: !root.manual
                             Layout.preferredWidth: 80
                             Layout.preferredHeight: 30
                             enabled: !root.active
@@ -363,11 +566,15 @@ Card {
                             focusBorderColor: root.inputFocus
                             Component.onCompleted: startField.text = root.addr.startText || "0x81"
                         }
+                        Caption {
+                            visible: root.manual
+                            text: "Для каждой найденной платы мастер спросит адрес и имя."
+                        }
                         FancyButton {
-                            Layout.preferredWidth: 150
+                            Layout.preferredWidth: 160
                             Layout.preferredHeight: 30
                             fontPixelSize: 13
-                            text: root.active ? "Остановить" : "Запустить мастер"
+                            text: root.active ? "Остановить мастер" : "Запустить мастер"
                             tone: root.active ? "#64748b" : "#16a34a"
                             toneHover: root.active ? "#475569" : "#15803d"
                             tonePressed: root.active ? "#334155" : "#166534"
@@ -381,19 +588,6 @@ Card {
                             }
                         }
                         Item { Layout.fillWidth: true }
-                        SmallButton {
-                            Layout.preferredWidth: 130
-                            text: "Обновить карточки"
-                            enabled: (root.addr.cards || []).length > 0
-                            onClicked: if (root.appController) root.appController.refreshBoardInfo(-1)
-                        }
-                        SmallButton {
-                            Layout.preferredWidth: 170
-                            text: "Вернуть рассылку всем"
-                            toolTipText: "Всем платам на шине: снова слать обычную рассылку J1939 (мастер остановится)"
-                            tone: "#b45309"; toneHover: "#92400e"; tonePressed: "#78350f"
-                            onClicked: if (root.appController) root.appController.releaseBoardsTraffic()
-                        }
                     }
 
                     // Плата, с которой идёт работа: старый адрес -> новый.
@@ -403,7 +597,7 @@ Card {
                         spacing: 12
 
                         Text {
-                            text: "Плата " + (root.addr.boardNumber || 0)
+                            text: root.readdress ? "Смена адреса" : "Плата " + (root.addr.boardNumber || 0)
                             color: root.textMain
                             font.pixelSize: 15
                             font.bold: true
@@ -434,19 +628,19 @@ Card {
                             anchors.margins: 10
                             spacing: 10
 
-                            Caption { text: "Новый адрес" }
+                            Caption { text: "Новый адрес (HEX)" }
                             FancyTextField {
                                 id: manualSaField
                                 Layout.preferredWidth: 80
                                 Layout.preferredHeight: 30
-                                placeholderText: "0x81"
+                                placeholderText: "81"
                                 textColor: root.textMain
                                 bgColor: "#ffffff"
                                 borderColor: root.inputBorder
                                 focusBorderColor: root.inputFocus
                                 onAccepted: root.confirmManual()
                             }
-                            Caption { text: "Имя" }
+                            Caption { text: "Имя платы" }
                             FancyTextField {
                                 id: manualNameField
                                 Layout.preferredWidth: 160
@@ -522,7 +716,7 @@ Card {
                         SmallButton {
                             visible: !!root.addr.failed
                             Layout.preferredWidth: 140
-                            text: "Пропустить плату"
+                            text: root.readdress ? "Отменить смену" : "Пропустить плату"
                             onClicked: if (root.appController) root.appController.skipBoardAddressingBoard()
                         }
                     }
@@ -543,6 +737,29 @@ Card {
                 }
                 Caption { text: String((root.addr.cards || []).length) }
                 Item { Layout.fillWidth: true }
+                SmallButton {
+                    Layout.preferredWidth: 150
+                    text: "Обновить показания"
+                    enabled: (root.addr.cards || []).length > 0
+                    toolTipText: "Прочитать заново данные всех карточек"
+                    onClicked: if (root.appController) root.appController.refreshBoardInfo(-1)
+                }
+                SmallButton {
+                    Layout.preferredWidth: 190
+                    text: "Всем: только приём (TX выкл)"
+                    enabled: (root.addr.cards || []).length > 0
+                    toolTipText: "Одна команда всем платам: 0x28 RX вкл · TX выкл (без подтверждения)"
+                    tone: "#0f766e"; toneHover: "#115e59"; tonePressed: "#134e4a"
+                    onClicked: if (root.appController) root.appController.setAllBoardsTraffic(1)
+                }
+                SmallButton {
+                    Layout.preferredWidth: 170
+                    text: "Всем: RX+TX (обычная)"
+                    enabled: (root.addr.cards || []).length > 0
+                    toolTipText: "Одна команда всем платам: 0x28 RX вкл · TX вкл (мастер остановится)"
+                    tone: "#b45309"; toneHover: "#92400e"; tonePressed: "#78350f"
+                    onClicked: if (root.appController) root.appController.releaseBoardsTraffic()
+                }
             }
 
             Caption {
