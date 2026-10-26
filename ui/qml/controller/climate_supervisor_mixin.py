@@ -193,6 +193,8 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
                 "label": str(getattr(self, "_chamber_label", "")),
                 "journal": str(getattr(self, "_chamber_file_path", "") or ""),
                 "auto_write": bool(getattr(self, "_chamber_auto_write", False)),
+                # Несколько плат: журнал каждой платы по её адресу.
+                "boards": self._mb_journals() if callable(getattr(self, "_mb_journals", None)) else [],
             },
         }
         path = self._climate_auto_state_path()
@@ -835,7 +837,18 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             self._chamber_label = str(chamber["label"])
         if "auto_write" in chamber:
             self._chamber_auto_write = bool(chamber["auto_write"])
-        journal = str(chamber.get("journal") or "")
+        boards = chamber.get("boards") or []
+        restore_boards = getattr(self, "_mb_restore_journals", None)
+        if boards and restore_boards is not None:
+            # Несколько плат: каждый журнал - строго в свою плату (по адресу), а не в показанную.
+            events = restore_boards(boards)
+            if events:
+                failed = any("не загрузился" in text for text in events)
+                self._climate_event("журналы плат после перезапуска: " + "; ".join(events) + ".",
+                                    "bad" if failed else "ok")
+            journal = ""
+        else:
+            journal = str(chamber.get("journal") or "")
         if journal and journal != str(getattr(self, "_chamber_file_path", "") or ""):
             loader = getattr(self, "_chamber_load_file", None)
             if loader is not None and pathlib.Path(journal).is_file() and loader(journal):

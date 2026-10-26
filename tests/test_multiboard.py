@@ -7,7 +7,11 @@
 - прогон на имитаторе с тремя платами: доводка по средней температуре плат,
   точки шага у каждой платы, у каждой - свой журнал;
 - «тишина» на шине: CommunicationControl всем платам на время прогона и обратно;
-- профили пишутся по очереди, по одной плате.
+- профили пишутся по очереди, по одной плате; перед каждой платой калибровка
+  прежней платы закрывается, доступ открывается для этой; запись и сверка идут
+  на адрес платы камеры, а не узла раздела «Параметры»;
+- каждая плата получает все величины опроса при любом числе плат;
+- после перезапуска программы журнал каждой платы возвращается в её же поля.
 """
 
 from __future__ import annotations
@@ -203,3 +207,133 @@ def test_board_list_is_kept_and_checked(tmp_path: Path):
     assert [board["sa"] for board in again._mb_boards] == [0x80, 0x81, 0x82] and again._mb_on()
     assert stub._mb_remove_board(0x82)[0] and stub._mb_remove_board(0x81)[0]
     assert not stub._mb_on(), "одна плата - обычный режим"
+
+
+def test_every_board_gets_every_value_for_any_board_count(tmp_path: Path):
+    """Общий номер величины при 3 платах отдавал бы первой плате только контуры."""
+    stub = _stub(tmp_path)
+    asked: dict[int, set] = {}
+
+    class _Read:
+        def read_data_by_identifier(self, identifier, var):
+            asked.setdefault((identifier >> 8) & 0xFF, set()).add(int(var.pid))
+
+    stub._chamber_live_read = _Read()
+    stub._build_calibration_tx_identifier = lambda: 0x18DA00F1 | (stub._calibration_target_node_sa << 8)
+    for _ in range(3 * 6):
+        stub._chamber_live_pending = None
+        stub._mb_live_tick(time.monotonic())
+    wanted = {0x0014, 0x0067, 0x0019, 0x003B}
+    assert all(asked.get(sa) == wanted for sa, *_rest in BOARDS), asked
+
+
+def test_stale_limit_grows_with_the_polling_round(tmp_path: Path):
+    stub = _stub(tmp_path)
+    # 3 платы: круг одной величины 6 x 3 x 90 мс = 1,62 с, порог - 2,5 круга.
+    assert abs(stub._chamber_live_stale_s() - 4.05) < 1e-6
+    assert stub._mb_set_enabled(False)[0]
+    assert stub._chamber_live_stale_s() == stub.CHAMBER_LIVE_STALE_S
+
+
+def test_profile_requests_go_to_the_chamber_board(tmp_path: Path):
+    from ui.qml.controller.profile_mixin import AppControllerProfileMixin
+
+    stub = _stub(tmp_path)
+    with stub._mb_context(0x82):
+        assert AppControllerProfileMixin._profile_target_override(stub) == 0x82
+    assert AppControllerProfileMixin._profile_target_override(stub) == 0x80
+    assert stub._mb_set_enabled(False)[0]
+    assert AppControllerProfileMixin._profile_target_override(stub) is None, "одна плата - как раньше"
+
+
+def test_calibration_of_previous_board_is_closed_before_next_profile(tmp_path: Path):
+    stub = _stub(tmp_path)
+    started, stops = [], []
+
+    def chain_start(automatic=False):
+        started.append(stub._calibration_target_node_sa)
+        stub._chamber_chain_stage = "write"
+        # Цепочка сама открывает калибровку и доступ для своей платы.
+        stub._calibration_active = True
+        stub._service_security_unlocked = True
+        stub._service_access_target_sa = stub._calibration_target_node_sa
+        stub._chamber_chain_status = f"записан в 0x{stub._calibration_target_node_sa:02X}"
+        return True
+
+    def stop_calibration():
+        stops.append(stub._service_access_target_sa)
+        stub._calibration_active = False
+        stub._calibration_waiting_session = True
+
+    stub._chamber_chain_start = chain_start
+    stub.stopCalibration = stop_calibration
+    stub._calibration_waiting_session = False
+    # Оператор до этого открыл калибровку для 0x82.
+    stub._calibration_active, stub._service_security_unlocked, stub._service_access_target_sa = True, True, 0x82
+    stub._chamber_auto_write = True
+    for sa, *_rest in BOARDS:
+        with stub._mb_context(sa):
+            stub._chamber_tables_complete = True
+    stub._mb_start_profiles()
+    now = time.monotonic()
+    for _ in range(12):
+        stub._mb_profile_tick(now)
+        # Прибор подтвердил возврат сеанса; запись профиля текущей платы закончилась.
+        stub._calibration_waiting_session = False
+        stub._chamber_chain_stage = ""
+    assert started == [0x80, 0x81, 0x82]
+    assert stops == [0x82, 0x80, 0x81, 0x82], "перед каждой платой и после последней калибровка закрыта"
+    assert not stub._mb_profiles_busy()
+
+
+def test_silent_previous_board_does_not_block_the_queue(tmp_path: Path):
+    stub = _stub(tmp_path)
+    started = []
+    stub._chamber_chain_start = lambda automatic=False: started.append(stub._calibration_target_node_sa) or True
+    stub.stopCalibration = lambda: setattr(stub, "_calibration_waiting_session", True) or         setattr(stub, "_calibration_active", False)
+    stub._finish_calibration_deactivation = lambda _text: setattr(stub, "_calibration_waiting_session", False)
+    stub._calibration_active, stub._calibration_waiting_session = True, False
+    stub._service_security_unlocked, stub._service_access_target_sa = True, 0x99
+    stub._chamber_auto_write = True
+    for sa, *_rest in BOARDS:
+        with stub._mb_context(sa):
+            stub._chamber_tables_complete = True
+    stub._mb_start_profiles()
+    now = time.monotonic()
+    stub._mb_profile_tick(now)
+    stub._mb_profile_tick(now + 5)
+    assert started == []
+    stub._mb_profile_tick(now + 16)
+    stub._mb_profile_tick(now + 16.2)
+    assert started == [0x80]
+
+
+def test_failed_chain_start_is_reported_and_queue_moves_on(tmp_path: Path):
+    stub = _stub(tmp_path)
+    stub._chamber_chain_start = lambda automatic=False: False
+    stub._chamber_chain_problem = lambda: "в журнале нет ни одной точки"
+    stub._chamber_auto_write = True
+    for sa, *_rest in BOARDS:
+        with stub._mb_context(sa):
+            stub._chamber_tables_complete = True
+    stub._mb_start_profiles()
+    for _ in range(4):
+        stub._mb_profile_tick(time.monotonic())
+    assert not stub._mb_profiles_busy()
+    assert all("нет ни одной точки" in stub._mb_profile_results[sa] for sa, *_rest in BOARDS)
+
+
+def test_restart_returns_each_journal_to_its_own_board(tmp_path: Path):
+    stub = _stub(tmp_path)
+    assert stub._climate_run_start(), stub._climate_run_status
+    _walk(stub)
+    saved = stub._mb_journals()
+    assert len({item["journal"] for item in saved}) == 3
+    # После перезапуска показана другая плата: журналы всё равно идут каждый в свою.
+    again = _MbStub(tmp_path)
+    assert again._mb_activate(0x82, force=True)
+    events = again._mb_restore_journals(saved)
+    assert len(events) == 3 and not any("не загрузился" in text for text in events), events
+    for sa, name, _offset, main in BOARDS:
+        with again._mb_context(sa):
+            assert again._chamber_points and all(point["main"] == main for point in again._chamber_points), name

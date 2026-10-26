@@ -160,7 +160,14 @@ class AppControllerChamberLiveMixin(AppControllerContract):
         """Есть ли у величины показание не старше нескольких секунд."""
         if self._chamber_live_last.get(key) is None:
             return False
-        return now - float(self._chamber_live_seen.get(key, 0.0)) <= self.CHAMBER_LIVE_STALE_S
+        return now - float(self._chamber_live_seen.get(key, 0.0)) <= self._chamber_live_stale_s()
+
+    def _chamber_live_stale_s(self) -> float:
+        """Цель функции в пороге «показание устарело», затем при нескольких платах он растёт с длиной круга опроса."""
+        stale_of = getattr(self, "_mb_stale_s", None)
+        if stale_of is None:
+            return float(self.CHAMBER_LIVE_STALE_S)
+        return float(stale_of(self.CHAMBER_LIVE_STALE_S, len(self.CHAMBER_LIVE_ORDER)))
 
     def _chamber_live_point(self, now: float | None = None):
         """Собирает точку из средних. Возвращает (точка, пояснение) или (None, чего не хватает)."""
@@ -316,6 +323,10 @@ class AppControllerChamberLiveMixin(AppControllerContract):
 
     def _on_chamber_live_tick(self):
         """Такт опроса: один запрос, если шина свободна, и обновление показа."""
+        # Несколько плат: очередь записи профилей идёт и при занятой шине, и при закрытом разделе.
+        profile_tick = getattr(self, "_mb_profile_tick", None)
+        if profile_tick is not None:
+            profile_tick(time.monotonic())
         if not self._chamber_live_wanted:
             return
         now = time.monotonic()
@@ -467,7 +478,7 @@ class AppControllerChamberLiveMixin(AppControllerContract):
             fresh_ok = False
         else:
             age = now - max(seen)
-            fresh_ok = age <= self.CHAMBER_LIVE_STALE_S
+            fresh_ok = age <= self._chamber_live_stale_s()
             fresh_text = (f"Последний ответ {_decimal(age, 1)} с назад" if fresh_ok
                           else f"Прибор молчит уже {int(age)} с")
 

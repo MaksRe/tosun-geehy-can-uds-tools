@@ -228,17 +228,33 @@ class AppControllerProfileMixin:
             return False
 
         origin = f"{PROFILE_ORIGIN_PREFIX}{name}"
+        # Одна плата: адрес выбирает раздел «Параметры», как раньше; несколько - плата камеры.
+        target = self._profile_target_override()
+        extra = {} if target is None else {"target_sa_override": target}
         if payload is None:
-            started = self._start_options_read_request(parameter, request_origin=origin, append_history=False)
+            started = self._start_options_read_request(parameter, request_origin=origin, append_history=False,
+                                                       **extra)
         else:
             started = self._start_options_write_multiframe_request(
-                parameter, bytes(payload), request_origin=origin, append_history=False)
+                parameter, bytes(payload), request_origin=origin, append_history=False, **extra)
 
         if not started:
             self._profile_finish_with_error(f"не удалось отправить запрос по 0x{did:04X}")
             return False
 
         return True
+
+    def _profile_target_override(self) -> int | None:
+        """Цель функции в адресе прибора для профиля, затем при нескольких платах он пишется в плату камеры.
+
+        Без подмены запросы профиля шли бы узлу раздела «Параметры» (по умолчанию
+        заводской адрес), а не плате, для которой посчитаны таблицы и открыт доступ.
+        """
+        multi = getattr(self, "_mb_on", None)
+        active = getattr(self, "_mb_active_sa", None)
+        if multi is not None and multi() and active is not None:
+            return int(active) & 0xFF
+        return None
 
     def _on_profile_step_timeout(self):
         """Отправляет следующую операцию очереди отдельным тактом."""

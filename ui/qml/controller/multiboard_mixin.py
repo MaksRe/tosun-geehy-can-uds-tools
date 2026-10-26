@@ -42,6 +42,8 @@ BOARD_ATTRS = (
     # Живой опрос и средние.
     "_chamber_live_last", "_chamber_live_seen", "_chamber_live_recent", "_chamber_live_outliers",
     "_chamber_live_restart_s", "_chamber_live_refusals", "_chamber_live_missing",
+    # Очередная величина опроса: общий номер при 2, 3, 4 и 6 платах отдавал бы плате не все величины.
+    "_chamber_live_index",
     "_chamber_capture_waiting", "_chamber_capture_wait_since",
     # Журнал точек и таблицы.
     "_chamber_points", "_chamber_file_path", "_chamber_report", "_chamber_status", "_chamber_status_color",
@@ -67,6 +69,10 @@ class AppControllerMultiBoardMixin(AppControllerContract):
     MB_CAPTURE_WAIT_S = 60.0
     # Сколько ждать записи профиля одной платы, с.
     MB_CHAIN_WAIT_S = 600.0
+    # Сколько ждать закрытия калибровки прежней платы перед записью профиля в следующую, с.
+    MB_SWITCH_WAIT_S = 15.0
+    # Показание считается текущим, пока не старше стольких кругов опроса своей величины.
+    MB_STALE_ROUNDS = 2.5
 
     # ------------------------------------------------------------------ состояние
 
@@ -90,6 +96,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         self._mb_profile_current: int | None = None
         self._mb_profile_since = 0.0
         self._mb_profile_results: dict[int, str] = {}
+        self._mb_switch_since: float | None = None
         self._mb_status = ""
         self._mb_load()
         self._mb_apply_period()
@@ -304,9 +311,20 @@ class AppControllerMultiBoardMixin(AppControllerContract):
 
     # ------------------------------------------------------------------ опрос по кругу
 
+    def _mb_stale_s(self, base: float, order_length: int) -> float:
+        """Цель функции в пороге «показание устарело» при нескольких платах: опрос по кругу идёт дольше.
+
+        Каждая плата получает запрос раз в (число плат) тактов, а температура - одна из шести величин
+        круга; при пяти платах её показание обновляется раз в 2,7 с, и прежний порог 3 с давал бы
+        ложное «прибор не отдал температуру» от одного потерянного ответа.
+        """
+        if not self._mb_on():
+            return float(base)
+        round_s = float(order_length) * len(self._mb_boards) * self.MB_LIVE_PERIOD_MS / 1000.0
+        return max(float(base), self.MB_STALE_ROUNDS * round_s)
+
     def _mb_live_tick(self, now: float):
         """Такт опроса нескольких плат: очередная величина очередной платы."""
-        self._mb_profile_tick(now)
         if self._mb_busy() or bool(getattr(self, "_mb_profile_current", None) is not None):
             return
         self._mb_quiet_keep(now)
@@ -473,7 +491,13 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         return bool(self._mb_profile_queue) or self._mb_profile_current is not None
 
     def _mb_profile_tick(self, now: float):
-        """Очередь записи профилей: по одной плате, следующая - когда предыдущая записана."""
+        """Очередь записи профилей: по одной плате, следующая - когда предыдущая записана.
+
+        Перед каждой платой калибровка (сеанс и Security Access), открытая для другой
+        платы, закрывается: доступ на запись открывается заново - для этой платы.
+        """
+        if not self._mb_on():
+            return
         current = self._mb_profile_current
         if current is not None:
             stage = str(getattr(self, "_chamber_chain_stage", "") or "")
@@ -483,17 +507,103 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             self._mb_profile_current = None
             if stage:
                 self._mb_profile_results[current] = "запись профиля не закончилась вовремя"
+            self._mb_changed()
+            if not self._mb_profile_queue:
+                # Последняя плата: калибровка закрывается, плата возвращается в обычный сеанс.
+                self._mb_calibration_close()
         if not self._mb_profile_queue or self._mb_profile_current is not None:
             return
-        sa = self._mb_profile_queue.pop(0)
+        sa = self._mb_profile_queue[0]
+        if not self._mb_calibration_free_for(sa, now):
+            return
+        self._mb_profile_queue.pop(0)
         if not self._mb_activate(sa):
             self._mb_profile_queue.insert(0, sa)
             return
+        self._mb_status = f"Пишу профиль в плату «{self._mb_name(sa)}»..."
+        if self._chamber_chain_start(automatic=True) is False:
+            # Цепочка не запустилась: причина - в итог платы, очередь идёт дальше.
+            problem_of = getattr(self, "_chamber_chain_problem", None)
+            problem = problem_of() if problem_of is not None else ""
+            self._mb_profile_results[sa] = (f"профиль не записан: {problem}" if problem
+                                            else "этот профиль уже записан в плату ранее")
+            self._mb_changed()
+            return
         self._mb_profile_current = sa
         self._mb_profile_since = now
-        self._chamber_chain_start(automatic=True)
-        self._mb_status = f"Пишу профиль в плату «{self._mb_name(sa)}»..."
         self._mb_changed()
+
+    def _mb_calibration_free_for(self, sa: int, now: float) -> bool:
+        """Цель функции в проверке, что калибровка не держит другую плату, затем запись профиля откроет доступ сама.
+
+        Калибровка, запущенная для прежней платы, останавливается (прежняя плата
+        возвращается в обычный сеанс); пока прибор не ответил - ожидание, не дольше 15 с.
+        """
+        active = bool(getattr(self, "_calibration_active", False))
+        waiting = bool(getattr(self, "_calibration_waiting_session", False))
+        if not active and not waiting:
+            self._mb_switch_since = None
+            return True
+        if active and not waiting:
+            target = getattr(self, "_service_access_target_sa", None)
+            if bool(getattr(self, "_service_security_unlocked", False)) and target is not None \
+                    and (int(target) & 0xFF) == (int(sa) & 0xFF):
+                self._mb_switch_since = None
+                return True
+            self._mb_switch_since = now
+            stop = getattr(self, "stopCalibration", None)
+            if stop is not None:
+                stop()
+            return False
+        if self._mb_switch_since is None:
+            self._mb_switch_since = now
+        if now - self._mb_switch_since >= self.MB_SWITCH_WAIT_S:
+            # Прибор не подтвердил возврат сеанса: калибровка закрывается локально, плата сама
+            # вернётся в обычный сеанс через 30 с без запросов.
+            finish = getattr(self, "_finish_calibration_deactivation", None)
+            if finish is not None:
+                finish("Калибровка закрыта: прибор не ответил на возврат сеанса, следующая плата.")
+            self._calibration_active = False
+            self._mb_switch_since = None
+        return False
+
+    def _mb_calibration_close(self):
+        """Цель функции в закрытии калибровки после последней платы, затем плата возвращается в обычный сеанс."""
+        if bool(getattr(self, "_calibration_active", False)) and not bool(getattr(self, "_calibration_waiting_session", False)):
+            stop = getattr(self, "stopCalibration", None)
+            if stop is not None:
+                stop()
+
+    def _mb_journals(self) -> list[dict]:
+        """Цель функции в журналах всех плат для сохранения состояния прогона, затем перезапуск вернёт каждой свой."""
+        if not self._mb_on():
+            return []
+        result = []
+        for board in self._mb_boards:
+            with self._mb_context(board["sa"]):
+                result.append({"sa": int(board["sa"]), "journal": str(self._chamber_file_path or "")})
+        return result
+
+    def _mb_restore_journals(self, boards) -> list[str]:
+        """Цель функции в загрузке журнала каждой платы в её же поля, затем точки до перезапуска войдут в её таблицы."""
+        events = []
+        loader = getattr(self, "_chamber_load_file", None)
+        for item in boards or []:
+            try:
+                sa = int(item.get("sa")) & 0xFF
+            except (TypeError, ValueError, AttributeError):
+                continue
+            journal = str(item.get("journal") or "")
+            if self._mb_board(sa) is None or not journal:
+                continue
+            with self._mb_context(sa):
+                if journal == str(self._chamber_file_path or ""):
+                    continue
+                if loader is not None and pathlib.Path(journal).is_file() and loader(journal):
+                    events.append(f"«{self._mb_name(sa)}»: {len(self._chamber_points)} точек")
+                else:
+                    events.append(f"«{self._mb_name(sa)}»: журнал {journal} не загрузился")
+        return events
 
     def _mb_summary_text(self) -> str:
         """Итог по платам для сообщения о конце прогона."""
