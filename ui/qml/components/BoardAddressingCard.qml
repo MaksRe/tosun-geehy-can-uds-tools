@@ -265,6 +265,8 @@ Card {
         required property var modelData
         property bool editingName: false
         property bool editingSa: false
+        // Причина, по которой адрес не записан: видна прямо под полем, поле остаётся открытым.
+        property string saError: ""
         readonly property bool editable: !!root.addr.editable
         width: root.boardCardWidth
         height: boardLayout.implicitHeight + 28
@@ -280,9 +282,12 @@ Card {
         }
 
         function saveSa() {
-            if (root.appController)
-                root.appController.readdressBoard(boardCard.modelData.sa, saField.text)
-            boardCard.editingSa = false
+            if (!root.appController)
+                return
+            var error = root.appController.readdressBoard(boardCard.modelData.sa, saField.text)
+            boardCard.saError = error || ""
+            if (!error)
+                boardCard.editingSa = false
         }
 
         ColumnLayout {
@@ -426,6 +431,7 @@ Card {
                                                     : "Сейчас нельзя: идёт работа мастера или прогон"
                     onClicked: {
                         saField.text = boardCard.modelData.saText
+                        boardCard.saError = ""
                         boardCard.editingSa = true
                         saField.forceActiveFocus()
                         saField.selectAll()
@@ -448,63 +454,247 @@ Card {
                 spacing: 6
                 visible: boardCard.editingSa
 
-                Caption { text: "Новый адрес" }
+                // Поле растягивается на свободное место: строка не шире карточки при любом масштабе шрифтов.
                 FancyTextField {
                     id: saField
-                    Layout.preferredWidth: 62
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 60
                     Layout.preferredHeight: 28
-                    placeholderText: "A0"
+                    placeholderText: "новый адрес, HEX"
                     textColor: root.textMain
                     bgColor: root.inputBg
                     borderColor: root.inputBorder
                     focusBorderColor: root.inputFocus
                     onAccepted: boardCard.saveSa()
+                    onTextChanged: boardCard.saError = ""
                     Keys.onEscapePressed: boardCard.editingSa = false
                 }
-                Item { Layout.fillWidth: true }
                 SmallButton {
-                    Layout.preferredWidth: 78
+                    Layout.preferredWidth: 84
                     Layout.preferredHeight: 28
                     fontPixelSize: 11
                     text: "Записать"
+                    toolTipText: "Записать плате этот адрес (с проверкой чтением). Esc - отмена"
                     tone: "#16a34a"; toneHover: "#15803d"; tonePressed: "#166534"
                     onClicked: boardCard.saveSa()
                 }
                 SmallButton {
-                    Layout.preferredWidth: 64
+                    Layout.preferredWidth: 30
                     Layout.preferredHeight: 28
-                    fontPixelSize: 11
-                    text: "Отмена"
+                    fontPixelSize: 12
+                    text: "✕"
+                    toolTipText: "Отмена"
                     onClicked: boardCard.editingSa = false
                 }
+            }
+            Text {
+                visible: boardCard.editingSa && boardCard.saError.length > 0
+                Layout.fillWidth: true
+                text: boardCard.saError
+                color: "#dc2626"
+                font.pixelSize: 11
+                font.family: "Bahnschrift"
+                wrapMode: Text.WordWrap
             }
         }
     }
 
-    Dialog {
-        id: resetConfirm
-        anchors.centerIn: Overlay.overlay
-        modal: true
-        title: "Сбросить адреса плат"
-        standardButtons: Dialog.Yes | Dialog.No
-        Text {
-            width: 460
-            wrapMode: Text.WordWrap
-            text: "Всем платам из списка, которые сейчас на шине, будет записан заводской адрес "
-                  + (root.addr.factorySa || "0x6A") + " (с проверкой, что старый адрес больше не отвечает). "
-                  + "Список плат и их история очистятся.
+    // Пункт окна подтверждения: номер в кружке, заголовок и пояснение.
+    component ConfirmStep: RowLayout {
+        id: confirmStep
+        property string number: ""
+        property string title: ""
+        property string hint: ""
+        Layout.fillWidth: true
+        spacing: 12
 
-"
-                  + "После сброса отключите ВСЕ платы, запустите мастер и подключайте их по одной: адреса "
-                  + "назначатся заново с П1.
-
-"
-                  + "Платы, которых сейчас нет на шине, сохранят свой адрес - мастер обойдёт его и назначит "
-                  + "такой плате новый, когда она появится."
-            font.pixelSize: 13
-            font.family: "Bahnschrift"
+        Rectangle {
+            Layout.alignment: Qt.AlignTop
+            Layout.preferredWidth: 24
+            Layout.preferredHeight: 24
+            radius: 12
+            color: "#eff6ff"
+            border.width: 1
+            border.color: "#bfdbfe"
+            Text {
+                anchors.centerIn: parent
+                text: confirmStep.number
+                color: "#1d4ed8"
+                font.pixelSize: 12
+                font.bold: true
+                font.family: "Bahnschrift"
+            }
         }
-        onAccepted: if (root.appController) root.appController.resetBoardAddresses()
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: 2
+            Text {
+                Layout.fillWidth: true
+                text: confirmStep.title
+                color: root.textMain
+                font.pixelSize: 13
+                font.bold: true
+                font.family: "Bahnschrift"
+                wrapMode: Text.WordWrap
+            }
+            Text {
+                Layout.fillWidth: true
+                visible: confirmStep.hint.length > 0
+                text: confirmStep.hint
+                color: root.textSoft
+                font.pixelSize: 12
+                font.family: "Bahnschrift"
+                wrapMode: Text.WordWrap
+                lineHeight: 1.15
+            }
+        }
+    }
+
+    Popup {
+        id: resetConfirm
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(540, (parent ? parent.width : 540) - 40)
+        modal: true
+        focus: true
+        padding: 0
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+        Overlay.modal: Rectangle { color: "#660f172a" }
+
+        background: Rectangle {
+            radius: 16
+            color: "#ffffff"
+            border.width: 1
+            border.color: "#e2e8f0"
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 0
+
+            // Заголовок: значок предупреждения и суть действия.
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: 24
+                Layout.rightMargin: 24
+                Layout.topMargin: 22
+                spacing: 14
+
+                Rectangle {
+                    Layout.preferredWidth: 40
+                    Layout.preferredHeight: 40
+                    radius: 20
+                    color: "#fef2f2"
+                    border.width: 1
+                    border.color: "#fecaca"
+                    Text {
+                        anchors.centerIn: parent
+                        text: "↺"
+                        color: "#dc2626"
+                        font.pixelSize: 20
+                        font.bold: true
+                    }
+                }
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+                    Text {
+                        text: "Сбросить адреса плат?"
+                        color: root.textMain
+                        font.pixelSize: 17
+                        font.bold: true
+                        font.family: "Bahnschrift"
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: "Назначение адресов начнётся заново с П1"
+                        color: root.textSoft
+                        font.pixelSize: 12
+                        font.family: "Bahnschrift"
+                    }
+                }
+            }
+
+            Rectangle { Layout.fillWidth: true; Layout.topMargin: 18; Layout.preferredHeight: 1; color: "#eef2f7" }
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: 24
+                Layout.rightMargin: 24
+                Layout.topMargin: 16
+                spacing: 14
+
+                ConfirmStep {
+                    number: "1"
+                    title: "Платам на шине - заводской адрес " + (root.addr.factorySa || "0x6A")
+                    hint: "Программа сначала опросит все платы списка, затем по очереди запишет адрес и проверит, "
+                          + "что по старому адресу плата больше не отвечает."
+                }
+                ConfirmStep {
+                    number: "2"
+                    title: "Список плат и их история очистятся"
+                    hint: "Имена, история адресов и режимы трафика будут забыты."
+                }
+                ConfirmStep {
+                    number: "3"
+                    title: "Затем отключите все платы"
+                    hint: "Запустите мастер и подключайте платы по одной: адреса назначатся с первого по порядку."
+                }
+
+                // Платы, которых нет на шине: их адрес не сбросить, он останется занятым.
+                Rectangle {
+                    Layout.fillWidth: true
+                    visible: (root.addr.absent || []).length > 0
+                    Layout.preferredHeight: absentNote.implicitHeight + 20
+                    radius: 10
+                    color: "#fffbeb"
+                    border.width: 1
+                    border.color: "#fde68a"
+                    Text {
+                        id: absentNote
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        text: "Сейчас не на шине: " + (root.addr.absent || []).join(", ") + ". Их адреса сбросить "
+                              + "нельзя - они останутся занятыми, пока вы не нажмёте «Освободить»."
+                        color: "#92400e"
+                        font.pixelSize: 12
+                        font.family: "Bahnschrift"
+                        wrapMode: Text.WordWrap
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: 24
+                Layout.rightMargin: 24
+                Layout.topMargin: 22
+                Layout.bottomMargin: 20
+                spacing: 10
+
+                Item { Layout.fillWidth: true }
+                FancyButton {
+                    Layout.preferredWidth: 110
+                    Layout.preferredHeight: 34
+                    fontPixelSize: 13
+                    text: "Отмена"
+                    tone: "#94a3b8"; toneHover: "#64748b"; tonePressed: "#475569"
+                    onClicked: resetConfirm.close()
+                }
+                FancyButton {
+                    Layout.preferredWidth: 170
+                    Layout.preferredHeight: 34
+                    fontPixelSize: 13
+                    text: "Сбросить адреса"
+                    tone: "#dc2626"; toneHover: "#b91c1c"; tonePressed: "#991b1b"
+                    onClicked: {
+                        resetConfirm.close()
+                        if (root.appController)
+                            root.appController.resetBoardAddresses()
+                    }
+                }
+            }
+        }
     }
 
     ScrollView {
@@ -818,12 +1008,23 @@ Card {
                 color: "#b45309"
                 wrapMode: Text.WordWrap
             }
-            Caption {
+            RowLayout {
                 visible: (root.addr.reserved || []).length > 0
                 Layout.fillWidth: true
-                text: "Адреса оставлены занятыми (этих плат не было на шине при сбросе; при подключении мастер назначит "
-                      + "им новые): " + (root.addr.reserved || []).join(", ")
-                wrapMode: Text.WordWrap
+                spacing: 8
+
+                Caption {
+                    Layout.fillWidth: true
+                    text: "Адреса оставлены занятыми (этих плат не было на шине при сбросе; при подключении мастер "
+                          + "назначит им новые): " + (root.addr.reserved || []).join(", ")
+                    wrapMode: Text.WordWrap
+                }
+                SmallButton {
+                    Layout.preferredWidth: 110
+                    text: "Освободить"
+                    toolTipText: "Тех плат больше нет: эти адреса снова можно назначать"
+                    onClicked: if (root.appController) root.appController.releaseReservedAddresses()
+                }
             }
 
             Flow {

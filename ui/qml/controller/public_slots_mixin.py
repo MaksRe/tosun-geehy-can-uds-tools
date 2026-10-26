@@ -3591,7 +3591,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         """Цель функции в запуске мастера адресов: платы подключаются по одной, адреса назначаются сами."""
         ok, text = self._addr_start(str(start_text))
         if not ok:
-            self.infoMessage.emit("Адреса плат", text[:1].upper() + text[1:] + ".")
+            self._addr_refuse(text)
 
     @Slot(str)
     def setBoardAddressingMode(self, mode):
@@ -3603,7 +3603,7 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         """Цель функции в адресе и имени найденной платы от оператора (ручной режим)."""
         ok, text = self._addr_confirm(str(sa_text), str(name))
         if not ok:
-            self.infoMessage.emit("Адреса плат", text[:1].upper() + text[1:] + ".")
+            self._addr_refuse(text)
 
     @Slot()
     def stopBoardAddressing(self):
@@ -3629,27 +3629,33 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
     def releaseBoardsTraffic(self):
         """Цель функции в возврате обычного трафика J1939 (RX+TX) всем платам на шине."""
         if not self._addr_release_all():
-            self.infoMessage.emit("Адреса плат", "Не удалось отправить команду: проверьте адаптер CAN.")
+            self._addr_refuse("не удалось отправить команду: проверьте адаптер CAN")
 
     @Slot(int)
     def setAllBoardsTraffic(self, mode):
         """Цель функции в режиме трафика J1939 (0x28: 0 RX+TX, 1 RX, 2 TX, 3 выкл) сразу всем платам."""
         if not self._addr_comm_all(int(mode)):
-            self.infoMessage.emit("Адреса плат", "Не удалось отправить команду: проверьте адаптер CAN.")
+            self._addr_refuse("не удалось отправить команду: проверьте адаптер CAN")
 
     @Slot(int, int)
     def setBoardTraffic(self, sa, mode):
         """Цель функции в режиме трафика J1939 одной платы с подтверждением и проверкой по шине."""
         ok, text = self._addr_set_comm(int(sa), int(mode))
         if not ok:
-            self.infoMessage.emit("Трафик платы", text[:1].upper() + text[1:] + ".")
+            self._addr_refuse(text)
 
-    @Slot(int, str)
+    @Slot(int, str, result=str)
     def readdressBoard(self, sa, sa_text):
-        """Цель функции в смене адреса уже настроенной платы из её карточки (с проверкой чтением)."""
+        """Цель функции в смене адреса настроенной платы из карточки; возвращает причину отказа (пусто - начато)."""
         ok, text = self._addr_readdress(int(sa), str(sa_text))
-        if not ok:
-            self.infoMessage.emit("Адрес платы", text[:1].upper() + text[1:] + ".")
+        if ok:
+            return ""
+        return self._addr_refuse(text)
+
+    @Slot()
+    def releaseReservedAddresses(self):
+        """Цель функции в освобождении адресов, оставленных занятыми при сбросе, - если тех плат больше нет."""
+        self._addr_release_reserved()
 
     @Slot(bool)
     def setBoardAddressingVisible(self, visible):
@@ -3661,14 +3667,14 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         """Цель функции в сбросе адресов подключённых плат к заводскому и очистке списка - назначение заново."""
         ok, text = self._addr_reset_start()
         if not ok:
-            self.infoMessage.emit("Сброс адресов", text[:1].upper() + text[1:] + ".")
+            self._addr_refuse(text)
 
     @Slot(int, str)
     def renameAddressedBoard(self, sa, name):
         """Цель функции в смене имени платы из её карточки."""
         ok, text = self._addr_rename(int(sa), str(name))
         if not ok:
-            self.infoMessage.emit("Имя платы", text[:1].upper() + text[1:] + ".")
+            self._addr_refuse(text)
 
     @Slot(bool)
     def setChamberQuietBus(self, enabled):

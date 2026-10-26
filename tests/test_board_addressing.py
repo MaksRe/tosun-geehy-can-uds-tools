@@ -573,3 +573,47 @@ def test_several_boards_on_one_address_stop_the_wizard(tmp_path: Path, monkeypat
     assert stub._addr_stage == "failed" and "несколько плат" in stub._addr_status
     assert first.sa == 0x6A and second.sa == 0x6A, "ничего не записано"
     assert stub._addr_failed_stage == "seed"
+
+
+def test_reset_asks_every_board_itself_before_deciding(tmp_path: Path, monkeypatch):
+    """Раздел только что открыт (никто ещё не отвечал): сброс сам опрашивает платы и сбрасывает ответивших."""
+    stub, boards = _addressed(tmp_path, monkeypatch, count=2)
+    stub._addr_answered.clear()
+    stub._addr_seen.clear()
+    assert stub._addr_reset_start()[0]
+    stub.run(6.0)
+    assert [board.sa for board in boards] == [0x6A, 0x6A]
+    assert stub._mb_boards == [] and stub._addr_reserved == set()
+
+
+def test_reset_is_not_blocked_by_a_waiting_wizard(tmp_path: Path, monkeypatch):
+    stub, boards = _addressed(tmp_path, monkeypatch, count=1)
+    assert stub._addr_set_mode("manual")
+    assert stub._addr_start("")[0]
+    newcomer = _Board(0x6A)
+    _connect_and_wait(stub, newcomer, 3.0)
+    assert stub._addr_stage == "ask"
+    stub.boards.remove(newcomer)
+    assert stub._addr_reset_start()[0], "ожидание адреса - не причина отказать в сбросе"
+    stub.run(5.0)
+    assert boards[0].sa == 0x6A and stub._mb_boards == []
+
+
+def test_reserved_address_is_explained_and_can_be_released(tmp_path: Path, monkeypatch):
+    stub, (board,) = _addressed(tmp_path, monkeypatch, count=1)
+    stub._addr_reserved = {0x90}
+    ok, text = stub._addr_readdress(0x81, "90")
+    assert not ok and "Освободить" in text
+    assert stub._addr_refuse(text).startswith("0x90") and stub._addr_status_color == "#dc2626"
+    stub._addr_release_reserved()
+    assert stub._addr_readdress(0x81, "90")[0]
+    stub.run(4.0)
+    assert board.sa == 0x90
+
+
+def test_device_seen_long_ago_does_not_block_an_address(tmp_path: Path, monkeypatch):
+    stub, (board,) = _addressed(tmp_path, monkeypatch, count=1)
+    stub._addr_seen[0x95] = stub.now - 60.0
+    assert stub._addr_readdress(0x81, "95")[0]
+    stub.run(4.0)
+    assert board.sa == 0x95
