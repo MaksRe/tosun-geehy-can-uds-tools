@@ -3709,8 +3709,8 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
     @Slot(int)
     def selectChamberBoard(self, sa):
         """Цель функции в показе платы: её журнал, таблицы и профиль - в окне."""
-        if not self._mb_activate(int(sa)):
-            self.infoMessage.emit("Несколько плат", "Идёт обмен с прибором: переключитесь через несколько секунд.")
+        # Причину отказа покажет лента плат (в том же окне).
+        self._mb_activate(int(sa))
 
     @Slot(str)
     def openChamberJournal(self, path):

@@ -61,6 +61,16 @@ Rectangle {
             }
             Item { Layout.fillWidth: true }
             Text {
+                visible: (strip.view.switchNote || "").length > 0
+                text: strip.view.switchNote || ""
+                color: "#b45309"
+                font.pixelSize: 11
+                font.family: "Bahnschrift"
+                elide: Text.ElideRight
+                Layout.maximumWidth: 520
+            }
+            Text {
+                visible: !(strip.view.switchNote || "").length
                 text: strip.view.shownName ? "ниже показана «" + strip.view.shownName + "» (" + strip.view.shownSa
                                              + ") · щелчок по плате - показать её во всех разделах" : ""
                 color: strip.textSoft
@@ -82,7 +92,7 @@ Rectangle {
                     id: tile
                     required property var modelData
                     readonly property bool shown: !!tile.modelData.active
-                    width: 204
+                    width: 214
                     height: tileLayout.implicitHeight + 16
                     radius: 10
                     color: tile.shown ? "#eff6ff" : (tileArea.containsMouse ? "#f8fafc" : "#ffffff")
@@ -138,6 +148,30 @@ Rectangle {
                             font.pixelSize: 11
                             font.family: "Bahnschrift"
                             elide: Text.ElideRight
+                        }
+                        // Узлы температуры: заполненный кружок - у платы есть точка в этом узле.
+                        Row {
+                            spacing: 3
+                            Repeater {
+                                model: tile.modelData.nodes || []
+                                Rectangle {
+                                    id: nodeDot
+                                    required property var modelData
+                                    width: 22
+                                    height: 12
+                                    radius: 6
+                                    color: nodeDot.modelData.count > 0 ? "#16a34a" : "#f1f5f9"
+                                    border.width: 1
+                                    border.color: nodeDot.modelData.count > 0 ? "#15803d" : "#cbd5e1"
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: nodeDot.modelData.short
+                                        color: nodeDot.modelData.count > 0 ? "#ffffff" : "#94a3b8"
+                                        font.pixelSize: 8
+                                        font.family: "Bahnschrift"
+                                    }
+                                }
+                            }
                         }
                         RowLayout {
                             Layout.fillWidth: true

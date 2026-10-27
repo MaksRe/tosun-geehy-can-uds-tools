@@ -100,6 +100,9 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         self._mb_status = ""
         # Лента плат над разделами калибровки видна: опрос всех плат нужен и вне раздела прогона.
         self._mb_strip_visible = False
+        # Почему не удалось переключить показанную плату - строка в ленте, видна 8 с.
+        self._mb_switch_note = ""
+        self._mb_switch_note_s = 0.0
         self._mb_load()
         self._mb_apply_period()
 
@@ -224,8 +227,15 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         if self._mb_active_sa == sa:
             self._calibration_target_node_sa = sa
             return True
-        if not force and self._mb_busy():
+        if not force and (self._mb_busy() or bool(getattr(self, "_trial_busy", False))):
+            # Причина - в ленте плат (она в том же окне), а не всплывающей подсказкой главного окна.
+            what = "идёт пробная калибровка" if getattr(self, "_trial_busy", False) else "идёт обмен с прибором"
+            self._mb_switch_note = (f"Переключиться на «{self._mb_name(sa)}» сейчас нельзя: {what} с "
+                                    f"«{self._mb_name(self._mb_active_sa)}». Подождите конца.")
+            self._mb_switch_note_s = time.monotonic()
+            self._mb_changed()
             return False
+        self._mb_switch_note = ""
         if self._mb_active_sa is not None:
             self._mb_store(self._mb_active_sa)
             self._mb_restore(sa)
@@ -556,6 +566,9 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             if stage:
                 self._mb_profile_results[current] = "запись профиля не закончилась вовремя"
             self._mb_changed()
+            reread = getattr(self, "_addr_queue_info", None)
+            if reread is not None:
+                reread(current)
             if not self._mb_profile_queue:
                 # Последняя плата: калибровка закрывается, плата возвращается в обычный сеанс.
                 self._mb_calibration_close()
@@ -679,7 +692,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                 main = self._chamber_live_stats("main", now)
                 media = self._chamber_live_stats("media", now)
                 fresh = self._chamber_live_fresh("board_temp", now)
-                profile_state, profile_tone = self._mb_profile_state()
+                profile_state, profile_tone = self._mb_profile_state(board["sa"])
                 rows.append({
                     "sa": board["sa"], "saText": f"0x{board['sa']:02X}", "name": board["name"],
                     "active": board["sa"] == shown,
@@ -693,16 +706,22 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                     "tablesComplete": bool(self._chamber_tables_complete),
                     "profile": self._mb_profile_results.get(board["sa"], str(self._chamber_chain_status or "")),
                     "profileState": profile_state, "profileTone": profile_tone,
+                    "nodes": self._mb_node_marks(),
                 })
         shown_board = self._mb_board(shown) if shown is not None else None
         return {"enabled": self._mb_on(), "configured": bool(self._mb_enabled), "quietBus": bool(self._mb_quiet_bus),
                 "boards": rows, "candidates": [f"0x{sa:02X}" for sa in self._mb_bus_candidates()],
                 "status": self._mb_status,
                 "shownName": "" if shown_board is None else str(shown_board["name"]),
+                "switchNote": self._mb_switch_note if now - self._mb_switch_note_s < 8.0 else "",
                 "shownSa": "" if shown is None else f"0x{int(shown):02X}"}
 
-    def _mb_profile_state(self) -> tuple[str, str]:
-        """Цель функции в кратком состоянии профиля платы для плитки ленты: записан, пишется, ошибка, не записан."""
+    def _mb_profile_state(self, sa: int | None = None) -> tuple[str, str]:
+        """Цель функции в кратком состоянии профиля платы для плитки: пишется, записан, ошибка, что в самой плате.
+
+        Сначала - запись в этом сеансе программы; если её не было, то, что прочитано из самой платы
+        (профиль мог быть записан раньше): применяется с суммой, не применяется или пустой.
+        """
         if getattr(self, "_chamber_chain_stage", ""):
             return "пишется", "run"
         written = getattr(self, "_chamber_written_crc", None)
@@ -710,7 +729,28 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             return f"записан 0x{int(written):04X}", "ok"
         if str(getattr(self, "_chamber_chain_color", "")) == "#dc2626":
             return "ошибка записи", "bad"
+        info = (getattr(self, "_addr_info", {}) or {}).get(int(sa), {}) if sa is not None else {}
+        status = info.get("profileStatus")
+        if status is not None:
+            crc = info.get("profileCrc")
+            if int(status) & 0x08:
+                return (f"в плате 0x{int(crc):04X}" if crc is not None else "в плате, применяется"), "ok"
+            if int(status) & 0x01:
+                return "в плате не применяется", "bad"
+            return "в плате пустой", "normal"
         return "не записан", "normal"
+
+    def _mb_node_marks(self) -> list[dict]:
+        """Цель функции в узлах температуры для плитки: у каких есть точки этой платы, а каких ещё нет."""
+        counts = {node: 0 for node in chamber_fit.NODES_X10}
+        for point in getattr(self, "_chamber_points", []) or []:
+            if point.get("rehearsal"):
+                continue
+            node = chamber_fit.nearest_node(point.get("board_temp_x10"))
+            if node in counts:
+                counts[node] += 1
+        return [{"node": chamber_fit.node_text(node), "short": str(int(node) // 10), "count": count}
+                for node, count in counts.items()]
 
     def _mb_keeps_live(self) -> bool:
         """Цель функции в признаке «лента плат видна», затем опрос всех плат идёт в любом разделе калибровки."""
@@ -719,6 +759,13 @@ class AppControllerMultiBoardMixin(AppControllerContract):
     def _mb_set_strip_visible(self, visible: bool):
         """Цель функции в признаке видимой ленты плат, затем опрос включается или выключается сразу."""
         self._mb_strip_visible = bool(visible)
+        # Профиль в самой плате ещё не читали - прочитать (для плитки), по одному параметру, не мешая опросу.
+        queue = getattr(self, "_addr_queue_info", None)
+        info = getattr(self, "_addr_info", {}) or {}
+        if visible and self._mb_on() and queue is not None:
+            for board in self._mb_boards:
+                if info.get(int(board["sa"]), {}).get("profileStatus") is None:
+                    queue(int(board["sa"]))
         apply_live = getattr(self, "_chamber_live_apply_wanted", None)
         if apply_live is not None:
             apply_live()

@@ -12,6 +12,10 @@
   на адрес платы камеры, а не узла раздела «Параметры»;
 - каждая плата получает все величины опроса при любом числе плат;
 - после перезапуска программы журнал каждой платы возвращается в её же поля;
+- лента плат: на плитке - узлы с точками и профиль (из этого сеанса или
+  прочитанный из самой платы); показанную плату нельзя переключить посреди
+  пробной калибровки, причина видна в ленте; проверка перед прогоном
+  предупреждает, если плат несколько, а режим выключен;
 - пока режим выключен (показанной платы нет), просмотр таблицы плат не отдаёт
   поля последней платы первой: после включения у каждой платы своё окно среднего.
 """
@@ -359,3 +363,37 @@ def test_boards_do_not_share_fields_after_enabling(tmp_path: Path):
         with stub._mb_context(sa):
             assert stub._chamber_live_last["main"] == main, name
             assert [value for _stamp, value in stub._chamber_live_recent["main"]] == [main], name
+
+
+def test_strip_tiles_show_nodes_and_profile_in_the_board(tmp_path: Path):
+    stub = _stub(tmp_path, temps=(25.0, -40.0))
+    assert stub._climate_run_start(), stub._climate_run_status
+    _walk(stub)
+    stub._addr_info = {0x81: {"profileStatus": 0x0F, "profileCrc": 0x66E8}, 0x82: {"profileStatus": 0x05}}
+    rows = {row["sa"]: row for row in stub._mb_view()["boards"]}
+    marks = {mark["short"]: mark["count"] for mark in rows[0x80]["nodes"]}
+    assert marks["-40"] == 1 and marks["25"] == 1 and marks["85"] == 0
+    assert rows[0x80]["profileState"] == "не записан"
+    assert rows[0x81]["profileState"] == "в плате 0x66E8" and rows[0x81]["profileTone"] == "ok"
+    assert rows[0x82]["profileState"] == "в плате не применяется"
+
+
+def test_shown_board_is_not_switched_during_trial(tmp_path: Path):
+    stub = _stub(tmp_path)
+    stub._trial_busy = True
+    assert not stub._mb_activate(0x81)
+    view = stub._mb_view()
+    assert view["shownSa"] == "0x80" and "пробная калибровка" in view["switchNote"]
+    stub._trial_busy = False
+    assert stub._mb_activate(0x81) and stub._mb_view()["switchNote"] == ""
+
+
+def test_run_check_warns_when_several_boards_but_mode_off(tmp_path: Path):
+    stub = _stub(tmp_path)
+    assert stub._mb_set_enabled(False)[0]
+    checks = {item["key"]: item for item in stub._climate_auto_checks()}
+    assert not checks["boards"]["ok"] and "выключено" in checks["boards"]["text"]
+    assert stub._mb_set_enabled(True)[0]
+    stub._chamber_auto_write = True
+    checks = {item["key"]: item for item in stub._climate_auto_checks()}
+    assert checks["boards"]["ok"] and "по очереди" in checks["boards"]["text"]

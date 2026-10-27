@@ -344,6 +344,21 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         except OSError:
             pass
 
+        boards = list(getattr(self, "_mb_boards", []) or [])
+        multi_on = getattr(self, "_mb_on", None)
+        if len(boards) >= 2:
+            if multi_on is not None and multi_on():
+                auto_write = bool(getattr(self, "_chamber_auto_write", False))
+                add("boards", auto_write,
+                    f"Несколько плат: {len(boards)} - у каждой свой журнал и таблицы; профили запишутся в каждую плату "
+                    "по очереди после прогона" if auto_write else
+                    f"Несколько плат: {len(boards)}, но автозапись профиля выключена - профили в платы не запишутся "
+                    "(«Прогон в камере» -> «Режим прогона»)", "warn")
+            else:
+                add("boards", False,
+                    f"В списке плат камеры {len(boards)}, но «Несколько плат сразу» выключено: точки и профиль будут "
+                    "только у одной платы. Включите режим в «Прогоне в камере» -> «Несколько плат в камере»", "warn")
+
         points = len(getattr(self, "_chamber_points", []) or [])
         if points:
             name = pathlib.Path(str(getattr(self, "_chamber_file_path", "") or "")).name
