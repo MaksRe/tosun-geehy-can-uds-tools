@@ -341,6 +341,22 @@ class AppControllerNodeLiveMixin(AppControllerContract):
         except Exception:
             pass
 
+    def _node_live_forget(self):
+        """Цель функции в сбросе показаний и графиков, затем данные другой платы не склеиваются с прежними."""
+        for key in self._node_live:
+            self._node_live[key] = None
+            self._node_live_seen[key] = 0.0
+            self._node_live_asked[key] = 0.0
+        self._node_live_refusals = {}
+        self._node_live_missing = set()
+        self._node_live_pending_key = None
+        self._node_live_j1939 = None
+        self._node_live_j1939_seen = 0.0
+        clear = getattr(self, "_node_trend_clear", None)
+        if clear is not None:
+            clear()
+        self.nodeLiveChanged.emit()
+
     def _node_live_set_enabled(self, enabled: bool):
         """Просьба раздела: опрашивать узел, пока раздел открыт."""
         self._node_live_wanted = bool(enabled)

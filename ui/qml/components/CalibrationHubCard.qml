@@ -40,6 +40,10 @@ Card {
 
     property int currentSection: 0
 
+    // Несколько плат в камере: над разделами - лента всех плат, в шапке - показанная плата.
+    readonly property var boardsView: root.appController ? root.appController.chamberBoards : ({})
+    readonly property bool multiBoards: !!root.boardsView.enabled
+
     readonly property bool writeAllowed: root.appController ? root.appController.mediaWizardWriteAllowed : false
 
     function sectionStatus(index) {
@@ -50,7 +54,8 @@ Card {
             if (root.appController.mediaWizardBusy)
                 return "Идёт запись точки"
             if (!root.appController.calibrationActive)
-                return root.appController.calibrationSelectedNodeText || "Не запущена"
+                return root.multiBoards ? "Плата: " + (root.boardsView.shownName || "—") + " · " + (root.boardsView.shownSa || "")
+                                        : (root.appController.calibrationSelectedNodeText || "Не запущена")
             return root.appController.mediaWizardCanEnable
                 ? "Точки сняты: " + root.appController.mediaWizardEnabledText
                 : "Сценарий активен, точки вида топлива не сняты"
@@ -188,8 +193,39 @@ Card {
                     }
                 }
 
+                // Несколько плат: все разделы работают с показанной платой, выбирают её в ленте ниже.
+                Rectangle {
+                    visible: root.multiBoards
+                    Layout.preferredWidth: 230
+                    Layout.preferredHeight: 36
+                    radius: 8
+                    color: "#eff6ff"
+                    border.width: 1
+                    border.color: "#bfdbfe"
+                    Text {
+                        anchors.centerIn: parent
+                        width: parent.width - 16
+                        horizontalAlignment: Text.AlignHCenter
+                        text: "Плата: " + (root.boardsView.shownName || "—") + " · " + (root.boardsView.shownSa || "")
+                        color: "#1d4ed8"
+                        font.pixelSize: 13
+                        font.bold: true
+                        font.family: "Bahnschrift"
+                        elide: Text.ElideRight
+                    }
+                    ToolTip.visible: shownBoardArea.containsMouse
+                    ToolTip.delay: 400
+                    ToolTip.text: "Несколько плат в камере: все разделы работают с этой платой. Другую плату выберите в ленте плат."
+                    MouseArea {
+                        id: shownBoardArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                    }
+                }
+
                 FancyComboBox {
                     id: nodeSelector
+                    visible: !root.multiBoards
                     Layout.preferredWidth: 230
                     Layout.preferredHeight: 36
                     model: root.appController ? root.appController.calibrationNodeOptions : []
@@ -335,111 +371,128 @@ Card {
                 }
             }
 
-            StackLayout {
+            ColumnLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.minimumWidth: 600
-                currentIndex: root.currentSection
+                spacing: 10
 
-                // Отметки бака и точки плоского конденсатора снимаются в одних положениях
-                // датчика, поэтому живут в одном разделе.
-                TankCalibrationCard {
+                // Все платы камеры сразу; щелчок - показать плату во всех разделах. В «Адресах плат» и
+                // «Удалённом наблюдении» не нужна: там свои карточки и свои списки.
+                BoardsStrip {
+                    Layout.fillWidth: true
+                    visible: root.multiBoards && root.currentSection !== 3 && root.currentSection !== 7
                     appController: root.appController
-                    cardColor: root.cardColor
-                    cardBorder: root.cardBorder
                     textMain: root.textMain
                     textSoft: root.textSoft
-                    inputBg: root.inputBg
-                    inputBorder: root.inputBorder
-                    inputFocus: root.inputFocus
                 }
 
-                // После калибровки сразу видно, какой уровень выдаёт прибор и что с ним происходит.
-                NodeLiveCard {
-                    appController: root.appController
-                    cardColor: root.cardColor
-                    cardBorder: root.cardBorder
-                    textMain: root.textMain
-                    textSoft: root.textSoft
-                    inputBg: root.inputBg
-                    inputBorder: root.inputBorder
-                    inputFocus: root.inputFocus
-                }
+                StackLayout {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.minimumWidth: 600
+                    currentIndex: root.currentSection
 
-                ProfileCard {
-                    appController: root.appController
-                    showNodeControls: false
-                    cardColor: root.cardColor
-                    cardBorder: root.cardBorder
-                    textMain: root.textMain
-                    textSoft: root.textSoft
-                    inputBg: root.inputBg
-                    inputBorder: root.inputBorder
-                    inputFocus: root.inputFocus
-                    onSaveProfileRequested: root.saveProfileRequested()
-                    onLoadProfileRequested: root.loadProfileRequested()
-                }
+                    // Отметки бака и точки плоского конденсатора снимаются в одних положениях
+                    // датчика, поэтому живут в одном разделе.
+                    TankCalibrationCard {
+                        appController: root.appController
+                        cardColor: root.cardColor
+                        cardBorder: root.cardBorder
+                        textMain: root.textMain
+                        textSoft: root.textSoft
+                        inputBg: root.inputBg
+                        inputBorder: root.inputBorder
+                        inputFocus: root.inputFocus
+                    }
 
-                // Перед прогоном нескольких плат каждой нужен свой адрес на шине.
-                BoardAddressingCard {
-                    appController: root.appController
-                    cardColor: root.cardColor
-                    cardBorder: root.cardBorder
-                    textMain: root.textMain
-                    textSoft: root.textSoft
-                    inputBg: root.inputBg
-                    inputBorder: root.inputBorder
-                    inputFocus: root.inputFocus
-                }
+                    // После калибровки сразу видно, какой уровень выдаёт прибор и что с ним происходит.
+                    NodeLiveCard {
+                        appController: root.appController
+                        cardColor: root.cardColor
+                        cardBorder: root.cardBorder
+                        textMain: root.textMain
+                        textSoft: root.textSoft
+                        inputBg: root.inputBg
+                        inputBorder: root.inputBorder
+                        inputFocus: root.inputFocus
+                    }
 
-                ChamberCard {
-                    appController: root.appController
-                    cardColor: root.cardColor
-                    cardBorder: root.cardBorder
-                    textMain: root.textMain
-                    textSoft: root.textSoft
-                    inputBg: root.inputBg
-                    inputBorder: root.inputBorder
-                    inputFocus: root.inputFocus
-                    onSaveLogRequested: root.saveChamberLogRequested()
-                    onLoadLogRequested: root.loadChamberLogRequested()
-                    onExportTablesRequested: root.exportChamberTablesRequested()
-                }
+                    ProfileCard {
+                        appController: root.appController
+                        showNodeControls: false
+                        cardColor: root.cardColor
+                        cardBorder: root.cardBorder
+                        textMain: root.textMain
+                        textSoft: root.textSoft
+                        inputBg: root.inputBg
+                        inputBorder: root.inputBorder
+                        inputFocus: root.inputFocus
+                        onSaveProfileRequested: root.saveProfileRequested()
+                        onLoadProfileRequested: root.loadProfileRequested()
+                    }
 
-                // Камера задаёт температуру сама: прогон идёт без человека у камеры.
-                ClimateChamberCard {
-                    appController: root.appController
-                    cardColor: root.cardColor
-                    cardBorder: root.cardBorder
-                    textMain: root.textMain
-                    textSoft: root.textSoft
-                    inputBg: root.inputBg
-                    inputBorder: root.inputBorder
-                    inputFocus: root.inputFocus
-                }
+                    // Перед прогоном нескольких плат каждой нужен свой адрес на шине.
+                    BoardAddressingCard {
+                        appController: root.appController
+                        cardColor: root.cardColor
+                        cardBorder: root.cardBorder
+                        textMain: root.textMain
+                        textSoft: root.textSoft
+                        inputBg: root.inputBg
+                        inputBorder: root.inputBorder
+                        inputFocus: root.inputFocus
+                    }
 
-                TrialCard {
-                    appController: root.appController
-                    cardColor: root.cardColor
-                    cardBorder: root.cardBorder
-                    textMain: root.textMain
-                    textSoft: root.textSoft
-                    inputBg: root.inputBg
-                    inputBorder: root.inputBorder
-                    inputFocus: root.inputFocus
-                    onSaveProtocolRequested: root.saveTrialProtocolRequested()
-                }
+                    ChamberCard {
+                        appController: root.appController
+                        cardColor: root.cardColor
+                        cardBorder: root.cardBorder
+                        textMain: root.textMain
+                        textSoft: root.textSoft
+                        inputBg: root.inputBg
+                        inputBorder: root.inputBorder
+                        inputFocus: root.inputFocus
+                        onSaveLogRequested: root.saveChamberLogRequested()
+                        onLoadLogRequested: root.loadChamberLogRequested()
+                        onExportTablesRequested: root.exportChamberTablesRequested()
+                    }
 
-                // Камера далеко от рабочего места: прогон видно издалека.
-                RemoteMonitorCard {
-                    appController: root.appController
-                    cardColor: root.cardColor
-                    cardBorder: root.cardBorder
-                    textMain: root.textMain
-                    textSoft: root.textSoft
-                    inputBg: root.inputBg
-                    inputBorder: root.inputBorder
-                    inputFocus: root.inputFocus
+                    // Камера задаёт температуру сама: прогон идёт без человека у камеры.
+                    ClimateChamberCard {
+                        appController: root.appController
+                        cardColor: root.cardColor
+                        cardBorder: root.cardBorder
+                        textMain: root.textMain
+                        textSoft: root.textSoft
+                        inputBg: root.inputBg
+                        inputBorder: root.inputBorder
+                        inputFocus: root.inputFocus
+                    }
+
+                    TrialCard {
+                        appController: root.appController
+                        cardColor: root.cardColor
+                        cardBorder: root.cardBorder
+                        textMain: root.textMain
+                        textSoft: root.textSoft
+                        inputBg: root.inputBg
+                        inputBorder: root.inputBorder
+                        inputFocus: root.inputFocus
+                        onSaveProtocolRequested: root.saveTrialProtocolRequested()
+                    }
+
+                    // Камера далеко от рабочего места: прогон видно издалека.
+                    RemoteMonitorCard {
+                        appController: root.appController
+                        cardColor: root.cardColor
+                        cardBorder: root.cardBorder
+                        textMain: root.textMain
+                        textSoft: root.textSoft
+                        inputBg: root.inputBg
+                        inputBorder: root.inputBorder
+                        inputFocus: root.inputFocus
+                    }
                 }
             }
         }

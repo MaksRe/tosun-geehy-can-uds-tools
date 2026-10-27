@@ -3701,6 +3701,11 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         """Цель функции в понятном имени платы: оно в имени её журнала и в сообщениях."""
         self._mb_rename_board(int(sa), str(name))
 
+    @Slot(bool)
+    def setBoardsStripVisible(self, visible):
+        """Цель функции в признаке видимой ленты плат над разделами: пока она видна, опрашиваются все платы."""
+        self._mb_set_strip_visible(bool(visible))
+
     @Slot(int)
     def selectChamberBoard(self, sa):
         """Цель функции в показе платы: её журнал, таблицы и профиль - в окне."""

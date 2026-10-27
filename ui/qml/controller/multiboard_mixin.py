@@ -98,6 +98,8 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         self._mb_profile_results: dict[int, str] = {}
         self._mb_switch_since: float | None = None
         self._mb_status = ""
+        # Лента плат над разделами калибровки видна: опрос всех плат нужен и вне раздела прогона.
+        self._mb_strip_visible = False
         self._mb_load()
         self._mb_apply_period()
 
@@ -164,8 +166,15 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                 or bool(getattr(self, "_chamber_chain_stage", "")))
 
     @contextmanager
-    def _mb_context(self, sa: int):
-        """Поля платы sa на время блока; потом - снова поля показанной платы."""
+    def _mb_context(self, sa: int, notify: bool = True):
+        """Поля платы sa на время блока; потом - снова поля показанной платы.
+
+        На время блока сигналы контроллера придержаны: иначе окно перечитало бы показания, пока в
+        полях стоит чужая плата, и верхняя панель «мигала» бы данными других плат. После блока
+        (notify=True) окно получает одно «показания обновились» - уже с полями показанной платы.
+        Если показанной платы нет, свободные поля сохраняются и возвращаются: иначе плата, с которой
+        работали последней, «забрала» бы их, и при включении режима две платы писали бы в одно окно.
+        """
         sa = int(sa) & 0xFF
         previous_target = getattr(self, "_calibration_target_node_sa", None)
         if sa == self._mb_active_sa:
@@ -176,8 +185,16 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                 self._calibration_target_node_sa = previous_target
             return
         active = self._mb_active_sa
+        free = None
         if active is not None:
             self._mb_store(active)
+        else:
+            free = {name: getattr(self, name, None) for name in BOARD_ATTRS}
+        outer = self._mb_temp_depth == 0
+        block = getattr(self, "blockSignals", None)
+        blocked = outer and block is not None and not self.signalsBlocked()
+        if blocked:
+            block(True)
         self._mb_restore(sa)
         self._mb_active_sa = sa
         self._calibration_target_node_sa = sa
@@ -189,8 +206,17 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             self._mb_store(sa)
             if active is not None:
                 self._mb_restore(active)
+            else:
+                for name, value in free.items():
+                    setattr(self, name, value)
             self._mb_active_sa = active
             self._calibration_target_node_sa = previous_target
+            if blocked:
+                block(False)
+                if notify:
+                    signal = getattr(self, "chamberLiveChanged", None)
+                    if signal is not None:
+                        signal.emit()
 
     def _mb_activate(self, sa: int, force: bool = False) -> bool:
         """Показать плату sa: её журнал, таблицы и профиль - в окне. Нельзя посреди обмена с прибором."""
@@ -208,6 +234,10 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             self._mb_store(sa)
         self._mb_active_sa = sa
         self._calibration_target_node_sa = sa
+        # «Текущие данные узла» теперь про другую плату: прежние значения и графики сбрасываются.
+        forget = getattr(self, "_node_live_forget", None)
+        if forget is not None:
+            forget()
         for name in ("chamberChanged", "chamberLiveChanged", "profileChanged"):
             signal = getattr(self, name, None)
             if signal is not None:
@@ -352,7 +382,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         for _attempt in range(len(boards)):
             sa = boards[self._mb_poll_index % len(boards)]
             self._mb_poll_index += 1
-            with self._mb_context(sa):
+            with self._mb_context(sa, notify=False):
                 picked = self._chamber_live_next_request()
                 if picked is None:
                     continue
@@ -394,7 +424,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         """Средняя температура плат (0,1 °C) - по ней прогон судит об устаивании и доводке."""
         values = []
         for board in self._mb_boards:
-            with self._mb_context(board["sa"]):
+            with self._mb_context(board["sa"], notify=False):
                 if not self._chamber_live_fresh("board_temp", now):
                     continue
                 stats = self._chamber_live_stats("board_temp", now)
@@ -405,7 +435,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         """Платы, которые не присылают температуру: без них прогон не начать."""
         silent = []
         for board in self._mb_boards:
-            with self._mb_context(board["sa"]):
+            with self._mb_context(board["sa"], notify=False):
                 if not self._chamber_live_fresh("board_temp", now):
                     silent.append(f"«{board['name']}» (0x{board['sa']:02X})")
         return silent
@@ -461,7 +491,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             sa = board["sa"]
             if sa in self._mb_captured:
                 continue
-            with self._mb_context(sa):
+            with self._mb_context(sa, notify=False):
                 point, detail = self._chamber_live_point(now)
                 if point is None:
                     continue
@@ -497,7 +527,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             return
         queue = []
         for board in self._mb_boards:
-            with self._mb_context(board["sa"]):
+            with self._mb_context(board["sa"], notify=False):
                 if self._chamber_tables_complete:
                     queue.append(board["sa"])
                 else:
@@ -598,7 +628,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             return []
         result = []
         for board in self._mb_boards:
-            with self._mb_context(board["sa"]):
+            with self._mb_context(board["sa"], notify=False):
                 result.append({"sa": int(board["sa"]), "journal": str(self._chamber_file_path or "")})
         return result
 
@@ -614,7 +644,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             journal = str(item.get("journal") or "")
             if self._mb_board(sa) is None or not journal:
                 continue
-            with self._mb_context(sa):
+            with self._mb_context(sa, notify=False):
                 if journal == str(self._chamber_file_path or ""):
                     continue
                 if loader is not None and pathlib.Path(journal).is_file() and loader(journal):
@@ -629,7 +659,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             return ""
         parts = []
         for board in self._mb_boards:
-            with self._mb_context(board["sa"]):
+            with self._mb_context(board["sa"], notify=False):
                 points = len(self._chamber_points)
             result = self._mb_profile_results.get(board["sa"], "")
             parts.append(f"«{board['name']}»: точек {points}" + (f", {result}" if result else ""))
@@ -644,11 +674,12 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         shown = self._mb_active_sa
         rows = []
         for board in self._mb_boards:
-            with self._mb_context(board["sa"]):
+            with self._mb_context(board["sa"], notify=False):
                 temp = self._chamber_live_stats("board_temp", now)
                 main = self._chamber_live_stats("main", now)
                 media = self._chamber_live_stats("media", now)
                 fresh = self._chamber_live_fresh("board_temp", now)
+                profile_state, profile_tone = self._mb_profile_state()
                 rows.append({
                     "sa": board["sa"], "saText": f"0x{board['sa']:02X}", "name": board["name"],
                     "active": board["sa"] == shown,
@@ -661,10 +692,36 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                     "tables": str(self._chamber_tables_text or ""),
                     "tablesComplete": bool(self._chamber_tables_complete),
                     "profile": self._mb_profile_results.get(board["sa"], str(self._chamber_chain_status or "")),
+                    "profileState": profile_state, "profileTone": profile_tone,
                 })
+        shown_board = self._mb_board(shown) if shown is not None else None
         return {"enabled": self._mb_on(), "configured": bool(self._mb_enabled), "quietBus": bool(self._mb_quiet_bus),
                 "boards": rows, "candidates": [f"0x{sa:02X}" for sa in self._mb_bus_candidates()],
-                "status": self._mb_status}
+                "status": self._mb_status,
+                "shownName": "" if shown_board is None else str(shown_board["name"]),
+                "shownSa": "" if shown is None else f"0x{int(shown):02X}"}
+
+    def _mb_profile_state(self) -> tuple[str, str]:
+        """Цель функции в кратком состоянии профиля платы для плитки ленты: записан, пишется, ошибка, не записан."""
+        if getattr(self, "_chamber_chain_stage", ""):
+            return "пишется", "run"
+        written = getattr(self, "_chamber_written_crc", None)
+        if written is not None:
+            return f"записан 0x{int(written):04X}", "ok"
+        if str(getattr(self, "_chamber_chain_color", "")) == "#dc2626":
+            return "ошибка записи", "bad"
+        return "не записан", "normal"
+
+    def _mb_keeps_live(self) -> bool:
+        """Цель функции в признаке «лента плат видна», затем опрос всех плат идёт в любом разделе калибровки."""
+        return bool(self._mb_strip_visible) and self._mb_on()
+
+    def _mb_set_strip_visible(self, visible: bool):
+        """Цель функции в признаке видимой ленты плат, затем опрос включается или выключается сразу."""
+        self._mb_strip_visible = bool(visible)
+        apply_live = getattr(self, "_chamber_live_apply_wanted", None)
+        if apply_live is not None:
+            apply_live()
 
     def _mb_journal_suffix(self) -> str:
         """Хвост имени файла журнала: у каждой платы свой файл."""

@@ -11,7 +11,9 @@
   прежней платы закрывается, доступ открывается для этой; запись и сверка идут
   на адрес платы камеры, а не узла раздела «Параметры»;
 - каждая плата получает все величины опроса при любом числе плат;
-- после перезапуска программы журнал каждой платы возвращается в её же поля.
+- после перезапуска программы журнал каждой платы возвращается в её же поля;
+- пока режим выключен (показанной платы нет), просмотр таблицы плат не отдаёт
+  поля последней платы первой: после включения у каждой платы своё окно среднего.
 """
 
 from __future__ import annotations
@@ -337,3 +339,23 @@ def test_restart_returns_each_journal_to_its_own_board(tmp_path: Path):
     for sa, name, _offset, main in BOARDS:
         with again._mb_context(sa):
             assert again._chamber_points and all(point["main"] == main for point in again._chamber_points), name
+
+
+def test_boards_do_not_share_fields_after_enabling(tmp_path: Path):
+    """Как у оператора: П1 и П5 показывали одни и те же числа - писали в одно окно среднего."""
+    stub = _MbStub(tmp_path)
+    for sa, name, _offset, _main in BOARDS:
+        assert stub._mb_add_board(f"0x{sa:02X}", name)[0]
+    assert stub._mb_active_sa is None and not stub._mb_on()
+    # Окно показывает таблицу плат, пока режим выключен.
+    stub._mb_view()
+    stub._mb_view()
+    assert stub._mb_set_enabled(True)[0]
+    now = time.monotonic()
+    for sa, _name, _offset, main in BOARDS:
+        with stub._mb_context(sa):
+            stub._chamber_live_note("main", main, now)
+    for sa, name, _offset, main in BOARDS:
+        with stub._mb_context(sa):
+            assert stub._chamber_live_last["main"] == main, name
+            assert [value for _stamp, value in stub._chamber_live_recent["main"]] == [main], name

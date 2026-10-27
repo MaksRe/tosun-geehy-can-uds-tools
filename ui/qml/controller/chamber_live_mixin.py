@@ -278,7 +278,7 @@ class AppControllerChamberLiveMixin(AppControllerContract):
         """
         value = bool(getattr(self, "_chamber_live_section", False))
         # Наблюдению и связи с камерой опрос нужен, даже когда раздел закрыт.
-        for name in ("_remote_keeps_live", "_climate_keeps_live"):
+        for name in ("_remote_keeps_live", "_climate_keeps_live", "_mb_keeps_live"):
             keeps = getattr(self, name, None)
             value = value or bool(keeps is not None and keeps())
         if value == self._chamber_live_wanted:
