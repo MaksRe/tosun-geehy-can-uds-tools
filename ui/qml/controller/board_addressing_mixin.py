@@ -61,17 +61,20 @@
 и новый адрес записывает только она; проверка - по новому адресу отвечает ровно
 одна плата; обеим - обычный сеанс. Какая плата переехала, видно по трафику:
 новая передаёт кадры J1939, настроенная молчит. Переехала новая - она
-добавляется в список с новым адресом и выключенной передачей; переехала
-настроенная - её карточка переходит на новый адрес, а новую плату на старом
-адресе мастер настраивает обычным порядком.
+добавляется в список с новым адресом и выключенной передачей. Переехала
+настроенная - платы меняются местами тремя сменами адреса по одной плате
+(новая - на временный свободный адрес, настроенная - обратно на свой, новая -
+на назначенный). Итог всегда один: настроенная плата остаётся на своём
+адресе, новая получает следующий по порядку.
 
 СБРОС АДРЕСОВ
 «Сбросить адреса» возвращает каждой подключённой плате списка заводской адрес
 0x6A (сеанс, доступ, запись 0x0011) и проверяет, что по старому адресу она
 больше не отвечает; список плат и их история очищаются, и мастер снова
-назначает адреса по порядку подключения. Адреса плат, которых при сбросе не
-было на шине, мастер обходит (иначе две платы получили бы один адрес); когда
-такая плата появится, мастер назначит ей новый адрес.
+назначает адреса строго по порядку подключения от первого адреса. Платы,
+которых при сбросе не было на шине, просто забываются: если такая плата потом
+придёт со старым адресом и он окажется занят, мастер заметит две платы на
+одном адресе и разведёт их сам (раздел выше).
 
 Режим трафика держится до перезагрузки питания платы (в обычном сеансе прибор
 его не сбрасывает). Пока мастер запущен, настроенную плату с выключенной
@@ -263,8 +266,9 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         self._addr_dup_checked: dict[int, float] = {}
         # Адрес, который новая плата сохраняет (она осталась на нём после разделения).
         self._addr_keep_sa: int | None = None
+        # Обмен местами двух плат после разделения: оставшиеся смены адреса.
+        self._addr_swap: dict | None = None
         self._addr_reset_done: list[str] = []
-        self._addr_reserved: set[int] = set()
         self._addr_load_settings()
         self._addr_start_timer()
 
@@ -282,11 +286,6 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
             return
         if payload.get("mode") in ADDR_MODES:
             self._addr_mode = payload["mode"]
-        for value in payload.get("reserved") or []:
-            try:
-                self._addr_reserved.add(int(value) & 0xFF)
-            except (TypeError, ValueError):
-                continue
         for key, item in (payload.get("boards") or {}).items():
             try:
                 sa = int(key) & 0xFF
@@ -315,7 +314,7 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps({"mode": self._addr_mode, "start_sa": int(self._addr_start_sa),
-                                        "boards": boards, "reserved": sorted(self._addr_reserved)},
+                                        "boards": boards},
                                        ensure_ascii=False, indent=2), encoding="utf-8")
         except OSError:
             pass
@@ -604,6 +603,9 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
             if self._addr_job == "readdress":
                 self._addr_steps["default"] = "ok"
                 self._addr_finish_readdress()
+            elif self._addr_job == "swap":
+                self._addr_steps["default"] = "ok"
+                self._addr_swap_next()
             else:
                 self._addr_step_ok("default", "quiet", now)
         elif stage == "quiet" and len(body) >= 2 and body[1] == 0x01:
@@ -764,9 +766,6 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         if board is not None or sa in self._addr_done_sas:
             owner = f"плата «{board['name']}»" if board is not None else "уже настроенная плата"
             return None, f"0x{sa:02X} уже занят: {owner}"
-        if sa in self._addr_reserved:
-            return None, (f"0x{sa:02X} оставлен занятым при сбросе адресов (той платы не было на шине). Если её "
-                          "больше нет, нажмите «Освободить» над карточками")
         if self._addr_present(sa, self._addr_clock()):
             return None, f"0x{sa:02X} сейчас есть на шине: его использует другое устройство"
         return sa, ""
@@ -800,14 +799,18 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
     def _addr_used_sas(self) -> set[int]:
         """Цель функции в занятых адресах, затем новый адрес не совпадёт ни с одной платой и программой."""
         used = set(self._addr_done_sas) | set(self._addr_factory_sas) | self._addr_tester_sas()
-        # Адреса плат, которых не было на шине при сбросе: такая плата может появиться с ним.
-        used |= set(self._addr_reserved)
         used |= {int(board["sa"]) for board in getattr(self, "_mb_boards", []) or []}
         # Адреса устройств, которые сейчас на шине, тоже заняты.
         now = self._addr_clock()
         used |= {sa for sa in set(self._addr_seen) | set(self._addr_answered) if self._addr_present(sa, now)}
-        if self._addr_candidate_sa is not None:
-            used.add(int(self._addr_candidate_sa))
+        cand = self._addr_candidate_sa
+        if cand is not None:
+            if int(cand) in self._addr_factory_sas:
+                used.add(int(cand))
+            elif int(cand) not in self._addr_done_sas and not any(
+                    int(board["sa"]) == int(cand) for board in getattr(self, "_mb_boards", []) or []):
+                # Плата пришла со своим адресом из плана: если он как раз следующий по порядку - он за ней.
+                used.discard(int(cand))
         return used
 
     def _addr_next_free_sa(self) -> int | None:
@@ -824,8 +827,6 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         new, old = int(self._addr_new_sa), int(self._addr_candidate_sa)
         # Старый (заводской) адрес в настроенные не попадает: следующая плата придёт с ним же.
         self._addr_done_sas.add(new)
-        # Плата, пропущенная сбросом, получила новый адрес: её прежний больше не держим.
-        self._addr_reserved.discard(old)
         self._addr_seen.pop(old, None)
         self._addr_frames.pop(old, None)
         name = self._addr_pending_name or f"П{self._addr_board_number}"
@@ -1151,6 +1152,7 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         self._addr_reset_queue = []
         self._addr_probe = None
         self._addr_dup = None
+        self._addr_swap = None
         text = "Мастер остановлен."
         if was_stepping:
             text += " Плата, с которой шла работа, могла остаться с прежним адресом - проверьте её."
@@ -1181,12 +1183,18 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         if not self._addr_active or self._addr_stage not in ("failed", "ask"):
             return False
         if self._addr_job == "reset":
-            # Плата не сбросилась: её адрес остаётся занятым, сброс идёт к следующей.
+            # Плата не сбросилась: она забывается, сброс идёт к следующей (её адрес мастер разведёт при встрече).
             sa = int(self._addr_candidate_sa)
-            self._addr_reserved.add(sa)
-            self._addr_reset_done.append(f"{self._addr_board_name(sa)} пропущена, её адрес оставлен занятым")
+            self._addr_reset_done.append(f"{self._addr_board_name(sa)} пропущена и забыта (адрес не сброшен)")
             self._addr_reset_drop(sa)
             self._addr_reset_next()
+            return True
+        if self._addr_job == "swap":
+            # Обмен местами прерван: платы на разных адресах, но не на задуманных - видно в карточках.
+            self._addr_swap = None
+            self._addr_dup_done()
+            self._addr_set_status("Обмен адресами прерван: адреса плат разные, но не те, что задуманы. Проверьте "
+                                  "карточки или сбросьте адреса.", "#d97706")
             return True
         if self._addr_job == "conflict":
             # Разделение отложено: мастер ждёт дальше, адрес перепроверится не раньше чем через 10 с.
@@ -1470,46 +1478,92 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
             self._addr_dup_finish(now)
 
     def _addr_dup_finish(self, now: float):
-        """Цель функции в итоге разделения: по трафику видно, какая плата переехала, и список правится под это."""
+        """Цель функции в итоге разделения: по трафику видно, какая плата переехала.
+
+        Переехала новая (она передаёт кадры) - она получает этот адрес. Переехала настроенная - платы
+        меняются местами тремя сменами адреса по одной плате (новая - на временный адрес, настроенная -
+        обратно на свой, новая - на назначенный): настроенная всегда остаётся на своём адресе, новая
+        получает следующий по порядку.
+        """
         dup = self._addr_dup
         old, new = int(dup["sa"]), int(dup["new"])
         moved_transmits = self._addr_seen.get(new, -1e9) >= dup["since"]
-        old_name = self._addr_board_name(old)
         if moved_transmits:
-            # Переехала новая плата (она передаёт кадры): настроенная остаётся на старом адресе.
-            self._addr_board_number += 1
-            name = f"П{self._addr_board_number}"
-            add = getattr(self, "_mb_add_board", None)
-            if add is not None:
-                add(f"0x{new:02X}", name)
-            self._addr_done_sas.add(new)
-            info = self._addr_info.setdefault(new, {})
-            info.update({"oldSa": old, "addressedAt": time.strftime("%d.%m %H:%M")})
-            self._addr_save_settings()
-            self._addr_queue_info(new)
-            self._addr_set_comm(new, 0x01)
+            name = self._addr_dup_adopt(old, new)
             text = (f"Две платы на 0x{old:02X} разделены: новая плата получила 0x{new:02X} («{name}»), передача "
-                    f"J1939 у неё выключается; плата {old_name} осталась на 0x{old:02X}.")
-        else:
-            # Переехала настроенная плата: её карточка - на новый адрес; новая плата осталась на старом,
-            # и мастер настроит её обычным порядком (её адрес больше не числится настроенным).
-            change = getattr(self, "_mb_change_sa", None)
-            if change is not None:
-                change(old, new)
-            info = self._addr_info.pop(old, {})
-            info["oldSa"] = old
-            info["addressedAt"] = time.strftime("%d.%m %H:%M")
-            self._addr_info[new] = info
-            self._addr_done_sas.discard(old)
-            self._addr_done_sas.add(new)
-            self._addr_keep_sa = old
-            self._addr_save_settings()
-            self._addr_queue_info(new)
-            text = (f"Две платы на 0x{old:02X} разделены: плата {old_name} переехала на 0x{new:02X}; новую плату на "
-                    f"0x{old:02X} мастер настраивает сейчас.")
-        self._addr_dup_done()
-        self._addr_set_status(text, "#16a34a")
-        self._addr_log(text, "#16a34a")
+                    f"J1939 у неё выключается; плата {self._addr_board_name(old)} осталась на 0x{old:02X}.")
+            self._addr_dup_done()
+            self._addr_set_status(text, "#16a34a")
+            self._addr_log(text, "#16a34a")
+            return
+        self._addr_dup = None
+        self._addr_candidate_sa = None
+        temp = self._addr_next_free_sa_excluding({old, new})
+        if temp is None:
+            self._addr_job = "swap"
+            self._addr_stage = "failed"
+            self._addr_set_status("Нет свободного адреса, чтобы поменять платы местами.", "#dc2626")
+            return
+        self._addr_swap = {"old": old, "new": new, "temp": temp, "moves": [(old, temp), (new, old), (temp, new)],
+                           "done": 0}
+        self._addr_job = "swap"
+        self._addr_log(f"на 0x{old:02X} доступ открылся прежней плате: меняю платы местами "
+                       f"(новая 0x{old:02X} -> 0x{temp:02X}, прежняя 0x{new:02X} -> 0x{old:02X}, "
+                       f"новая 0x{temp:02X} -> 0x{new:02X}).", "#d97706")
+        self._addr_swap_next()
+
+    def _addr_next_free_sa_excluding(self, extra: set[int]) -> int | None:
+        """Цель функции в свободном адресе для временной стоянки платы, затем он не совпадёт ни с кем на шине."""
+        used = self._addr_used_sas() | {int(sa) for sa in extra}
+        start = int(self._addr_start_sa)
+        for sa in list(range(start, 0xF0)) + list(range(0x01, start)):
+            if sa not in used:
+                return sa
+        return None
+
+    def _addr_swap_next(self):
+        """Цель функции в очередной смене адреса при обмене местами, затем итог - когда все три сделаны."""
+        swap = self._addr_swap
+        if not swap["moves"]:
+            old, new = swap["old"], swap["new"]
+            self._addr_swap = None
+            # Временного адреса больше нет: его недавние кадры не должны выглядеть новой платой.
+            temp = swap.get("temp")
+            if temp is not None:
+                for table in (self._addr_seen, self._addr_frames, self._addr_answered, self._addr_onset):
+                    table.pop(int(temp), None)
+            name = self._addr_dup_adopt(old, new)
+            text = (f"Две платы на 0x{old:02X} разделены: плата {self._addr_board_name(old)} осталась на "
+                    f"0x{old:02X}, новая плата получила 0x{new:02X} («{name}»), передача J1939 у неё выключается.")
+            self._addr_dup_done()
+            self._addr_set_status(text, "#16a34a")
+            self._addr_log(text, "#16a34a")
+            return
+        frm, to = swap["moves"].pop(0)
+        swap["done"] += 1
+        self._addr_candidate_sa = frm
+        self._addr_new_sa = to
+        self._addr_steps = {key: ("ok" if key in ("found", "choose") else "") for key, _title in ADDR_STEPS}
+        self._addr_set_status(f"Меняю платы местами, шаг {swap['done']} из 3: 0x{frm:02X} -> 0x{to:02X}...",
+                              "#0f6ab4")
+        self._addr_enter("identify")
+
+    def _addr_dup_adopt(self, old: int, new: int) -> str:
+        """Цель функции в записи новой платы в список с её адресом и выключении у неё передачи J1939."""
+        self._addr_board_number += 1
+        name = f"П{self._addr_board_number}"
+        add = getattr(self, "_mb_add_board", None)
+        if add is not None:
+            add(f"0x{new:02X}", name)
+        self._addr_done_sas.add(new)
+        # Кадры новой платы на её адресе - уже известны: проверять «не две ли там платы» не нужно.
+        self._addr_dup_checked[new] = self._addr_clock()
+        info = self._addr_info.setdefault(new, {})
+        info.update({"oldSa": old, "addressedAt": time.strftime("%d.%m %H:%M")})
+        self._addr_save_settings()
+        self._addr_queue_info(new)
+        self._addr_set_comm(new, 0x01)
+        return name
 
     def _addr_dup_done(self):
         """Цель функции в возврате мастера к ожиданию плат после проверки или разделения адреса."""
@@ -1568,28 +1622,20 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         self._addr_reset_plan(boards, present)
 
     def _addr_reset_plan(self, boards: list[int], present: list[int]):
-        """Цель функции в очереди сброса по итогам опроса, затем платы не на шине - строкой и с занятым адресом."""
+        """Цель функции в очереди сброса по итогам опроса, затем платы не на шине просто забываются.
+
+        Их адреса не держатся занятыми: нумерация после сброса идёт строго подряд, а если такая плата
+        потом придёт с адресом, который уже занят, мастер заметит две платы на одном адресе и разведёт их.
+        """
         self._addr_reset_done = []
         for sa in boards:
             if sa not in present:
-                # Платы нет на шине: адрес не сбросить, поэтому мастер его обойдёт.
-                self._addr_reserved.add(sa)
-                self._addr_reset_done.append(f"{self._addr_board_name(sa)} не на шине, её адрес оставлен занятым")
+                self._addr_reset_done.append(f"{self._addr_board_name(sa)} не на шине - забыта")
                 self._addr_reset_drop(sa)
         self._addr_reset_queue = present
         self._addr_log("сброс адресов: " + (", ".join(f"0x{sa:02X}" for sa in present) or "плат на шине нет")
                        + f" -> 0x{FACTORY_SA:02X}.")
         self._addr_reset_next()
-
-    def _addr_release_reserved(self):
-        """Цель функции в освобождении адресов, оставленных занятыми при сбросе, затем их снова можно назначать."""
-        released = ", ".join(f"0x{sa:02X}" for sa in sorted(self._addr_reserved))
-        self._addr_reserved = set()
-        self._addr_save_settings()
-        if released:
-            self._addr_set_status(f"Адреса {released} освобождены: мастер и карточки снова могут их назначать.",
-                                  "#16a34a")
-            self._addr_log(f"освобождены адреса {released}.")
 
     def _addr_reset_next(self):
         """Цель функции в сбросе следующей платы очереди, затем итог, когда очередь кончилась."""
@@ -1624,7 +1670,6 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         name = self._addr_board_name(sa)
         self._addr_reset_done.append(f"{name} -> 0x{FACTORY_SA:02X}")
         self._addr_log(f"плата {name}: адрес сброшен на 0x{FACTORY_SA:02X}, старый адрес не отвечает.", "#16a34a")
-        self._addr_reserved.discard(sa)
         self._addr_reset_drop(sa)
         self._addr_reset_next()
 
@@ -1733,7 +1778,7 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         if self._addr_job == "conflict":
             steps = [{"key": key, "title": title, "state": self._addr_steps.get(key, "")} for key, title in DUP_STEPS]
             shown = ()
-        elif self._addr_job == "readdress":
+        elif self._addr_job in ("readdress", "swap"):
             shown = READDRESS_STEPS + ("found", "choose")
         elif self._addr_job == "reset":
             shown = RESET_STEPS
@@ -1750,12 +1795,12 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
             "failed": self._addr_stage == "failed", "waiting": self._addr_stage == "wait",
             "mode": self._addr_mode, "asking": self._addr_stage == "ask",
             "readdress": self._addr_job == "readdress", "conflict": self._addr_job == "conflict",
+            "swap": self._addr_job == "swap",
             "suggestName": self._addr_pending_name if self._addr_stage == "ask" else "",
             "cards": cards, "boardNumber": int(self._addr_board_number), "editable": bool(editable),
             "absent": absent, "offline": offline, "checking": bool(checking),
             "listed": len(getattr(self, "_mb_boards", []) or []),
             "resetting": self._addr_job == "reset", "factorySa": f"0x{FACTORY_SA:02X}",
-            "reserved": [f"0x{sa:02X}" for sa in sorted(self._addr_reserved)],
             "commModes": [{"mode": mode, "button": button, "state": state, "hint": hint}
                           for mode, button, state, hint in COMM_MODES],
         }

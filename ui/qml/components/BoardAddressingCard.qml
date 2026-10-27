@@ -655,7 +655,8 @@ Card {
                         anchors.fill: parent
                         anchors.margins: 10
                         text: "Сейчас не на шине: " + (root.addr.absent || []).join(", ") + ". Их адреса сбросить "
-                              + "нельзя - они останутся занятыми, пока вы не нажмёте «Освободить»."
+                              + "нельзя - они будут забыты. Если такая плата потом придёт с занятым адресом, мастер "
+                              + "сам разведёт адреса."
                         color: "#92400e"
                         font.pixelSize: 12
                         font.family: "Bahnschrift"
@@ -817,7 +818,8 @@ Card {
                         spacing: 12
 
                         Text {
-                            text: root.addr.conflict ? "Две платы на одном адресе"
+                            text: root.addr.swap ? "Меняю платы местами"
+                                  : root.addr.conflict ? "Две платы на одном адресе"
                                   : root.readdress ? "Смена адреса" : "Плата " + (root.addr.boardNumber || 0)
                             color: root.textMain
                             font.pixelSize: 15
@@ -937,7 +939,8 @@ Card {
                         SmallButton {
                             visible: !!root.addr.failed
                             Layout.preferredWidth: 140
-                            text: root.readdress ? "Отменить смену" : root.addr.conflict ? "Отложить" : "Пропустить плату"
+                            text: root.readdress ? "Отменить смену"
+                                  : (root.addr.conflict || root.addr.swap) ? "Отложить" : "Пропустить плату"
                             onClicked: if (root.appController) root.appController.skipBoardAddressingBoard()
                         }
                     }
@@ -1001,24 +1004,6 @@ Card {
                       ? "Ни одна плата из списка сейчас не отвечает. Проверьте питание и подключение к шине CAN."
                       : "Пока ни одной. Запустите мастер и подключите первую плату: после настройки она появится здесь."
                 wrapMode: Text.WordWrap
-            }
-            RowLayout {
-                visible: (root.addr.reserved || []).length > 0
-                Layout.fillWidth: true
-                spacing: 8
-
-                Caption {
-                    Layout.fillWidth: true
-                    text: "Адреса оставлены занятыми (этих плат не было на шине при сбросе; при подключении мастер "
-                          + "назначит им новые): " + (root.addr.reserved || []).join(", ")
-                    wrapMode: Text.WordWrap
-                }
-                SmallButton {
-                    Layout.preferredWidth: 110
-                    text: "Освободить"
-                    toolTipText: "Тех плат больше нет: эти адреса снова можно назначать"
-                    onClicked: if (root.appController) root.appController.releaseReservedAddresses()
-                }
             }
 
             Flow {

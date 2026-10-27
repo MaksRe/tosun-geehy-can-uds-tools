@@ -26,8 +26,9 @@
   уходит в группу «не на шине»; отключённой плата считается только после двух
   запросов без ответа, долгий шаг мастера её не прячет;
 - сброс адресов: подключённым платам - заводской 0x6A с проверкой, что старый
-  адрес молчит; список очищается; адрес платы, которой не было на шине,
-  остаётся занятым, пока она не появится; назначение заново - с П1;
+  адрес молчит; список очищается; платы, которых не было на шине, забываются;
+  назначение заново - строго подряд от первого адреса, даже если до этого
+  были сбросы с отсутствующими платами;
 - несколько плат на одном адресе (разные seed) - мастер останавливается;
 - новая плата пришла с адресом уже настроенной платы: мастер замечает два
   ответа на один запрос и разделяет платы (доступ - только одной по её seed);
@@ -307,10 +308,10 @@ def test_addressed_board_power_cycled_is_quieted_again(tmp_path: Path, monkeypat
 
 def test_factory_address_is_skipped_in_plan(tmp_path: Path, monkeypatch):
     stub = _stub(tmp_path, monkeypatch)
-    assert stub._addr_start("0x80")[0]
-    board = _Board(0x80)
+    assert stub._addr_start("0x6A")[0]
+    board = _Board(0x6A)
     _connect_and_wait(stub, board)
-    assert board.sa == 0x81
+    assert board.sa == 0x6B, "заводской 0x6A в план не берётся, даже если с него начать"
 
 
 def test_release_all_sends_functional_enable_and_stops(tmp_path: Path, monkeypatch):
@@ -539,7 +540,7 @@ def test_reset_returns_factory_address_and_reassigns_in_order(tmp_path: Path, mo
     assert ok, text
     stub.run(8.0)
     assert boards[0].sa == 0x6A and boards[1].sa == 0x6A and boards[0].eeprom_sa == 0x6A
-    assert stub._mb_boards == [] and stub._addr_reserved == {0x83}
+    assert stub._mb_boards == []
     assert not stub._addr_active and "Отключите все платы" in stub._addr_status
     assert "0x83" in stub._addr_status, "сказано, что плата 0x83 не сброшена"
 
@@ -551,9 +552,8 @@ def test_reset_returns_factory_address_and_reassigns_in_order(tmp_path: Path, mo
     for board in (boards[1], boards[0], boards[2]):
         board.power_cycle()
         _connect_and_wait(stub, board)
-    assert (boards[1].sa, boards[0].sa, boards[2].sa) == (0x81, 0x82, 0x84), "0x83 обойдён, пока его плата не пришла"
-    assert [(b["sa"], b["name"]) for b in stub._mb_boards] == [(0x81, "П1"), (0x82, "П2"), (0x84, "П3")]
-    assert stub._addr_reserved == set()
+    assert (boards[1].sa, boards[0].sa, boards[2].sa) == (0x81, 0x82, 0x83), "строго по порядку подключения"
+    assert [(b["sa"], b["name"]) for b in stub._mb_boards] == [(0x81, "П1"), (0x82, "П2"), (0x83, "П3")]
 
 
 def test_reset_survives_a_board_that_refuses(tmp_path: Path, monkeypatch):
@@ -567,8 +567,7 @@ def test_reset_survives_a_board_that_refuses(tmp_path: Path, monkeypatch):
     assert stub._addr_skip()
     stub.run(4.0)
     assert boards[0].sa == 0x81 and boards[1].sa == 0x6A
-    assert stub._addr_reserved == {0x81} and stub._mb_boards == []
-
+    assert stub._mb_boards == [] and "забыта" in stub._addr_status
 
 def test_several_boards_on_one_address_stop_the_wizard(tmp_path: Path, monkeypatch):
     stub = _stub(tmp_path, monkeypatch)
@@ -589,7 +588,7 @@ def test_reset_asks_every_board_itself_before_deciding(tmp_path: Path, monkeypat
     assert stub._addr_reset_start()[0]
     stub.run(6.0)
     assert [board.sa for board in boards] == [0x6A, 0x6A]
-    assert stub._mb_boards == [] and stub._addr_reserved == set()
+    assert stub._mb_boards == []
 
 
 def test_reset_is_not_blocked_by_a_waiting_wizard(tmp_path: Path, monkeypatch):
@@ -603,18 +602,6 @@ def test_reset_is_not_blocked_by_a_waiting_wizard(tmp_path: Path, monkeypatch):
     assert stub._addr_reset_start()[0], "ожидание адреса - не причина отказать в сбросе"
     stub.run(5.0)
     assert boards[0].sa == 0x6A and stub._mb_boards == []
-
-
-def test_reserved_address_is_explained_and_can_be_released(tmp_path: Path, monkeypatch):
-    stub, (board,) = _addressed(tmp_path, monkeypatch, count=1)
-    stub._addr_reserved = {0x90}
-    ok, text = stub._addr_readdress(0x81, "90")
-    assert not ok and "Освободить" in text
-    assert stub._addr_refuse(text).startswith("0x90") and stub._addr_status_color == "#dc2626"
-    stub._addr_release_reserved()
-    assert stub._addr_readdress(0x81, "90")[0]
-    stub.run(4.0)
-    assert board.sa == 0x90
 
 
 def test_device_seen_long_ago_does_not_block_an_address(tmp_path: Path, monkeypatch):
@@ -681,13 +668,15 @@ def test_newcomer_with_a_taken_address_gets_its_own(tmp_path: Path, monkeypatch)
     assert any("разделены" in line for line in stub.log)
 
 
-def test_known_board_moves_and_newcomer_keeps_the_address(tmp_path: Path, monkeypatch):
+def test_when_known_board_unlocks_first_boards_are_swapped_back(tmp_path: Path, monkeypatch):
+    """Доступ открылся прежней плате (её seed пришёл первым): платы меняются местами - итог тот же."""
     stub, known, newcomer = _known_board_and_newcomer(tmp_path, monkeypatch, newcomer_first=False)
     assert stub._addr_stage == "wait", stub._addr_status
-    assert (known.sa, newcomer.sa) == (0x82, 0x81), "переехала настроенная, новая осталась на 0x81"
+    assert (known.sa, newcomer.sa) == (0x81, 0x82), "прежняя - на своём адресе, новая - следующий по порядку"
     assert not known.comm_on and not newcomer.comm_on
-    names = {b["sa"]: b["name"] for b in stub._mb_boards}
-    assert names == {0x82: "П1", 0x81: "П2"}, "карточка П1 ушла вместе со своей платой"
+    assert known.session == 0x01 and newcomer.session == 0x01
+    assert [(b["sa"], b["name"]) for b in stub._mb_boards] == [(0x81, "П1"), (0x82, "П2")]
+    assert any("меняю платы местами" in line for line in stub.log)
 
 
 def test_restart_of_a_known_board_is_not_a_conflict(tmp_path: Path, monkeypatch):
@@ -713,3 +702,29 @@ def test_identical_seeds_cannot_be_split(tmp_path: Path, monkeypatch):
     assert stub._addr_stage == "failed" and "одинаковый seed" in stub._addr_status
     assert known.sa == 0x81 and newcomer.sa == 0x81, "ничего не записано"
     assert stub._addr_skip() and stub._addr_stage == "wait"
+
+
+def test_numbering_after_reset_is_strictly_sequential(tmp_path: Path, monkeypatch):
+    """Как у оператора: в настройках - адреса, «оставленные занятыми» старой версией; после сброса платы
+    подключаются по одной, среди них - пропущенные сбросом со старыми адресами 0x83 и 0x85."""
+    import json
+    stub = _stub(tmp_path, monkeypatch)
+    settings = stub._addr_settings_path()
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(json.dumps({"mode": "auto", "start_sa": 0x81, "reserved": [0x81, 0x83, 0x84, 0x85]}),
+                        encoding="utf-8")
+    stub = _AddrStub(tmp_path)
+    assert stub._addr_reset_start()[0]
+    stub.run(3.0)
+    assert stub._addr_start("81")[0]
+    arrivals = [_Board(0x6A, seed=0x4001), _Board(0x85, seed=0x4002), _Board(0x6A, seed=0x4003),
+                _Board(0x83, seed=0x4004)]
+    for board in arrivals:
+        # Как в порядке работы: подключили следующую, настроенные остаются на шине.
+        stub.boards.append(board)
+        stub.run(15.0)
+    assert [board.sa for board in arrivals] == [0x81, 0x82, 0x83, 0x84]
+    assert not any(board.comm_on for board in arrivals)
+    assert [(b["sa"], b["name"]) for b in stub._mb_boards] == [(0x81, "П1"), (0x82, "П2"), (0x83, "П3"),
+                                                                  (0x84, "П4")]
+    assert "reserved" not in json.loads(settings.read_text(encoding="utf-8"))

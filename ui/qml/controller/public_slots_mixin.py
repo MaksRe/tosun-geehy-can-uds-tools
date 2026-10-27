@@ -3652,11 +3652,6 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
             return ""
         return self._addr_refuse(text)
 
-    @Slot()
-    def releaseReservedAddresses(self):
-        """Цель функции в освобождении адресов, оставленных занятыми при сбросе, - если тех плат больше нет."""
-        self._addr_release_reserved()
-
     @Slot(bool)
     def setBoardAddressingVisible(self, visible):
         """Цель функции в признаке открытого раздела «Адреса плат»: пока он открыт, видны только платы на шине."""
