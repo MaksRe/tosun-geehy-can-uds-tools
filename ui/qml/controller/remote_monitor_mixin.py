@@ -737,7 +737,8 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
                 node = None if board is None else chamber_fit.nearest_node(int(round(board * 10)))
                 where = f"узел {chamber_fit.node_text(node)}" if node is not None else "вне узлов сетки"
                 board_text = "?" if board is None else f"{board:+.1f}".replace(".", ",")
-                self._remote_event(f"плата устоялась при {board_text} °C ({where}). Можно снимать точки.", "ok")
+                who = "средняя температура плат" if self._remote_multi() else "плата"
+                self._remote_event(f"{who} устоялась при {board_text} °C ({where}). Можно снимать точки.", "ok")
             return
 
         self._remote_stable_ok = False
@@ -745,7 +746,8 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         self._remote_stable_text = f"Плата ещё меняется: {rate_text}{wait}."
         if self._remote_stable_announced and abs(rate) > self.REMOTE_MOVING_RATE_C_MIN:
             self._remote_stable_announced = False
-            self._remote_event(f"температура платы пошла: {rate_text}. Камера меняет температуру.", "info")
+            who = "средняя температура плат" if self._remote_multi() else "температура платы"
+            self._remote_event(f"{who} пошла: {rate_text}. Камера меняет температуру.", "info")
 
     def _remote_check_boards_stability(self, now: float):
         """Цель функции в устойчивости каждой платы по правилу сценария, затем общий итог «устоялись N из M»."""
@@ -780,10 +782,12 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         if not self._remote_multi():
             return {"enabled": False}
         temps = self._mb_board_temps(now)
+        details = self._mb_board_details()
         rows = []
         for row in self._mb_view()["boards"]:
             sa = int(row["sa"])
             board_c, fuel_c = temps.get(sa, (None, None))
+            extra = details.get(sa, {})
             rate, stable = self._remote_boards_stability.get(sa, (None, False))
             rows.append({
                 "name": row["name"], "saText": row["saText"], "sa": sa, "active": row["active"],
@@ -795,9 +799,12 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
                 "points": row["points"], "tablesComplete": row["tablesComplete"],
                 "profileState": row.get("profileState", ""), "profileTone": row.get("profileTone", "normal"),
                 "nodes": row.get("nodes", []),
+                "coverage": extra.get("coverage", []), "file": extra.get("file", ""),
+                "tablesText": extra.get("tablesText", ""), "lastPoint": extra.get("lastPoint", ""),
             })
         avg = self._remote_history[-1][1] if self._remote_history else None
-        return {"enabled": True, "rows": rows,
+        return {"enabled": True, "rows": rows, "boardOnly": bool(getattr(self, "_chamber_board_only", False)),
+                "status": str(getattr(self, "_mb_status", "") or ""),
                 "avgText": "—" if avg is None else f"{avg:+.1f} °C".replace(".", ","),
                 "stableCount": sum(1 for row in rows if row["stable"]), "total": len(rows)}
 

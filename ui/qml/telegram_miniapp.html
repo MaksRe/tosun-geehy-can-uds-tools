@@ -85,6 +85,47 @@
             text-align: center; background: var(--bg); color: var(--soft); border: 1px solid var(--line); }
   .dots i.on { background: var(--ok); color: #fff; border-color: var(--ok); }
   .swatch { display: inline-block; width: 10px; height: 3px; border-radius: 2px; vertical-align: 3px; margin-right: 4px; }
+  /* Плитки плат: сетка сама подбирает число колонок под ширину экрана (телефон, планшет, монитор). */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 150px), 1fr)); gap: 8px; }
+  .tile { background: var(--bg); border-radius: 12px; padding: 8px 10px; min-width: 0; border: 1.5px solid transparent; }
+  .tile.shown { border-color: var(--accent); }
+  .tile .head, .bcard .top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .tile .name { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .tile .sa, .bcard .sa { font: 11px ui-monospace, Consolas, monospace; color: var(--link); white-space: nowrap; }
+  .tile .val { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; white-space: nowrap; }
+  .tile .sub { font-size: 12px; color: var(--soft); font-variant-numeric: tabular-nums; white-space: nowrap;
+               overflow: hidden; text-overflow: ellipsis; }
+  .tile .sub.ok { color: var(--ok); } .tile .sub.warn { color: var(--warn); }
+  .mark { flex: none; width: 10px; height: 10px; border-radius: 50%; }
+  /* Карточки плат на вкладке «Платы»: на телефоне одна под другой, на мониторе - в несколько колонок. */
+  .bcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 10px;
+            margin-bottom: 10px; align-items: start; }
+  .bcard { background: var(--card); border-radius: 14px; padding: 12px 14px; min-width: 0; border: 1.5px solid transparent; }
+  .bcard.shown { border-color: var(--accent); }
+  .bcard .top { margin-bottom: 10px; }
+  .bcard .top .name { font-size: 17px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bcard .grow { flex: 1; }
+  .pill { font-size: 11px; padding: 2px 8px; border-radius: 99px; background: var(--bg); color: var(--soft); white-space: nowrap; }
+  .pill.ok { background: rgba(22, 163, 74, .14); color: var(--ok); }
+  .pill.warn { background: rgba(217, 119, 6, .14); color: var(--warn); }
+  .pill.bad { background: rgba(220, 38, 38, .14); color: var(--bad); }
+  .pill.accent { background: rgba(36, 129, 204, .16); color: var(--link); }
+  .kv { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
+  .kv small { display: block; color: var(--soft); font-size: 12px; }
+  .kv b { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .kv .soft { font-size: 12px; }
+  .section { font-size: 11px; color: var(--soft); text-transform: uppercase; letter-spacing: .04em; margin: 12px 0 6px;
+             padding-top: 10px; border-top: 1px solid var(--line); }
+  .ncells { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+  .ncell { background: var(--bg); border-radius: 8px; padding: 4px 1px; text-align: center; font-size: 11px; color: var(--soft);
+           min-width: 0; overflow: hidden; }
+  .ncell b { display: block; font-size: 12px; color: var(--text); white-space: nowrap; }
+  .ncell span { white-space: nowrap; }
+  .ncell.ok { background: rgba(22, 163, 74, .14); color: var(--ok); }
+  .ncell.half { background: rgba(217, 119, 6, .13); color: var(--warn); }
+  .bfoot { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--soft); margin-top: 10px; }
+  .bfoot b { color: var(--text); font-weight: 600; }
+  .bcard .buttons { margin-top: 10px; }
   button { font: inherit; border: 0; border-radius: 10px; padding: 8px 12px; background: var(--accent);
            color: var(--accent-text); cursor: pointer; }
   button.light { background: var(--bg); color: var(--link); }
@@ -106,7 +147,7 @@
   .switch input:checked::after { left: 21px; }
   .buttons { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
   .buttons button { padding: 5px 10px; font-size: 13px; }
-  nav { position: fixed; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: repeat(5, 1fr);
+  nav { position: fixed; left: 0; right: 0; bottom: 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
         background: var(--card); border-top: 1px solid var(--line); padding: 4px 4px calc(4px + env(safe-area-inset-bottom)); }
   nav button { background: none; color: var(--soft); font-size: 11px; padding: 4px 0; border-radius: 8px; }
   nav button b { display: block; font-size: 19px; line-height: 1.2; font-weight: 400; }
@@ -153,14 +194,14 @@
   a.button.light { background: var(--bg); color: var(--link); }
   .linkbox { word-break: break-all; user-select: all; background: var(--bg); border-radius: 8px; padding: 6px 8px;
              margin-top: 6px; font-size: 12px; }
-  /* Веб-версия на широком экране: страница по центру, «Сейчас» - в две колонки. */
-  body.web header, body.web main { max-width: 980px; margin-left: auto; margin-right: auto; }
-  body.web nav { max-width: 980px; margin: 0 auto; border-radius: 14px 14px 0 0; }
+  /* Веб-версия на широком экране: страница по центру, «Сейчас», «Прогон» и «Графики» - в две колонки. */
+  body.web header, body.web main { max-width: 1280px; margin-left: auto; margin-right: auto; }
+  body.web nav { max-width: 1280px; margin: 0 auto; border-radius: 14px 14px 0 0; }
   @media (min-width: 860px) {
-    body.web #tab-now.on { display: grid; grid-template-columns: 1fr 1fr; column-gap: 10px; align-items: start; }
-    body.web #tab-now #alerts, body.web #tab-now .wide { grid-column: 1 / -1; }
-    body.web #tab-charts.on { display: grid; grid-template-columns: 1fr 1fr; column-gap: 10px; align-items: start; }
-    body.web #tab-charts .wide { grid-column: 1 / -1; }
+    body.web #tab-now.on, body.web #tab-run.on, body.web #tab-charts.on {
+      display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 10px; align-items: start;
+      grid-auto-flow: row dense; }
+    body.web #tab-now #alerts, body.web .tab .wide { grid-column: 1 / -1; }
   }
 </style>
 </head>
@@ -172,9 +213,45 @@
 
 <main>
 
-  <!-- Сейчас: проблемы, камера, плата, контуры, график. -->
+  <!-- Сейчас: проблемы, камера, платы, контуры, график; ниже - управление и команды камеры. -->
   <section class="tab on" id="tab-now">
     <div id="alerts"></div>
+    <div class="card">
+      <h2>Камера <span id="chamberName"></span></h2>
+      <div id="chamber"></div>
+    </div>
+    <div class="card" id="boardCard">
+      <h2 id="boardTitle">Плата <span id="deviceNode"></span></h2>
+      <div class="grid" id="boardSingle">
+        <div><small>Температура платы</small><span class="big" id="boardNow">—</span>
+          <div class="soft" id="boardAvg"></div></div>
+        <div><small>Температура топлива</small><span class="big" id="fuelNow">—</span></div>
+      </div>
+      <div class="tiles" id="boardsTiles" hidden></div>
+      <div id="stability" style="margin-top:8px"></div>
+      <div class="soft" id="device" style="margin-top:4px"></div>
+    </div>
+    <div class="card">
+      <h2>Контуры <span id="window"></span></h2>
+      <div class="grid">
+        <div><small>Основной</small><span class="mid" id="mainNow">—</span>
+          <div class="soft">среднее <span id="mainAvg">—</span></div><div class="soft" id="mainInfo"></div></div>
+        <div><small>Вид топлива</small><span class="mid" id="mediaNow">—</span>
+          <div class="soft">среднее <span id="mediaAvg">—</span></div><div class="soft" id="mediaInfo"></div></div>
+      </div>
+    </div>
+    <div class="card wide">
+      <h2>История <span id="span"></span></h2>
+      <canvas id="chart"></canvas>
+      <div class="legend">
+        <span><i style="background:var(--chamber)"></i>камера, °C</span>
+        <span><i style="background:var(--board)"></i><span id="historyBoardName">плата</span>, °C</span>
+        <span id="historyBoardsLegend"></span>
+        <span><i style="background:var(--main)"></i>основной, Δ</span>
+        <span><i style="background:var(--media)"></i>вид топлива, Δ</span>
+      </div>
+    </div>
+    <!-- Управление и команды - после наблюдения: сначала видно, что происходит, потом - что сделать. -->
     <!-- Управление: только для админа и назначенных им людей. -->
     <div class="card wide" id="controlCard" hidden>
       <h2>Управление <span id="controlWho"></span></h2>
@@ -200,41 +277,16 @@
       <div class="buttons"><button data-cmd="send">Отправить</button></div>
       <div class="answers" id="cmdAnswers"></div>
     </div>
-    <div class="card">
-      <h2>Камера <span id="chamberName"></span></h2>
-      <div id="chamber"></div>
-    </div>
-    <div class="card">
-      <h2 id="boardTitle">Плата <span id="deviceNode"></span></h2>
-      <div class="grid" id="boardSingle">
-        <div><small>Температура платы</small><span class="big" id="boardNow">—</span>
-          <div class="soft" id="boardAvg"></div></div>
-        <div><small>Температура топлива</small><span class="big" id="fuelNow">—</span></div>
-      </div>
-      <div class="wrap" id="boardsLiveWrap" style="display:none"><table class="points boards" id="boardsLive"></table></div>
-      <div id="stability" style="margin-top:8px"></div>
-      <div class="soft" id="device" style="margin-top:4px"></div>
-    </div>
-    <div class="card">
-      <h2>Контуры <span id="window"></span></h2>
-      <div class="grid">
-        <div><small>Основной</small><span class="mid" id="mainNow">—</span>
-          <div class="soft">среднее <span id="mainAvg">—</span></div><div class="soft" id="mainInfo"></div></div>
-        <div><small>Вид топлива</small><span class="mid" id="mediaNow">—</span>
-          <div class="soft">среднее <span id="mediaAvg">—</span></div><div class="soft" id="mediaInfo"></div></div>
-      </div>
-    </div>
+  </section>
+
+  <!-- Платы (несколько плат в камере): у каждой платы своя карточка - всё о ней в одном месте. -->
+  <section class="tab" id="tab-boards">
     <div class="card wide">
-      <h2>История <span id="span"></span></h2>
-      <canvas id="chart"></canvas>
-      <div class="legend">
-        <span><i style="background:var(--chamber)"></i>камера, °C</span>
-        <span><i style="background:var(--board)"></i><span id="historyBoardName">плата</span>, °C</span>
-        <span id="historyBoardsLegend"></span>
-        <span><i style="background:var(--main)"></i>основной, Δ</span>
-        <span><i style="background:var(--media)"></i>вид топлива, Δ</span>
-      </div>
+      <h2>Платы в камере <span id="boardsSummary"></span></h2>
+      <div id="boardsStability"></div>
+      <div class="soft" id="boardsStatus" style="margin-top:4px"></div>
     </div>
+    <div class="bcards wide" id="boardCards"></div>
   </section>
 
   <!-- Прогон: сценарий, ход по узлам, журнал, таблицы, запись профиля. -->
@@ -265,7 +317,7 @@
     </div>
     <div class="card">
       <h2>Журнал <span id="journal"></span></h2>
-      <div class="wrap"><table class="points" id="boards"></table></div>
+      <div class="tiles" id="boards" style="margin-bottom:8px"></div>
       <div id="run"></div>
       <div class="nodes" id="nodes" style="margin-top:8px"></div>
       <div id="report"></div>
@@ -377,6 +429,7 @@
 
 <nav id="nav">
   <button class="on" data-tab="now"><b>◉</b>Сейчас</button>
+  <button data-tab="boards" id="navBoards" hidden><b>▦</b>Платы</button>
   <button data-tab="run"><b>▤</b>Прогон</button>
   <button data-tab="charts"><b>∿</b>Графики</button>
   <button data-tab="events"><b>☰</b>События</button>
@@ -486,7 +539,7 @@
     document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("on", b === button));
     document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("on", tab.id === "tab-" + button.dataset.tab));
     haptic("light");
-    if (button.dataset.tab === "now" && state) drawChart(state.history || {}, (state.climate || {}).history || {});
+    if (button.dataset.tab === "now" && state) drawChart(state.history || {}, (state.climate || {}).history || {}, state.historyBoards || []);
     if (button.dataset.tab === "charts" && state) renderCharts(state);
     window.scrollTo(0, 0);
   });
@@ -797,17 +850,17 @@
     $("boardTitle").firstChild.nodeValue = multi ? "Платы " : "Плата ";
     $("deviceNode").textContent = multi ? `${boardsLive.total} · средняя ${boardsLive.avgText} · устоялись ${boardsLive.stableCount} из ${boardsLive.total}`
                                         : (device.node ? "узел " + device.node : "");
-    $("boardSingle").style.display = multi ? "none" : "";
-    $("boardsLiveWrap").style.display = multi ? "" : "none";
-    $("boardsLive").innerHTML = multi
-      ? "<tr><th>Плата</th><th>Плата °C</th><th>Топливо °C</th><th>Скорость</th><th>Осн / вид</th></tr>" +
-        (boardsLive.rows || []).map((b, i) =>
-          `<tr><td class="${b.fresh ? "" : "warn"}"><span class="swatch" style="background:${boardColor(i)}"></span>` +
-          `${b.active ? "● " : ""}${esc(b.name)} <span class="soft">${esc(b.saText)}</span></td>` +
-          `<td><b>${esc(b.boardTemp)}</b></td><td>${esc(b.fuelTemp)}</td>` +
-          `<td class="${b.stable ? "ok" : "warn"}">${b.stable ? "● " : "○ "}${esc(b.rateText)}</td>` +
-          `<td>${esc(b.main)} / ${esc(b.media)}</td></tr>`).join("")
-      : "";
+    $("boardSingle").hidden = multi;
+    $("boardsTiles").hidden = !multi;
+    $("boardCard").classList.toggle("wide", multi);
+    // Плитка платы: цвет как на графиках, плата крупно, топливо и «устоялась» мельче; рамка - показанная в программе.
+    $("boardsTiles").innerHTML = multi ? (boardsLive.rows || []).map((b, i) =>
+      `<div class="tile ${b.active ? "shown" : ""}" title="${esc(b.name)} ${esc(b.saText)}${b.active ? " - показана в программе" : ""}">` +
+      `<div class="head"><span class="mark" style="background:${boardColor(i)}"></span><span class="name">${esc(b.name)}</span>` +
+      `<span class="sa">${esc(b.saText)}</span></div>` +
+      `<div class="val ${b.fresh ? "" : "warn"}">${esc(b.boardTemp)}</div>` +
+      `<div class="sub">топливо ${esc(b.fuelTemp)}</div>` +
+      `<div class="sub ${b.stable ? "ok" : "warn"}">${b.stable ? "● устоялась" : "○ " + esc(b.rateText)}</div></div>`).join("") : "";
     $("boardNow").textContent = board.now || "—";
     $("boardAvg").textContent = board.avg ? "среднее " + board.avg : "";
     $("fuelNow").textContent = fuel.now || "—";
@@ -855,22 +908,30 @@
     }
 
     const journal = s.run || {};
-    $("journal").textContent = `точек: ${journal.points ?? 0}`;
-    // Несколько плат в камере: у каждой свои показания, точки и профиль.
+    // Несколько плат в камере: у каждой свои показания, точки и профиль; ниже - только сводка по платам.
     const live = (s.boards || {}).enabled ? (s.boards.rows || []) : [];
+    const shownBoard = live.find((b) => b.active);
+    $("journal").textContent = live.length
+      ? `точек всего ${live.reduce((sum, b) => sum + Number(b.points || 0), 0)} у ${live.length} плат`
+      : `точек: ${journal.points ?? 0}`;
     const boards = live.length ? live : (journal.boards || []);
-    const tones = { ok: "ok", bad: "bad", run: "", normal: "soft" };
-    $("boards").innerHTML = boards.length
-      ? "<tr><th>Плата</th><th>Узлы</th><th>Точек</th><th>Таблицы</th><th>Профиль</th></tr>" +
-        boards.map((b) => `<tr><td class="${b.fresh ? "" : "warn"}">${b.active ? "● " : ""}${esc(b.name)} <span class="soft">${esc(b.saText)}</span></td>` +
-          `<td><span class="dots">${(b.nodes || []).map((n) => `<i class="${n.count > 0 ? "on" : ""}" title="${esc(n.node)}: точек ${n.count}">${esc(n.short)}</i>`).join("")}</span></td>` +
-          `<td>${esc(b.points)}</td><td class="${b.tablesComplete ? "ok" : "soft"}">${b.tablesComplete ? "готовы" : "нет"}</td>` +
-          `<td class="${tones[b.profileTone] || "soft"}">${esc(b.profileState || b.profile || "")}</td></tr>`).join("")
-      : "";
+    const tones = { ok: "ok", bad: "warn", run: "", normal: "" };
+    $("boards").hidden = !boards.length;
+    $("boards").innerHTML = boards.map((b, i) =>
+      `<div class="tile ${b.active ? "shown" : ""}">` +
+      `<div class="head"><span class="mark" style="background:${boardColor(i)}"></span><span class="name">${esc(b.name)}</span>` +
+      `<span class="sa">${esc(b.saText)}</span></div>` +
+      `<div style="margin:5px 0"><span class="dots">${(b.nodes || []).map((n) =>
+        `<i class="${n.count > 0 ? "on" : ""}" title="${esc(n.node)}: точек ${n.count}">${esc(n.short)}</i>`).join("")}</span></div>` +
+      `<div class="sub">точек ${esc(b.points)} · ${b.tablesComplete ? "<span class=ok>таблицы готовы</span>" : "таблиц нет"}</div>` +
+      `<div class="sub ${tones[b.profileTone] || ""}">профиль: ${esc(b.profileState || "—")}</div></div>`).join("");
     $("run").innerHTML =
+      (shownBoard ? `<div class="section" style="margin-top:4px">Показанная плата «${esc(shownBoard.name)}» ${esc(shownBoard.saText)}</div>` : "") +
       `<div class="soft">${esc(journal.file || "журнал ещё не сохранён")}</div>` +
       `<div style="color:${esc(journal.statusColor)}">${esc(journal.status)}</div>` +
       `<div style="color:${esc(journal.tablesColor)}">${esc(journal.tablesText)}</div>`;
+    // Узлы одной платы - только когда плата одна: при нескольких узлы каждой платы - в её плитке.
+    $("nodes").hidden = live.length > 0;
     $("nodes").innerHTML = (journal.coverage || []).map((row) =>
       `<div class="node ${row.capsOk && row.tubeOk ? "done" : ""}"><b>${esc(row.node)}</b>` +
       `<span class="${row.capsOk ? "ok" : "warn"}">${esc(row.caps)}</span><br>` +
@@ -1140,9 +1201,63 @@
     }).join("");
   }
 
+  // Вкладка «Платы»: карточка каждой платы - температуры, скорость, контуры, узлы, журнал, таблицы, профиль.
+  function renderBoards(s) {
+    const view = s.boards || {};
+    const multi = !!view.enabled;
+    $("navBoards").hidden = !multi;
+    if (!multi) {
+      if ($("tab-boards").classList.contains("on")) document.querySelector('nav button[data-tab="now"]').click();
+      return;
+    }
+    const rows = view.rows || [];
+    $("boardsSummary").textContent = `${view.total} · средняя ${view.avgText} · устоялись ${view.stableCount} из ${view.total}`;
+    const st = s.stability || {};
+    $("boardsStability").innerHTML = `<span class="${st.ok ? "ok" : "warn"}">${st.ok ? "● " : "○ "}${esc(st.text)}</span>`;
+    $("boardsStatus").textContent = view.status || "";
+    const edit = canControl(s);
+    const profileTone = { ok: "ok", bad: "bad", run: "accent", normal: "" };
+    $("boardCards").innerHTML = rows.map((b, i) => {
+      const cells = (b.coverage || []).map((c) => {
+        const done = c.capsOk && c.tubeOk;
+        const part = !done && (c.capsOk || c.tubeOk || /[1-9]/.test(String(c.caps)));
+        const what = view.boardOnly ? (c.capsOk ? "✓" : "—") : String(c.caps || "").replace("эталоны ", "").replace(" · ", "·");
+        return `<div class="ncell ${done ? "ok" : part ? "half" : ""}" title="${esc(c.node)}: ${esc(c.caps)}; трубка: ${esc(c.tube)}">` +
+               `<b>${esc(String(c.node).replace(" °C", ""))}</b><span>${esc(what)}</span></div>`;
+      }).join("");
+      return `<div class="bcard ${b.active ? "shown" : ""}">` +
+        `<div class="top"><span class="mark" style="background:${boardColor(i)}"></span><span class="name">${esc(b.name)}</span>` +
+        `<span class="sa">${esc(b.saText)}</span><span class="grow"></span>` +
+        (b.active ? `<span class="pill accent">показана</span>` : "") +
+        `<span class="pill ${!b.fresh ? "bad" : b.stable ? "ok" : "warn"}">${!b.fresh ? "нет данных" : b.stable ? "устоялась" : "меняется"}</span></div>` +
+        `<div class="kv">` +
+        `<div><small>Плата</small><b>${esc(b.boardTemp)}</b></div>` +
+        `<div><small>Топливо</small><b>${esc(b.fuelTemp)}</b></div>` +
+        `<div><small>Скорость платы</small><span class="${b.stable ? "ok" : "warn"}">${esc(b.rateText)}</span></div>` +
+        `<div><small>Контуры, среднее</small><span>${esc(b.main)} / ${esc(b.media)}</span></div></div>` +
+        `<div class="section">Узлы${view.boardOnly ? "" : " · эталоны основной·вид, трубка"}</div>` +
+        `<div class="ncells">${cells}</div>` +
+        `<div class="bfoot"><span>точек <b>${esc(b.points)}</b></span>` +
+        `<span>таблицы <b class="${b.tablesComplete ? "ok" : ""}">${b.tablesComplete ? "готовы" : "нет"}</b></span>` +
+        `<span>профиль <b class="${profileTone[b.profileTone] || ""}">${esc(b.profileState || "—")}</b></span>` +
+        (b.lastPoint ? `<span>последняя точка <b>${esc(b.lastPoint)}</b></span>` : "") + `</div>` +
+        (b.file ? `<div class="soft" style="margin-top:4px;word-break:break-all">${esc(b.file)}</div>` : "") +
+        (b.tablesText ? `<div class="soft" style="margin-top:2px">${esc(b.tablesText)}</div>` : "") +
+        (edit && !b.active ? `<div class="buttons"><button class="light" data-show-board="${esc(b.saText)}" data-name="${esc(b.name)}">Показать в программе</button></div>` : "") +
+        `</div>`;
+    }).join("");
+  }
+
+  $("boardCards").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-show-board]");
+    if (!button) return;
+    control({ action: "board_show", sa: button.dataset.showBoard });
+  });
+
   function render(s) {
     state = s;
     renderNow(s);
+    renderBoards(s);
     renderControl(s);
     renderRun(s);
     renderSteps(s);

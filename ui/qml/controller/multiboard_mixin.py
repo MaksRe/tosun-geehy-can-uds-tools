@@ -605,6 +605,20 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                 temps[int(board["sa"])] = tuple(values)
         return temps
 
+    def _mb_board_details(self) -> dict[int, dict]:
+        """Цель функции в подробностях каждой платы для сайта: что снято в узлах, журнал, итог таблиц, последняя точка."""
+        details = {}
+        for board in self._mb_boards:
+            with self._mb_context(board["sa"], notify=False):
+                points = list(self._chamber_points)
+                details[int(board["sa"])] = {
+                    "coverage": self._chamber_coverage_rows(),
+                    "file": pathlib.Path(self._chamber_file_path).name if self._chamber_file_path else "",
+                    "tablesText": str(self._chamber_tables_text or ""),
+                    "lastPoint": str(points[-1].get("time", "")) if points else "",
+                }
+        return details
+
     def _mb_all_rows(self, limit: int = 60) -> list[dict]:
         """Цель функции в точках журналов всех плат одним списком (свежие сверху), с именем и адресом платы."""
         rows = []

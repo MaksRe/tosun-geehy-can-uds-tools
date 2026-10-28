@@ -86,6 +86,7 @@ ACTION_TITLES = {
     "journal_open": "открытие журнала точек",
     "journal_remove_point": "удаление точки журнала",
     "journal_new": "новый журнал точек",
+    "board_show": "показ платы в программе",
 }
 # Кого будить сообщением: важность события для подписчиков бота.
 NOTIFY_LEVEL = {"estop": "bad", "mode": "warn", "setpoint": "warn", "run_start": "ok", "run_pause": "warn",
@@ -469,6 +470,20 @@ class AppControllerClimateControlMixin(AppControllerContract):
             who = ""
         self.chamberChanged.emit()
         return ok, text, who + f"точка {index + 1}" + (f" ({stamp})" if stamp else "")
+
+    def _control_do_board_show(self, actor: dict, params: dict):
+        """Несколько плат: какую плату показывать в программе (её контуры, журнал и профиль - в окне и на сайте)."""
+        board_of = getattr(self, "_mb_board", None)
+        try:
+            sa = int(str(params.get("sa", "")), 0)
+        except ValueError:
+            return False, "адрес платы не понят", ""
+        board = board_of(sa) if board_of is not None else None
+        if board is None:
+            return False, f"платы 0x{sa & 0xFF:02X} нет в списке", ""
+        if not self._mb_activate(sa):
+            return False, getattr(self, "_mb_switch_note", "") or "сейчас переключиться нельзя", board["name"]
+        return True, f"в программе показана «{board['name']}» (0x{sa:02X}).", board["name"]
 
     def _control_do_journal_new(self, actor: dict, params: dict):
         """Новый журнал: точки из окна убираются, файл прежнего журнала остаётся на диске."""

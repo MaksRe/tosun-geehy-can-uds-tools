@@ -21,6 +21,8 @@
 - точка вручную снимается у всех плат, кнопка записи профиля ставит в очередь
   все платы с полными таблицами, новый журнал - у всех плат, точки всех плат
   одним списком для сайта;
+- сайт: подробности каждой платы (узлы, журнал, таблицы), команда «показать
+  плату в программе», запись точки с сайта - у всех плат;
 - пока режим выключен (показанной платы нет), просмотр таблицы плат не отдаёт
   поля последней платы первой: после включения у каждой платы своё окно среднего.
 """
@@ -457,3 +459,36 @@ def test_new_journal_for_every_board(tmp_path: Path):
     for sa, name, *_rest in BOARDS:
         with stub._mb_context(sa):
             assert stub._chamber_points == [], name
+
+
+def _with_control(stub):
+    """Команды сайта (их обработчики) - поверх заглушки плат."""
+    from ui.qml.controller.climate_control_mixin import AppControllerClimateControlMixin
+
+    stub.__class__ = type("_CtlMbStub", (AppControllerClimateControlMixin, stub.__class__), {})
+    return stub
+
+
+def test_site_gets_details_of_every_board_and_can_show_one(tmp_path: Path):
+    stub = _with_control(_stub(tmp_path, temps=(25.0, -40.0)))
+    assert stub._climate_run_start(), stub._climate_run_status
+    _walk(stub)
+    details = stub._mb_board_details()
+    for sa, name, *_rest in BOARDS:
+        item = details[sa]
+        assert len(item["coverage"]) == 7 and f"_0x{sa:02X}" in item["file"] and item["lastPoint"], name
+    ok, text, who = stub._control_do_board_show({}, {"sa": "0x82"})
+    assert ok and stub._mb_active_sa == 0x82 and "П3" in text
+    ok, text, _who = stub._control_do_board_show({}, {"sa": "0x99"})
+    assert not ok and "нет в списке" in text
+
+
+def test_capture_command_from_site_takes_every_board(tmp_path: Path):
+    stub = _with_control(_stub(tmp_path))
+    stub._can = type("Can", (), {"is_connect": True, "is_trace": True})()
+    ok, text, details = stub._control_do_capture({}, {"label": "0/0"})
+    assert ok and "у всех 3 плат" in text, text
+    stub._mb_manual_capture_tick(time.monotonic())
+    for sa, name, *_rest in BOARDS:
+        with stub._mb_context(sa):
+            assert len(stub._chamber_points) == 1, name
