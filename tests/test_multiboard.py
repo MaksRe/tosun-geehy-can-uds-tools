@@ -21,6 +21,9 @@
 - точка вручную снимается у всех плат, кнопка записи профиля ставит в очередь
   все платы с полными таблицами, новый журнал - у всех плат, точки всех плат
   одним списком для сайта;
+- состояние прогона без журналов каждой платы (его сохранила прежняя версия):
+  программа это замечает и при продолжении находит журнал каждой платы по
+  файлам на диске - каждый в свою плату;
 - сайт: подробности каждой платы (узлы, журнал, таблицы), команда «показать
   плату в программе», запись точки с сайта - у всех плат;
 - пока режим выключен (показанной платы нет), просмотр таблицы плат не отдаёт
@@ -492,3 +495,31 @@ def test_capture_command_from_site_takes_every_board(tmp_path: Path):
     for sa, name, *_rest in BOARDS:
         with stub._mb_context(sa):
             assert len(stub._chamber_points) == 1, name
+
+
+def test_state_without_boards_line_is_noticed_and_journals_are_found_on_disk(tmp_path: Path):
+    stub = _stub(tmp_path, temps=(25.0, -40.0))
+    assert stub._climate_run_start(), stub._climate_run_status
+    _walk(stub)
+    files = {}
+    for sa, *_rest in BOARDS:
+        with stub._mb_context(sa):
+            files[sa] = stub._chamber_file_path
+    # Как сохраняла прежняя версия: журнал только показанной платы (здесь - П2), строки «boards» нет.
+    saved = {"saved": time.strftime("%Y-%m-%d %H:%M:%S"), "elapsed_s": 3600,
+             "chamber": {"journal": files[0x81], "label": "0/0", "board_only": False}}
+    note = stub._climate_auto_boards_note(saved)
+    assert "нет журналов каждой платы" in note
+    assert "есть журналы 3 плат" in stub._climate_auto_boards_note(
+        {"chamber": {"boards": [{"sa": sa, "journal": path} for sa, path in files.items()]}})
+
+    # Перезапуск: новая программа, режим нескольких плат включён, показана первая плата.
+    again = _MbStub(tmp_path)
+    events = []
+    again._climate_event = lambda text, level="info": events.append((level, text))
+    again._climate_auto_restore_chamber(saved["chamber"], again._climate_auto_run_since(saved))
+    for sa, name, _offset, main in BOARDS:
+        with again._mb_context(sa):
+            assert again._chamber_file_path == files[sa], name
+            assert again._chamber_points and all(point["main"] == main for point in again._chamber_points), name
+    assert any("найдены по файлам" in text for _level, text in events), events

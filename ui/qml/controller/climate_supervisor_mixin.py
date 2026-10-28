@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import shutil
 import time
 from collections import deque
@@ -118,6 +119,35 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
                     else "Нажмите «Продолжить прогон», когда всё будет готово.")
             self._climate_event(f"программа запущена заново во время прогона: он был прерван на узле "
                                 f"{min(index + 1, node_count)} из {node_count}. {tail}", "warn")
+            note = self._climate_auto_boards_note(saved)
+            if note:
+                self._climate_event(note, "warn")
+
+    @staticmethod
+    def _climate_auto_boards_note(saved: dict) -> str:
+        """Цель функции в проверке сохранённого состояния: есть ли в нём журнал каждой платы (строка «boards»).
+
+        Прогон нескольких плат виден по имени журнала (…_0x81.csv). Если журналов плат в состоянии
+        нет - его сохранила прежняя версия; при продолжении журналы найдутся по файлам на диске.
+        """
+        chamber = saved.get("chamber") or {}
+        if chamber.get("boards"):
+            names = ", ".join(pathlib.Path(str(item.get("journal", ""))).name or "—" for item in chamber["boards"])
+            return f"в состоянии прогона есть журналы {len(chamber['boards'])} плат: {names}."
+        journal = pathlib.Path(str(chamber.get("journal") or "")).name.lower()
+        if "_0x" in journal:
+            return ("в состоянии прогона нет журналов каждой платы (его сохранила прежняя версия программы): "
+                    "при продолжении найду журнал каждой платы этого прогона по файлам на диске и загружу его в "
+                    "свою плату.")
+        return ""
+
+    def _climate_auto_run_since(self, saved: dict) -> float | None:
+        """Цель функции во времени начала прерванного прогона по часам компьютера (с запасом 10 мин) или None."""
+        try:
+            stamp = time.mktime(time.strptime(str(saved.get("saved", "")), "%Y-%m-%d %H:%M:%S"))
+            return stamp - float(saved.get("elapsed_s", 0.0) or 0.0) - 600.0
+        except (TypeError, ValueError, OverflowError):
+            return None
 
     def _climate_auto_reset(self):
         """Всё, что относится к одному прогону, в исходном виде."""
@@ -796,7 +826,7 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             self._climate_run_set("Продолжить нельзя: нет связи с камерой.", "#dc2626")
             self.climateChanged.emit()
             return False
-        self._climate_auto_restore_chamber(saved.get("chamber") or {})
+        self._climate_auto_restore_chamber(saved.get("chamber") or {}, self._climate_auto_run_since(saved))
         self._climate_run_reset()
         self._climate_auto_reset()
         self._climate_run_nodes = list(saved["nodes"])
@@ -834,7 +864,7 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         self.climateChanged.emit()
         return True
 
-    def _climate_auto_restore_chamber(self, chamber: dict):
+    def _climate_auto_restore_chamber(self, chamber: dict, since: float | None = None):
         """Возвращает настройки прогона и журнал точек, какими они были до перезапуска.
 
         Без этого продолженный прогон начал бы новый журнал без точек прошлых
@@ -854,6 +884,25 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             self._chamber_auto_write = bool(chamber["auto_write"])
         boards = chamber.get("boards") or []
         restore_boards = getattr(self, "_mb_restore_journals", None)
+        multi = getattr(self, "_mb_on", None)
+        if not boards and restore_boards is not None and multi is not None and multi():
+            # Состояние без журналов каждой платы (прежняя версия): журналы этого прогона - по файлам на диске.
+            finder = getattr(self, "_mb_find_run_journals", None)
+            boards = finder(since) if finder is not None else []
+            # Журнал показанной платы из состояния - строго в ту плату, чей адрес в имени файла.
+            single = str(chamber.get("journal") or "")
+            match = re.search(r"_0x([0-9a-fA-F]{2})\.csv$", single)
+            if match and pathlib.Path(single).is_file():
+                sa = int(match.group(1), 16)
+                boards = [item for item in boards if int(item["sa"]) != sa] + [{"sa": sa, "journal": single}]
+            missing = [f"«{board['name']}»" for board in self._mb_boards
+                       if int(board["sa"]) not in {int(item["sa"]) for item in boards}]
+            self._climate_event(
+                "в состоянии прогона не было журналов каждой платы: "
+                + (f"журналы найдены по файлам на диске ({len(boards)} плат)" if boards else "журналы на диске не найдены")
+                + (f"; без журнала этого прогона: {', '.join(missing)} - откройте их вручную («Прогон в камере» -> "
+                   "«Журналы»), если точки у них уже были" if missing else "") + ".",
+                "bad" if missing else "ok")
         if boards and restore_boards is not None:
             # Несколько плат: каждый журнал - строго в свою плату (по адресу), а не в показанную.
             events = restore_boards(boards)

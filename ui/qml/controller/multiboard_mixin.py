@@ -729,6 +729,26 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                 result.append({"sa": int(board["sa"]), "journal": str(self._chamber_file_path or "")})
         return result
 
+    def _mb_find_run_journals(self, since: float | None) -> list[dict]:
+        """Цель функции в журналах плат этого прогона на диске, когда их нет в сохранённом состоянии прогона.
+
+        Состояние, сохранённое прежней версией, помнит журнал только показанной платы. Журнал каждой
+        платы - файл chamber_<время>_<имя>_0x<адрес>.csv: берётся самый свежий файл с адресом платы,
+        изменённый после начала прогона (since - время начала по часам компьютера, с запасом).
+        """
+        lister = getattr(self, "_chamber_journals", None)
+        journals = lister(fresh=True) if lister is not None else []
+        found = []
+        for board in self._mb_boards:
+            sa = int(board["sa"])
+            tail = f"_0x{sa:02x}.csv"
+            candidates = [item for item in journals if str(item.get("name", "")).lower().endswith(tail)
+                          and (since is None or float(item.get("stamp", 0.0)) >= since)]
+            if candidates:
+                newest = max(candidates, key=lambda item: float(item.get("stamp", 0.0)))
+                found.append({"sa": sa, "journal": str(newest["path"])})
+        return found
+
     def _mb_restore_journals(self, boards) -> list[str]:
         """Цель функции в загрузке журнала каждой платы в её же поля, затем точки до перезапуска войдут в её таблицы."""
         events = []
