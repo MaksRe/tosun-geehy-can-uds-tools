@@ -16,6 +16,11 @@
   прочитанный из самой платы); показанную плату нельзя переключить посреди
   пробной калибровки, причина видна в ленте; проверка перед прогоном
   предупреждает, если плат несколько, а режим выключен;
+- полный прогон трёх плат по семи узлам: у каждой платы точки во всех узлах,
+  полные таблицы и запись профиля в очереди после прогона;
+- точка вручную снимается у всех плат, кнопка записи профиля ставит в очередь
+  все платы с полными таблицами, новый журнал - у всех плат, точки всех плат
+  одним списком для сайта;
 - пока режим выключен (показанной платы нет), просмотр таблицы плат не отдаёт
   поля последней платы первой: после включения у каждой платы своё окно среднего.
 """
@@ -397,3 +402,58 @@ def test_run_check_warns_when_several_boards_but_mode_off(tmp_path: Path):
     stub._chamber_auto_write = True
     checks = {item["key"]: item for item in stub._climate_auto_checks()}
     assert checks["boards"]["ok"] and "по очереди" in checks["boards"]["text"]
+
+
+ALL_NODES = (25.0, -40.0, -20.0, 0.0, 50.0, 70.0, 85.0)
+
+
+def test_full_run_gives_every_board_all_nodes_and_queues_every_profile(tmp_path: Path):
+    stub = _stub(tmp_path, temps=ALL_NODES)
+    stub._chamber_set_board_only(True)
+    stub._climate_scenario["auto_write"] = True
+    stub._chamber_auto_write = True
+    queued = []
+    stub._mb_profile_tick = lambda now: queued.extend(stub._mb_profile_queue) or stub._mb_profile_queue.clear()
+    assert stub._climate_run_start(), stub._climate_run_status
+    _walk(stub)
+    for sa, name, _offset, main in BOARDS:
+        with stub._mb_context(sa):
+            nodes = sorted({chamber_fit.nearest_node(point["board_temp_x10"]) for point in stub._chamber_points})
+            assert nodes == sorted(chamber_fit.NODES_X10), (name, nodes)
+            assert stub._chamber_tables_complete, (name, stub._chamber_tables_text)
+            assert all(point["main"] == main for point in stub._chamber_points), name
+    assert sorted(queued or stub._mb_profile_queue) == [sa for sa, *_rest in BOARDS], "профиль - в каждую плату"
+
+
+def test_manual_capture_takes_a_point_from_every_board(tmp_path: Path):
+    stub = _stub(tmp_path)
+    ok, text = stub._mb_manual_capture_start()
+    assert ok and "3 плат" in text
+    stub._mb_manual_capture_tick(time.monotonic())
+    for sa, name, _offset, main in BOARDS:
+        with stub._mb_context(sa):
+            assert len(stub._chamber_points) == 1 and stub._chamber_points[0]["main"] == main, name
+    assert stub._mb_manual_capture is None and "у 3 из 3 плат" in stub._mb_status
+    rows = stub._mb_all_rows()
+    assert sorted((row["board"], row["sa"]) for row in rows) == sorted((name, sa) for sa, name, *_rest in BOARDS)
+
+
+def test_profile_button_queues_every_board_with_complete_tables(tmp_path: Path):
+    stub = _stub(tmp_path)
+    stub._chamber_auto_write = False
+    for sa, *_rest in BOARDS:
+        with stub._mb_context(sa):
+            stub._chamber_tables_complete = sa != 0x81
+    text = stub._mb_start_profiles(manual=True)
+    assert stub._mb_profile_queue == [0x80, 0x82] and "П1" in text and "П3" in text
+    assert "неполные" in stub._mb_profile_results[0x81]
+
+
+def test_new_journal_for_every_board(tmp_path: Path):
+    stub = _stub(tmp_path)
+    assert stub._mb_manual_capture_start()[0]
+    stub._mb_manual_capture_tick(time.monotonic())
+    stub._mb_clear_journals()
+    for sa, name, *_rest in BOARDS:
+        with stub._mb_context(sa):
+            assert stub._chamber_points == [], name

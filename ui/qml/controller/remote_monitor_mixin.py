@@ -181,6 +181,12 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
 
         self._remote_events: deque = deque(maxlen=self.REMOTE_EVENTS_KEPT)
         self._remote_history: deque = deque(maxlen=int(self.REMOTE_HISTORY_SPAN_S / self.REMOTE_HISTORY_STEP_S))
+        # Несколько плат: температура каждой платы в те же моменты, что и общая история (для графиков).
+        self._remote_boards_history: deque = deque(maxlen=self._remote_history.maxlen)
+        # Таблицы каждой платы были полными - чтобы «данных хватило» сообщалось по плате один раз.
+        self._remote_tables_complete_by_board: dict[int, bool] = {}
+        # Устоялась ли каждая плата: (°C/мин, устоялась) по правилу сценария.
+        self._remote_boards_stability: dict[int, tuple] = {}
         self._remote_last_history_s = 0.0
         self._remote_stable_announced = False
         self._remote_stable_text = "Температура платы: истории ещё мало."
@@ -523,9 +529,21 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         media = "-" if point.get("media") is None else point["media"]
         trial = " (проба)" if point.get("rehearsal") else ""
         self._remote_event(
-            f"точка «{point['note']}»{trial} записана: узел {where}, основной {point['main']}, "
-            f"вид топлива {media}. Всего точек: {len(self._chamber_points)}.",
+            f"{self._remote_board_prefix()}точка «{point['note']}»{trial} записана: узел {where}, основной "
+            f"{point['main']}, вид топлива {media}. Всего точек: {len(self._chamber_points)}.",
             "ok", kind="point")
+
+    def _remote_multi(self) -> bool:
+        """Цель функции в признаке работы с несколькими платами для сайта и бота."""
+        multi = getattr(self, "_mb_on", None)
+        return bool(callable(multi) and multi())
+
+    def _remote_board_prefix(self) -> str:
+        """Цель функции в имени платы перед событием, когда плат несколько: видно, о какой плате речь."""
+        if not self._remote_multi():
+            return ""
+        sa = getattr(self, "_mb_active_sa", None)
+        return "" if sa is None else f"«{self._mb_name(sa)}»: "
 
     def _remote_note_journal_saved(self, path: str):
         """Журнал прогона сохранён: его копия уходит на рабочее место."""
@@ -533,13 +551,20 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
 
     def _remote_note_tables(self, complete: bool):
         """Данных стало хватать во всех узлах: об этом стоит знать сразу."""
+        if self._remote_multi():
+            sa = int(getattr(self, "_mb_active_sa", -1) or -1)
+            if complete and not self._remote_tables_complete_by_board.get(sa):
+                self._remote_event(f"{self._remote_board_prefix()}данных хватило во всех узлах, таблицы посчитаны "
+                                   "полностью.", "ok")
+            self._remote_tables_complete_by_board[sa] = bool(complete)
+            return
         if complete and not self._remote_tables_were_complete:
             self._remote_event("данных хватило во всех узлах, таблицы посчитаны полностью.", "ok")
         self._remote_tables_were_complete = bool(complete)
 
     def _remote_note_chain(self, ok: bool, text: str, profile_path: str = ""):
         """Запись профиля закончилась: итог, копии и файлы в Telegram."""
-        self._remote_event(text, "ok" if ok else "bad")
+        self._remote_event(self._remote_board_prefix() + text, "ok" if ok else "bad")
         if not ok:
             return
         journal = str(self._chamber_file_path or "")
@@ -548,7 +573,8 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
                 self._remote_sync.enqueue(path, "chamber")
         if self._remote_settings["telegram_enabled"]:
             # Файлы получают те, у кого включены «файлы».
-            for path, caption in ((journal, "Журнал прогона"), (profile_path, "Записанный профиль")):
+            prefix = self._remote_board_prefix()
+            for path, caption in ((journal, f"{prefix}Журнал прогона"), (profile_path, f"{prefix}Записанный профиль")):
                 if path and pathlib.Path(path).is_file():
                     self._remote_telegram.send_document(path, caption)
 
@@ -658,8 +684,18 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             return None if stats is None else stats["mean"]
 
         board = fresh("board_temp")
-        self._remote_history.append((now, None if board is None else board / 10.0, fresh("main"), fresh("media")))
+        board_c = None if board is None else board / 10.0
+        temps = {}
+        if self._remote_multi():
+            temps = {sa: values[0] for sa, values in self._mb_board_temps(now).items()}
+            known = [value for value in temps.values() if value is not None]
+            # Камера ведётся по средней температуре плат - она и идёт в общую историю.
+            board_c = sum(known) / len(known) if known else None
+        self._remote_history.append((now, board_c, fresh("main"), fresh("media")))
+        self._remote_boards_history.append((now, temps))
         self._remote_check_stability(now)
+        if self._remote_multi():
+            self._remote_check_boards_stability(now)
 
     def _remote_board_rate(self, now: float):
         """Скорость и разброс температуры платы за окно устойчивости: (°C/мин, °C, охват с) или None."""
@@ -711,6 +747,60 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             self._remote_stable_announced = False
             self._remote_event(f"температура платы пошла: {rate_text}. Камера меняет температуру.", "info")
 
+    def _remote_check_boards_stability(self, now: float):
+        """Цель функции в устойчивости каждой платы по правилу сценария, затем общий итог «устоялись N из M»."""
+        window_s, rate_limit = self._remote_stable_rule()
+        result = {}
+        for board in self._mb_boards:
+            sa = int(board["sa"])
+            series = ((stamp, temps.get(sa)) for stamp, temps in self._remote_boards_history if temps.get(sa) is not None)
+            rate = rate_and_spread(series, now, window_s)
+            stable = rate is not None and is_stable(rate, window_s, rate_limit, self.REMOTE_STABLE_SPREAD_C)
+            result[sa] = (None if rate is None else rate[0], bool(stable))
+        self._remote_boards_stability = result
+        total = len(result)
+        stable_count = sum(1 for _rate, stable in result.values() if stable)
+        if not total:
+            return
+        avg = self._remote_history[-1][1] if self._remote_history else None
+        avg_text = "" if avg is None else f" (средняя {avg:+.1f} °C)".replace(".", ",")
+        if stable_count == total:
+            self._remote_stable_text = f"Все платы устоялись: {total} из {total}{avg_text}. Можно снимать точки."
+            self._remote_stable_ok = True
+            return
+        moving = [f"«{self._mb_name(sa)}» " + ("истории мало" if rate is None
+                                                else f"{rate:+.3f} °C/мин".replace(".", ","))
+                  for sa, (rate, stable) in result.items() if not stable]
+        self._remote_stable_text = (f"Устоялись {stable_count} из {total} плат{avg_text}; ещё меняются: "
+                                    + ", ".join(moving[:5]) + ".")
+        self._remote_stable_ok = False
+
+    def _remote_boards_snapshot(self, now: float) -> dict:
+        """Цель функции в блоке «Платы» для сайта и мини-приложения: каждая плата - температуры, скорость, узлы."""
+        if not self._remote_multi():
+            return {"enabled": False}
+        temps = self._mb_board_temps(now)
+        rows = []
+        for row in self._mb_view()["boards"]:
+            sa = int(row["sa"])
+            board_c, fuel_c = temps.get(sa, (None, None))
+            rate, stable = self._remote_boards_stability.get(sa, (None, False))
+            rows.append({
+                "name": row["name"], "saText": row["saText"], "sa": sa, "active": row["active"],
+                "fresh": row["fresh"],
+                "boardTemp": "—" if board_c is None else f"{board_c:+.1f} °C".replace(".", ","),
+                "fuelTemp": "—" if fuel_c is None else f"{fuel_c:+.1f} °C".replace(".", ","),
+                "rateText": "—" if rate is None else f"{rate:+.3f} °C/мин".replace(".", ","),
+                "stable": bool(stable), "main": row["main"], "media": row["media"],
+                "points": row["points"], "tablesComplete": row["tablesComplete"],
+                "profileState": row.get("profileState", ""), "profileTone": row.get("profileTone", "normal"),
+                "nodes": row.get("nodes", []),
+            })
+        avg = self._remote_history[-1][1] if self._remote_history else None
+        return {"enabled": True, "rows": rows,
+                "avgText": "—" if avg is None else f"{avg:+.1f} °C".replace(".", ","),
+                "stableCount": sum(1 for row in rows if row["stable"]), "total": len(rows)}
+
     def _remote_watch_device(self, now: float):
         """Следит за адаптером и прибором: о пропаже и возвращении сообщает один раз."""
         connected = bool(self._can.is_connect) and bool(self._can.is_trace)
@@ -752,7 +842,8 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
                 "connected": bool(self._can.is_connect) and bool(self._can.is_trace),
                 "freshText": live.get("freshText", ""),
                 "freshOk": bool(live.get("freshOk")),
-                "node": f"0x{int(self._resolve_calibration_target_sa()) & 0xFF:02X}",
+                "node": (f"{len(self._mb_boards)} плат" if self._remote_multi()
+                         else f"0x{int(self._resolve_calibration_target_sa()) & 0xFF:02X}"),
                 "writeOpen": bool(write_open()) if write_open is not None else False,
             },
             "live": {key: live.get(key) for key in ("main", "media", "fuelTemp", "boardTemp", "windowText")},
@@ -771,7 +862,8 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
                 "coverage": self._chamber_coverage_rows(),
                 "report": [str(item) for item in self._chamber_report],
                 # Точки журнала (свежие сверху, с номером и временем - по ним точку убирают издалека).
-                "rows": self._chamber_rows()[:40],
+                # Несколько плат - точки всех плат, у каждой строки имя и адрес платы.
+                "rows": self._mb_all_rows() if self._remote_multi() else self._chamber_rows()[:40],
                 # Журналы на диске: свои и прошлых версий - открыть одной кнопкой с сайта и из бота.
                 # Несколько плат в камере: у каждой свои показания, точки и профиль.
                 "boards": [{key: row[key] for key in ("name", "saText", "active", "fresh", "boardTemp", "main", "media",
@@ -792,7 +884,20 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
                 "media": [rounded(media, 1) for _stamp, _board, _main, media in history],
             },
             "events": list(self._remote_events)[:30],
-        }
+            "boards": self._remote_boards_snapshot(now),
+        } | self._remote_history_boards()
+
+    def _remote_history_boards(self) -> dict:
+        """Цель функции в линии каждой платы для графиков: моменты те же, что у общей истории."""
+        if not self._remote_multi():
+            return {}
+        series = []
+        for board in self._mb_boards:
+            sa = int(board["sa"])
+            values = [None if temps.get(sa) is None else round(float(temps[sa]), 2)
+                      for _stamp, temps in self._remote_boards_history]
+            series.append({"name": str(board["name"]), "sa": f"0x{sa:02X}", "v": values})
+        return {"historyBoards": series}
 
     def _remote_status_text(self, snapshot: dict) -> str:
         """Что сейчас с прогоном - ответ бота на /status."""
@@ -807,7 +912,15 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             lines.append(f"{name}: {'на связи' if climate.get('ok') else 'нет связи'}; в камере "
                          f"{climate.get('actualText', '—')}, уставка {climate.get('setpointText', '—')}, "
                          f"{climate.get('runningText', '—')}, авария {climate.get('alarmText', '—')}.")
-        lines.append(f"Плата {board}. {snapshot.get('stability', {}).get('text', '')}")
+        boards = snapshot.get("boards") or {}
+        if boards.get("enabled"):
+            lines.append(snapshot.get("stability", {}).get("text", ""))
+            for row in boards.get("rows") or []:
+                lines.append(f"{'✓' if row.get('stable') else '○'} {row['name']} {row['saText']}: плата {row['boardTemp']}, "
+                             f"топливо {row['fuelTemp']}, {row['rateText']}, точек {row['points']}, профиль "
+                             f"{row.get('profileState') or '—'}")
+        else:
+            lines.append(f"Плата {board}. {snapshot.get('stability', {}).get('text', '')}")
         if run.get("active"):
             lines.append(auto.get("progressText") or run.get("status", ""))
             lines.append(run.get("status", ""))
@@ -815,7 +928,11 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
                 lines.append(("❌ " if alert.get("level") == "bad" else "⚠️ ") + alert.get("text", ""))
         else:
             lines.append("Автопрогон не идёт.")
-        lines.append(f"Точек в журнале: {(snapshot.get('run') or {}).get('points', 0)}.")
+        if boards.get("enabled"):
+            lines.append("Точек в журналах: " + ", ".join(f"{row['name']} {row['points']}"
+                                                         for row in boards.get("rows") or []) + ".")
+        else:
+            lines.append(f"Точек в журнале: {(snapshot.get('run') or {}).get('points', 0)}.")
         return "\n".join(line for line in lines if line)
 
     def _remote_boards_rows(self) -> list[dict]:

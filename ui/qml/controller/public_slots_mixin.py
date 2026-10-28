@@ -3564,6 +3564,11 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
 
     @Slot()
     def writeChamberProfile(self):
+        multi = getattr(self, "_mb_on", None)
+        if multi is not None and multi():
+            # Несколько плат: профиль - в каждую плату с полными таблицами, по очереди.
+            self._mb_start_profiles(manual=True)
+            return
         """Цель функции в записи посчитанного профиля, затем она открывает доступ, пишет, сверяет и сохраняет файл."""
         self._chamber_chain_start(automatic=False)
 

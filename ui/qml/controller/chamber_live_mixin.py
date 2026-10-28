@@ -327,6 +327,9 @@ class AppControllerChamberLiveMixin(AppControllerContract):
         profile_tick = getattr(self, "_mb_profile_tick", None)
         if profile_tick is not None:
             profile_tick(time.monotonic())
+        capture_tick = getattr(self, "_mb_manual_capture_tick", None)
+        if capture_tick is not None:
+            capture_tick(time.monotonic())
         if not self._chamber_live_wanted:
             return
         now = time.monotonic()

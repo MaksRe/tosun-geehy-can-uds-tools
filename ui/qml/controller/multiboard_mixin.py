@@ -103,6 +103,8 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         # Почему не удалось переключить показанную плату - строка в ленте, видна 8 с.
         self._mb_switch_note = ""
         self._mb_switch_note_s = 0.0
+        # Точка вручную («Записать точку» в окне, на сайте, в боте): у всех плат, когда она началась.
+        self._mb_manual_capture: float | None = None
         self._mb_load()
         self._mb_apply_period()
 
@@ -496,7 +498,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         if self._mb_capture_stage_since is None:
             self._mb_capture_stage_since = now
             self._mb_captured = set()
-        wanted = chamber_fit.nearest_node(int(round(float(node) * 10)))
+        wanted = None if node is None else chamber_fit.nearest_node(int(round(float(node) * 10)))
         for board in self._mb_boards:
             sa = board["sa"]
             if sa in self._mb_captured:
@@ -531,10 +533,43 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         """При нескольких платах профиль сам не пишется посреди прогона: только по очереди в конце."""
         return self._mb_on() and (self._mb_temp_depth > 0 or self._mb_profile_current is None)
 
-    def _mb_start_profiles(self):
-        """Конец прогона: запись профиля в каждую плату, у которой таблицы полные."""
-        if not self._mb_on() or not bool(getattr(self, "_chamber_auto_write", False)):
+    def _mb_manual_capture_start(self) -> tuple[bool, str]:
+        """Цель функции в точке вручную у всех плат сразу: каждой - по её средним, ждём не дольше минуты."""
+        if self._mb_manual_capture is not None:
+            return False, "точка у плат уже записывается"
+        if self._mb_capture_stage_since is not None:
+            return False, "точки плат сейчас снимает прогон"
+        now = time.monotonic()
+        self._mb_manual_capture = now
+        self._mb_captured = set()
+        self._mb_status = f"Записываю точку у {len(self._mb_boards)} плат по их средним..."
+        self._mb_manual_capture_tick(now)
+        return True, (f"точка записывается у всех {len(self._mb_boards)} плат по их средним; плата без среднего "
+                      f"ждётся до {self.MB_CAPTURE_WAIT_S:g} с")
+
+    def _mb_manual_capture_tick(self, now: float):
+        """Цель функции в ходе точки вручную: каждая плата записывается, как только у неё готово среднее."""
+        if self._mb_manual_capture is None or not self._mb_on():
+            self._mb_manual_capture = None
             return
+        if not self._mb_run_capture(now, None):
+            return
+        self._mb_manual_capture = None
+        done = [board["name"] for board in self._mb_boards if board["sa"] in self._mb_captured]
+        missing = [board["name"] for board in self._mb_boards if board["sa"] not in self._mb_captured]
+        label = str(getattr(self, "_chamber_label", "") or "").strip()
+        self._mb_status = (f"Точка «{label}» записана у {len(done)} из {len(self._mb_boards)} плат"
+                           + (f"; без среднего: {', '.join(missing)}" if missing else "") + ".")
+        self._mb_changed()
+
+    def _mb_start_profiles(self, manual: bool = False) -> str:
+        """Запись профиля в каждую плату, у которой таблицы полные (конец прогона или кнопка). Возвращает итог."""
+        if not self._mb_on():
+            return ""
+        if not manual and not bool(getattr(self, "_chamber_auto_write", False)):
+            return ""
+        if self._mb_profiles_busy():
+            return "профили уже пишутся"
         queue = []
         for board in self._mb_boards:
             with self._mb_context(board["sa"], notify=False):
@@ -544,6 +579,41 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                     self._mb_profile_results[board["sa"]] = "таблицы неполные - профиль не записан"
         self._mb_profile_queue = queue
         self._mb_profile_current = None
+        names = ", ".join(f"«{self._mb_name(sa)}»" for sa in queue)
+        text = (f"пишу профиль по очереди в платы с полными таблицами: {names}" if queue
+                else "ни у одной платы таблицы не полные - писать нечего")
+        self._mb_status = text[:1].upper() + text[1:] + "."
+        self._mb_changed()
+        return text
+
+    def _mb_clear_journals(self):
+        """Цель функции в новом журнале у всех плат сразу: следующая точка каждой начнёт новый файл."""
+        for board in self._mb_boards:
+            with self._mb_context(board["sa"], notify=False):
+                self._chamber_clear_points()
+        self._mb_changed()
+
+    def _mb_board_temps(self, now: float) -> dict[int, tuple]:
+        """Цель функции в средних температурах платы и топлива каждой платы (°C или None), для сайта и истории."""
+        temps = {}
+        for board in self._mb_boards:
+            with self._mb_context(board["sa"], notify=False):
+                values = []
+                for key in ("board_temp", "fuel_temp"):
+                    stats = self._chamber_live_stats(key, now) if self._chamber_live_fresh(key, now) else None
+                    values.append(None if stats is None else stats["mean"] / 10.0)
+                temps[int(board["sa"])] = tuple(values)
+        return temps
+
+    def _mb_all_rows(self, limit: int = 60) -> list[dict]:
+        """Цель функции в точках журналов всех плат одним списком (свежие сверху), с именем и адресом платы."""
+        rows = []
+        for board in self._mb_boards:
+            with self._mb_context(board["sa"], notify=False):
+                for row in self._chamber_rows():
+                    rows.append(dict(row, board=str(board["name"]), sa=int(board["sa"])))
+        rows.sort(key=lambda row: str(row.get("time", "")), reverse=True)
+        return rows[:limit]
 
     def _mb_profiles_busy(self) -> bool:
         return bool(self._mb_profile_queue) or self._mb_profile_current is not None

@@ -78,6 +78,13 @@
   .node { background: var(--bg); border-radius: 10px; padding: 6px 8px; font-size: 12px; }
   .node b { display: block; font-size: 13px; }
   .node.done { outline: 1.5px solid var(--ok); }
+  /* Несколько плат: строка платы и узлы температуры (закрашен - у платы есть точка в узле). */
+  table.boards td, table.boards th { white-space: nowrap; }
+  .dots { display: inline-flex; gap: 2px; }
+  .dots i { display: inline-block; min-width: 20px; padding: 0 2px; border-radius: 6px; font-size: 9px; font-style: normal;
+            text-align: center; background: var(--bg); color: var(--soft); border: 1px solid var(--line); }
+  .dots i.on { background: var(--ok); color: #fff; border-color: var(--ok); }
+  .swatch { display: inline-block; width: 10px; height: 3px; border-radius: 2px; vertical-align: 3px; margin-right: 4px; }
   button { font: inherit; border: 0; border-radius: 10px; padding: 8px 12px; background: var(--accent);
            color: var(--accent-text); cursor: pointer; }
   button.light { background: var(--bg); color: var(--link); }
@@ -198,12 +205,13 @@
       <div id="chamber"></div>
     </div>
     <div class="card">
-      <h2>Плата <span id="deviceNode"></span></h2>
-      <div class="grid">
+      <h2 id="boardTitle">Плата <span id="deviceNode"></span></h2>
+      <div class="grid" id="boardSingle">
         <div><small>Температура платы</small><span class="big" id="boardNow">—</span>
           <div class="soft" id="boardAvg"></div></div>
         <div><small>Температура топлива</small><span class="big" id="fuelNow">—</span></div>
       </div>
+      <div class="wrap" id="boardsLiveWrap" style="display:none"><table class="points boards" id="boardsLive"></table></div>
       <div id="stability" style="margin-top:8px"></div>
       <div class="soft" id="device" style="margin-top:4px"></div>
     </div>
@@ -221,7 +229,8 @@
       <canvas id="chart"></canvas>
       <div class="legend">
         <span><i style="background:var(--chamber)"></i>камера, °C</span>
-        <span><i style="background:var(--board)"></i>плата, °C</span>
+        <span><i style="background:var(--board)"></i><span id="historyBoardName">плата</span>, °C</span>
+        <span id="historyBoardsLegend"></span>
         <span><i style="background:var(--main)"></i>основной, Δ</span>
         <span><i style="background:var(--media)"></i>вид топлива, Δ</span>
       </div>
@@ -294,7 +303,8 @@
       <div class="legend">
         <span><i style="background:var(--chamber)"></i>камера</span>
         <span><i style="background:var(--chamber);opacity:.45"></i>уставка</span>
-        <span><i style="background:var(--board)"></i>плата</span>
+        <span><i style="background:var(--board)"></i><span id="boardLegendName">плата</span></span>
+        <span id="boardsLegend"></span>
       </div>
       <div class="readout" id="readTemp"></div>
     </div>
@@ -595,6 +605,11 @@
   });
 
   // Скорость изменения температуры платы, °C/мин: разница с точкой на окно назад (окно - как у прогона).
+  // Цвета плат на графиках: у каждой платы свой, по порядку в списке.
+  // Без фиолетового (камера) и оранжевого (средняя плат) - чтобы линии не путались.
+  const BOARD_COLORS = ["#0891b2", "#db2777", "#65a30d", "#2563eb", "#92400e", "#dc2626", "#475569", "#ca8a04"];
+  function boardColor(i) { return BOARD_COLORS[i % BOARD_COLORS.length]; }
+
   function boardRate(t, board, windowS) {
     const out = [];
     let j = 0;
@@ -629,20 +644,30 @@
     $("rateBand").textContent = "±" + fmt(band, 2) + " - плата устоялась";
     const inRange = (times, values) => values.filter((v, i) => times[i] >= -chartRange);
 
+    // Несколько плат: линия каждой платы (тонкая) и средняя по платам (по ней ведётся камера).
+    const perBoard = s.historyBoards || [];
+    const multi = perBoard.length > 0;
+    const boardSeries = perBoard.map((b, i) => ({ name: b.name, t, v: b.v || [], color: boardColor(i), width: 1.2 }));
+    $("boardLegendName").textContent = multi ? "средняя плат" : "плата";
+    $("boardsLegend").innerHTML = perBoard.map((b, i) =>
+      `<span><i style="background:${boardColor(i)}"></i>${esc(b.name)}</span>`).join(" ");
     plot("plotTemp", "readTemp", [
       { name: "камера", t: ct, v: chamber.actual || [], color: "--chamber" },
       { name: "уставка", t: ct, v: chamber.setpoint || [], color: "--chamber", dash: [6, 4], alpha: 0.5, width: 1.2 },
-      { name: "плата", t, v: board, color: "--board" },
+      ...boardSeries,
+      { name: multi ? "средняя плат" : "плата", t, v: board, color: "--board" },
     ], { digits: 1, minSpan: 2 });
-    plot("plotRate", "readRate", [{ name: "плата", t, v: rate, color: "--board" }],
-         { digits: 3, minSpan: 0.2, lines: [{ v: band, color: "--ok" }, { v: -band, color: "--ok" }] });
+    plot("plotRate", "readRate", [
+      ...perBoard.map((b, i) => ({ name: b.name, t, v: boardRate(t, b.v || [], windowS), color: boardColor(i), width: 1.2 })),
+      { name: multi ? "средняя плат" : "плата", t, v: rate, color: "--board" },
+    ], { digits: 3, minSpan: 0.2, lines: [{ v: band, color: "--ok" }, { v: -band, color: "--ok" }] });
     plot("plotMain", "readMain", [{ name: "основной", t, v: history.main || [], color: "--main" }], { digits: 0, minSpan: 4 });
     plot("plotMedia", "readMedia", [{ name: "вид топлива", t, v: history.media || [], color: "--media" }], { digits: 0, minSpan: 4 });
 
     if (quiet) return;
     const last = (values) => { for (let i = values.length - 1; i >= 0; i--) if (values[i] !== null) return values[i]; return null; };
     const lastRate = last(rate);
-    $("tempNow").textContent = last(board) === null ? "" : "плата " + fmt(last(board), 1);
+    $("tempNow").textContent = last(board) === null ? "" : (multi ? "средняя плат " : "плата ") + fmt(last(board), 1);
     $("rateNow").innerHTML = lastRate === null ? "" : `<span class="${Math.abs(lastRate) <= band ? "ok" : "warn"}">${fmt(lastRate, 3)}</span>`;
     $("mainSpread").textContent = spreadText(inRange(t, history.main || []));
     $("mediaSpread").textContent = spreadText(inRange(t, history.media || []));
@@ -657,7 +682,7 @@
     if (state) renderCharts(state);
   });
 
-  function drawChart(history, chamber) {
+  function drawChart(history, chamber, boards) {
     const canvas = $("chart");
     const ratio = window.devicePixelRatio || 1;
     const width = canvas.clientWidth, height = canvas.clientHeight;
@@ -697,7 +722,7 @@
     }
     const mainShift = shifted(history.main), mediaShift = shifted(history.media);
     const actual = (chamber && chamber.actual) || [];
-    const tempRange = range([...(history.board || []), ...actual]);
+    const tempRange = range([...(history.board || []), ...actual, ...(boards || []).flatMap((b) => b.v || [])]);
     const periodRange = range([...mainShift, ...mediaShift]);
 
     ctx.strokeStyle = color("--line");
@@ -726,6 +751,7 @@
       ctx.stroke();
     }
     line(actual, tempRange, color("--chamber"), ct);
+    (boards || []).forEach((b, i) => line(b.v || [], tempRange, boardColor(i), t));
     line(history.board || [], tempRange, color("--board"), t);
     line(mainShift, periodRange, color("--main"), t);
     line(mediaShift, periodRange, color("--media"), t);
@@ -766,7 +792,22 @@
 
     const live = s.live || {};
     const board = live.boardTemp || {}, fuel = live.fuelTemp || {}, main = live.main || {}, media = live.media || {};
-    $("deviceNode").textContent = device.node ? "узел " + device.node : "";
+    const boardsLive = s.boards || {};
+    const multi = !!boardsLive.enabled;
+    $("boardTitle").firstChild.nodeValue = multi ? "Платы " : "Плата ";
+    $("deviceNode").textContent = multi ? `${boardsLive.total} · средняя ${boardsLive.avgText} · устоялись ${boardsLive.stableCount} из ${boardsLive.total}`
+                                        : (device.node ? "узел " + device.node : "");
+    $("boardSingle").style.display = multi ? "none" : "";
+    $("boardsLiveWrap").style.display = multi ? "" : "none";
+    $("boardsLive").innerHTML = multi
+      ? "<tr><th>Плата</th><th>Плата °C</th><th>Топливо °C</th><th>Скорость</th><th>Осн / вид</th></tr>" +
+        (boardsLive.rows || []).map((b, i) =>
+          `<tr><td class="${b.fresh ? "" : "warn"}"><span class="swatch" style="background:${boardColor(i)}"></span>` +
+          `${b.active ? "● " : ""}${esc(b.name)} <span class="soft">${esc(b.saText)}</span></td>` +
+          `<td><b>${esc(b.boardTemp)}</b></td><td>${esc(b.fuelTemp)}</td>` +
+          `<td class="${b.stable ? "ok" : "warn"}">${b.stable ? "● " : "○ "}${esc(b.rateText)}</td>` +
+          `<td>${esc(b.main)} / ${esc(b.media)}</td></tr>`).join("")
+      : "";
     $("boardNow").textContent = board.now || "—";
     $("boardAvg").textContent = board.avg ? "среднее " + board.avg : "";
     $("fuelNow").textContent = fuel.now || "—";
@@ -776,12 +817,17 @@
     $("mediaNow").textContent = media.now || "—";
     $("mediaAvg").textContent = media.avg || "—";
     $("mediaInfo").textContent = media.info || "";
-    $("window").textContent = live.windowText ? "окно " + live.windowText + " с" : "";
+    const shown = ((s.boards || {}).rows || []).find((b) => b.active);
+    // Несколько плат: контуры - показанной платы (её выбирают в программе).
+    $("window").textContent = (shown ? "«" + shown.name + "» · " : "") + (live.windowText ? "окно " + live.windowText + " с" : "");
     const st = s.stability || {};
     $("stability").innerHTML = `<span class="${st.ok ? "ok" : "warn"}">${st.ok ? "● " : "○ "}${esc(st.text)}</span>`;
     $("device").innerHTML = `${device.connected ? "Адаптер подключён" : "<span class=bad>Адаптер не подключён</span>"} · ` +
       `${esc(device.freshText)} · запись ${device.writeOpen ? "открыта" : "закрыта"}`;
-    if ($("tab-now").classList.contains("on")) drawChart(s.history || {}, climate.history || {});
+    if ($("tab-now").classList.contains("on")) drawChart(s.history || {}, climate.history || {}, s.historyBoards || []);
+    $("historyBoardName").textContent = (s.historyBoards || []).length ? "средняя плат" : "плата";
+    $("historyBoardsLegend").innerHTML = (s.historyBoards || []).map((b, i) =>
+      `<span><i style="background:${boardColor(i)}"></i>${esc(b.name)}</span>`).join(" ");
   }
 
   function renderRun(s) {
@@ -811,12 +857,15 @@
     const journal = s.run || {};
     $("journal").textContent = `точек: ${journal.points ?? 0}`;
     // Несколько плат в камере: у каждой свои показания, точки и профиль.
-    const boards = journal.boards || [];
+    const live = (s.boards || {}).enabled ? (s.boards.rows || []) : [];
+    const boards = live.length ? live : (journal.boards || []);
+    const tones = { ok: "ok", bad: "bad", run: "", normal: "soft" };
     $("boards").innerHTML = boards.length
-      ? "<tr><th>Плата</th><th>°C</th><th>Основной</th><th>Вид</th><th>Точек</th><th>Профиль</th></tr>" +
+      ? "<tr><th>Плата</th><th>Узлы</th><th>Точек</th><th>Таблицы</th><th>Профиль</th></tr>" +
         boards.map((b) => `<tr><td class="${b.fresh ? "" : "warn"}">${b.active ? "● " : ""}${esc(b.name)} <span class="soft">${esc(b.saText)}</span></td>` +
-          `<td>${esc(b.boardTemp)}</td><td>${esc(b.main)}</td><td>${esc(b.media)}</td><td>${esc(b.points)}</td>` +
-          `<td class="soft">${esc(b.profile || (b.tablesComplete ? "таблицы готовы" : ""))}</td></tr>`).join("")
+          `<td><span class="dots">${(b.nodes || []).map((n) => `<i class="${n.count > 0 ? "on" : ""}" title="${esc(n.node)}: точек ${n.count}">${esc(n.short)}</i>`).join("")}</span></td>` +
+          `<td>${esc(b.points)}</td><td class="${b.tablesComplete ? "ok" : "soft"}">${b.tablesComplete ? "готовы" : "нет"}</td>` +
+          `<td class="${tones[b.profileTone] || "soft"}">${esc(b.profileState || b.profile || "")}</td></tr>`).join("")
       : "";
     $("run").innerHTML =
       `<div class="soft">${esc(journal.file || "журнал ещё не сохранён")}</div>` +
@@ -847,11 +896,15 @@
     // Точки журнала: тем, кто управляет, - кнопка «убрать» у каждой (по номеру и времени точки).
     const edit = canControl(s);
     const rows = journal.rows || [];
+    const byBoard = rows.some((r) => r.board);
     $("points").innerHTML = rows.length
-      ? "<tr><th>Время</th><th>Узел</th><th>Плата</th><th>Основной</th><th>Вид</th>" + (edit ? "<th></th>" : "") + "</tr>" +
-        rows.map((r) => `<tr><td>${esc(r.time)}</td><td class="${r.nodeOk ? "" : "warn"}">${esc(r.node)}</td>` +
+      ? "<tr><th>Время</th>" + (byBoard ? "<th>Плата</th>" : "") + "<th>Узел</th><th>°C</th><th>Основной</th><th>Вид</th>" +
+        (edit ? "<th></th>" : "") + "</tr>" +
+        rows.map((r) => `<tr><td>${esc(r.time)}</td>` + (byBoard ? `<td>${esc(r.board || "")}</td>` : "") +
+          `<td class="${r.nodeOk ? "" : "warn"}">${esc(r.node)}</td>` +
           `<td>${esc(r.boardTemp)}</td><td>${esc(r.main)}</td><td>${esc(r.media)}</td>` +
-          (edit ? `<td><button class="light" data-point="${esc(r.index)}" data-time="${esc(r.time)}" data-node="${esc(r.node)}">✕</button></td>` : "") +
+          (edit ? `<td><button class="light" data-point="${esc(r.index)}" data-time="${esc(r.time)}" data-node="${esc(r.node)}"` +
+                  ` data-sa="${r.sa ?? ""}" data-board="${esc(r.board || "")}">✕</button></td>` : "") +
           `</tr>`).join("")
       : `<tr><td class="soft">Точек пока нет.</td></tr>`;
 
@@ -943,7 +996,10 @@
       $("ctlLimitsHint").textContent = control.limits ? `сейчас ${control.limits.min} … ${control.limits.max} °C` : "";
     }
     const board = ((s.live || {}).boardTemp || {}).avg || ((s.live || {}).boardTemp || {}).now || "—";
-    $("ctlCaptureHint").textContent = `пометка «${(s.run || {}).label || "—"}», плата ${board}`;
+    const allBoards = s.boards || {};
+    $("ctlCaptureHint").textContent = allBoards.enabled
+      ? `пометка «${(s.run || {}).label || "—"}», у всех ${allBoards.total} плат, средняя ${allBoards.avgText}`
+      : `пометка «${(s.run || {}).label || "—"}», плата ${board}`;
   }
 
   // Шаги: пройденные серые, идущий выделен; кто управляет - правит текущий и будущие, переходит к шагу.
@@ -1216,8 +1272,10 @@
   $("points").addEventListener("click", (event) => {
     const button = event.target.closest("button[data-point]");
     if (!button) return;
-    control({ action: "journal_remove_point", index: button.dataset.point, time: button.dataset.time },
-      `Убрать точку ${button.dataset.time} (${button.dataset.node}) из журнала? Таблицы пересчитаются.`);
+    const body = { action: "journal_remove_point", index: button.dataset.point, time: button.dataset.time };
+    if (button.dataset.sa) body.sa = button.dataset.sa;
+    const whose = button.dataset.board ? ` платы «${button.dataset.board}»` : "";
+    control(body, `Убрать точку ${button.dataset.time} (${button.dataset.node}) из журнала${whose}? Таблицы пересчитаются.`);
   });
 
   $("journals").addEventListener("click", (event) => {

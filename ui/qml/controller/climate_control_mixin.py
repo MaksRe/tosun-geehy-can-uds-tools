@@ -366,6 +366,11 @@ class AppControllerClimateControlMixin(AppControllerContract):
             return False, "точка уже записывается", f"«{label}»"
         if not (self._can.is_connect and self._can.is_trace):
             return False, "адаптер CAN не подключён или трассировка выключена: прибор не опрашивается", f"«{label}»"
+        multi = getattr(self, "_mb_on", None)
+        if multi is not None and multi():
+            # Несколько плат: точка у каждой платы по её средним, а не только у показанной.
+            ok, text = self._mb_manual_capture_start()
+            return ok, text, f"«{label}», плат {len(self._mb_boards)}"
         board = self._chamber_live_stats("board_temp")
         board_text = "—" if board is None else _temp(board["mean"] / 10.0)
         node = None if board is None else chamber_fit.nearest_node(int(round(board["mean"])))
@@ -452,9 +457,18 @@ class AppControllerClimateControlMixin(AppControllerContract):
         except (TypeError, ValueError):
             return False, "номер точки не понят", ""
         stamp = str(params.get("time", ""))
-        ok, text = self._chamber_remove_point(index, stamp)
+        sa = params.get("sa")
+        board_of = getattr(self, "_mb_board", None)
+        if sa not in (None, "") and board_of is not None and board_of(int(sa)) is not None:
+            # Несколько плат: точка убирается из журнала той платы, которой она принадлежит.
+            with self._mb_context(int(sa)):
+                ok, text = self._chamber_remove_point(index, stamp)
+            who = f"«{board_of(int(sa))['name']}», "
+        else:
+            ok, text = self._chamber_remove_point(index, stamp)
+            who = ""
         self.chamberChanged.emit()
-        return ok, text, f"точка {index + 1}" + (f" ({stamp})" if stamp else "")
+        return ok, text, who + f"точка {index + 1}" + (f" ({stamp})" if stamp else "")
 
     def _control_do_journal_new(self, actor: dict, params: dict):
         """Новый журнал: точки из окна убираются, файл прежнего журнала остаётся на диске."""
@@ -462,6 +476,12 @@ class AppControllerClimateControlMixin(AppControllerContract):
             return False, "идёт прогон: новый журнал - после него", ""
         before = pathlib.Path(self._chamber_file_path).name if self._chamber_file_path else ""
         count = len(self._chamber_points)
+        multi = getattr(self, "_mb_on", None)
+        if multi is not None and multi():
+            # Несколько плат: новый журнал у каждой платы.
+            self._mb_clear_journals()
+            self.chamberChanged.emit()
+            return True, "новый журнал у всех плат: следующая точка каждой начнёт новый файл.", f"плат {len(self._mb_boards)}"
         self._chamber_clear_points()
         self.chamberChanged.emit()
         return True, "новый журнал: следующая точка начнёт новый файл. Прежний остался на диске.", (
