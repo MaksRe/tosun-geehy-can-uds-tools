@@ -10,7 +10,8 @@ import "."
   - показывает этапы пробной калибровки таблицей: состояние, итог и время каждого;
   - запускает все этапы подряд одной кнопкой либо любой этап отдельно;
   - пишет в отдельный журнал, что делает каждый этап, какие числа получил и чем закончил;
-  - постоянно показывает отсчёты обоих контуров, обе температуры и состояние эмуляции.
+  - постоянно показывает отсчёты обоих контуров, обе температуры и состояние эмуляции;
+  - проверяет без записи в прибор, что профиль из камеры лежит в каждой плате и применяется.
 
   Публичные свойства:
   - appController: контроллер приложения;
@@ -31,7 +32,10 @@ Card {
 
     readonly property bool busy: root.appController ? root.appController.trialBusy : false
     readonly property bool autoActive: root.appController ? root.appController.trialAutoActive : false
-    readonly property bool ready: root.appController !== null && !root.busy && !root.autoActive
+    // Проверка профиля из камеры на столе: идёт через ту же очередь обмена, поэтому этапы на это время закрыты.
+    readonly property var bench: root.appController ? root.appController.benchProfileView : ({"active": false, "multi": false, "rows": []})
+    readonly property bool benchActive: root.bench && root.bench.active === true
+    readonly property bool ready: root.appController !== null && !root.busy && !root.autoActive && !root.benchActive
     // Ширины колонок таблицы. Одни и те же для шапки и строк, иначе подписи разъедутся.
     readonly property int colNumber: 30
     readonly property int colTitle: 250
@@ -201,6 +205,201 @@ Card {
                 toolTipText: "Записывает таблицу этапов и весь журнал в текстовый файл"
                 enabled: root.appController !== null
                 onClicked: root.saveProtocolRequested()
+            }
+        }
+
+        // --- Профиль из камеры: проверка на столе без записи ---
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: benchColumn.implicitHeight + 20
+            radius: 10
+            color: "#f4f9ff"
+            border.width: 1
+            border.color: "#cfe0f3"
+
+            ColumnLayout {
+                id: benchColumn
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: 10
+                spacing: 8
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 1
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: "Профиль из камеры: проверка на столе"
+                            color: root.textMain
+                            font.pixelSize: 14
+                            font.bold: true
+                            font.family: "Bahnschrift"
+                            elide: Text.ElideRight
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: "Ничего не пишет в прибор: читает профиль платы, сверяет с файлом из камеры и проходит -40...+85 °C эмуляцией"
+                            color: root.textSoft
+                            font.pixelSize: 11
+                            font.family: "Bahnschrift"
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+
+                    FancyButton {
+                        Layout.preferredWidth: 170
+                        Layout.preferredHeight: 30
+                        fontPixelSize: 12
+                        text: root.bench.multi ? "Показанная плата" : "Проверить плату"
+                        tone: "#0284c7"
+                        toneHover: "#0369a1"
+                        tonePressed: "#075985"
+                        toolTipText: root.bench.multi
+                                     ? "Проверяет плату, показанную в ленте плат"
+                                     : "Проверяет прибор, выбранный в шапке окна"
+                        enabled: root.ready
+                        onClicked: root.appController.startBenchProfileCheck(false)
+                    }
+
+                    FancyButton {
+                        visible: root.bench.multi === true
+                        Layout.preferredWidth: 150
+                        Layout.preferredHeight: 30
+                        fontPixelSize: 12
+                        text: "Все платы"
+                        tone: "#16a34a"
+                        toneHover: "#15803d"
+                        tonePressed: "#166534"
+                        toolTipText: "Проверяет по очереди все платы из списка «Платы в камере»"
+                        enabled: root.ready
+                        onClicked: root.appController.startBenchProfileCheck(true)
+                    }
+
+                    FancyButton {
+                        visible: root.benchActive
+                        Layout.preferredWidth: 120
+                        Layout.preferredHeight: 30
+                        fontPixelSize: 12
+                        text: "Остановить"
+                        tone: "#ef4444"
+                        toneHover: "#dc2626"
+                        tonePressed: "#b91c1c"
+                        toolTipText: "Плата, которая проверяется сейчас, будет доведена до конца: эмуляция выключится"
+                        enabled: root.benchActive && root.bench.stopping !== true
+                        onClicked: root.appController.stopBenchProfileCheck()
+                    }
+                }
+
+                Flow {
+                    Layout.fillWidth: true
+                    visible: root.bench.rows !== undefined && root.bench.rows.length > 0
+                    spacing: 8
+
+                    Repeater {
+                        model: root.bench.rows || []
+
+                        Rectangle {
+                            id: benchTile
+                            required property var modelData
+                            width: Math.min(benchColumn.width, 300)
+                            height: tileColumn.implicitHeight + 16
+                            radius: 9
+                            color: "#ffffff"
+                            border.width: benchTile.modelData.current ? 2 : 1
+                            border.color: benchTile.modelData.current ? "#0f6ab4" : "#d6e2ef"
+
+                            Rectangle {
+                                anchors.left: parent.left
+                                anchors.top: parent.top
+                                anchors.bottom: parent.bottom
+                                anchors.margins: 1
+                                width: 4
+                                radius: 2
+                                color: benchTile.modelData.color
+                            }
+
+                            ColumnLayout {
+                                id: tileColumn
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.leftMargin: 14
+                                anchors.rightMargin: 10
+                                anchors.topMargin: 8
+                                spacing: 4
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Text {
+                                        text: benchTile.modelData.name
+                                        color: root.textMain
+                                        font.pixelSize: 13
+                                        font.bold: true
+                                        font.family: "Bahnschrift"
+                                    }
+
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: benchTile.modelData.saText
+                                        color: root.textSoft
+                                        font.pixelSize: 11
+                                        font.family: "Bahnschrift"
+                                    }
+
+                                    Rectangle {
+                                        Layout.preferredWidth: benchChip.implicitWidth + 14
+                                        Layout.preferredHeight: 20
+                                        radius: 10
+                                        color: "transparent"
+                                        border.width: 1
+                                        border.color: benchTile.modelData.color
+
+                                        Text {
+                                            id: benchChip
+                                            anchors.centerIn: parent
+                                            text: benchTile.modelData.statusText
+                                            color: benchTile.modelData.color
+                                            font.pixelSize: 10
+                                            font.bold: true
+                                            font.family: "Bahnschrift"
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    id: benchSummary
+                                    Layout.fillWidth: true
+                                    visible: text.length > 0
+                                    text: benchTile.modelData.summary
+                                    color: benchTile.modelData.status === "fail" ? "#b91c1c" : "#334155"
+                                    font.pixelSize: 11
+                                    font.family: "Bahnschrift"
+                                    wrapMode: Text.WordWrap
+                                    maximumLineCount: 4
+                                    elide: Text.ElideRight
+
+                                    // Полный отчёт платы (все температуры) - в подсказке и в журнале ниже.
+                                    HoverHandler {
+                                        onHoveredChanged: root.setHover(
+                                            benchSummary, hovered,
+                                            benchTile.modelData.detail.length > 0
+                                            ? benchTile.modelData.summary + "\n\n" + benchTile.modelData.detail
+                                            : benchTile.modelData.summary)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 

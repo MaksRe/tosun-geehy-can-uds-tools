@@ -139,7 +139,8 @@ class Device:
 
     def read(self, did):
         fuel_t, board_t = self.temps()
-        mode = (profile_model.MODE_MAIN_LUT | profile_model.MODE_TUBE_MAIN) if self.trusted() else 0
+        # Признаки ступеней - как в прошивке: ступень трубки работает, только если её таблицы заданы.
+        mode = self.chain()["mode_main"]
         computed = {
             pid(UdsData.curr_fuel_tank): struct.pack("<H", RAW_MAIN),
             pid(UdsData.fuel_media_flatcap_raw): struct.pack("<H", RAW_MEDIA),
@@ -273,6 +274,10 @@ class Device:
 
 device = Device()
 ctrl = AppController()
+# Модель - один прибор 0x6A: список «Платы в камере» из настроек компьютера увёл бы запросы к другим адресам.
+ctrl._mb_enabled = False
+ctrl._mb_active_sa = None
+ctrl._calibration_target_node_sa = None
 can = ctrl._can
 can._is_connect = True
 can._is_trace = True

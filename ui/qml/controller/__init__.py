@@ -12,6 +12,7 @@ from .chamber_live_mixin import AppControllerChamberLiveMixin
 from .chamber_mixin import AppControllerChamberMixin
 from .chamber_test_mixin import AppControllerChamberTestMixin
 from .trial_mixin import AppControllerTrialMixin
+from .bench_profile_mixin import AppControllerBenchProfileMixin
 from .collector_mixin import AppControllerCollectorMixin
 from .contract import AppControllerContract
 from .eeprom_commit_mixin import AppControllerEepromCommitMixin
@@ -46,6 +47,7 @@ __all__ = [
     "AppControllerClimateScenarioMixin",
     "AppControllerClimateSupervisorMixin",
     "AppControllerTrialMixin",
+    "AppControllerBenchProfileMixin",
     "AppControllerCollectorMixin",
     "AppControllerContract",
     "AppControllerDiagnosticsMixin",

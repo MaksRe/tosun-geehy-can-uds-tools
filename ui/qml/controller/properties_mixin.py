@@ -946,6 +946,11 @@ class AppControllerPropertiesMixin(AppControllerContract):
         """Цель функции в цвете подписи, затем она отделяет успех от замечаний и отказа."""
         return str(self._trial_status_color)
 
+    @Property("QVariantMap", notify=trialChanged)
+    def benchProfileView(self):
+        """Цель функции в итогах проверки профиля из камеры на столе, затем окно показывает плитку каждой платы."""
+        return self._bench_view()
+
     @Property(str, notify=trialChanged)
     def trialSummaryText(self):
         """Цель функции в короткой сводке, затем видно, сколько этапов пройдено."""

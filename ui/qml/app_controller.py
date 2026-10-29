@@ -36,6 +36,7 @@ from .controller import (
     AppControllerClimateScenarioMixin,
     AppControllerClimateSupervisorMixin,
     AppControllerTrialMixin,
+    AppControllerBenchProfileMixin,
     AppControllerEepromCommitMixin,
     AppControllerCollectorMixin,
     AppControllerDiagnosticsMixin,
@@ -82,6 +83,7 @@ class AppController(
     AppControllerClimateScenarioMixin,
     AppControllerClimateSupervisorMixin,
     AppControllerTrialMixin,
+    AppControllerBenchProfileMixin,
     AppControllerEepromCommitMixin,
     AppControllerCanMixin,
     AppControllerRuntimeMixin,
@@ -628,6 +630,8 @@ class AppController(
         self._init_board_addressing_state()
         # Пробная калибровка опирается на прогон и профиль, поэтому готовится последней.
         self._init_trial_state()
+        # Проверка профиля из камеры на столе ходит через очередь пробной калибровки, поэтому - после неё.
+        self._init_bench_state()
         # Контроль сохранения замечает записи всех разделов, поэтому готовится после них.
         self._init_eeprom_commit_state()
         # Наблюдение издалека смотрит на прогон и калибровку, поэтому готовится после всех.

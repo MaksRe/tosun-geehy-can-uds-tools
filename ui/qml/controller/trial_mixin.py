@@ -634,7 +634,7 @@ class AppControllerTrialMixin(AppControllerContract):
     def _trial_run_step(self, key: str) -> bool:
         """Запускает один этап: пишет в журнал, что он делает и зачем, и следит, что он не завис."""
         runner = self._trial_runners().get(str(key))
-        if runner is None or self._trial_busy:
+        if runner is None or self._trial_busy or bool(getattr(self, "_bench_active", False)):
             return False
 
         self._trial_step_started_s[key] = time.monotonic()
@@ -654,7 +654,7 @@ class AppControllerTrialMixin(AppControllerContract):
 
     def _trial_auto_start(self) -> bool:
         """Запускает все этапы подряд."""
-        if self._trial_busy or self._trial_auto_active:
+        if self._trial_busy or self._trial_auto_active or bool(getattr(self, "_bench_active", False)):
             return False
         if not self._can.is_connect:
             self.infoMessage.emit("Пробная калибровка", "Сначала подключите CAN-адаптер.")
@@ -1549,14 +1549,19 @@ class AppControllerTrialMixin(AppControllerContract):
             "ступени платы и итоговый, и сверяю с расчётом по формулам прошивки...")
         return self._trial_start_ops(ops, "_trial_apply_done")
 
-    def _trial_apply_compare(self, res: dict) -> tuple[list[str], list[str]]:
-        """Сверяет цепочку прибора с расчётом. Возвращает (расхождения, строки отчёта)."""
+    def _trial_apply_compare(self, res: dict, profile: dict | None = None) -> tuple[list[str], list[str]]:
+        """Сверяет цепочку прибора с расчётом. Возвращает (расхождения, строки отчёта).
+
+        profile - таблицы, по которым считается расчёт; по умолчанию - записанный проверочный профиль.
+        Проверка профиля из камеры на столе передаёт профиль, прочитанный из самой платы.
+        """
         problems = []
         lines = []
         status = self._trial_value(res, "status") or 0
         trusted = bool(status & profile_model.STATUS_TRUSTED)
         zero_trim = self._trial_value(res, "zero_trim") or 0
-        profile = self._trial_applied_profile
+        if profile is None:
+            profile = self._trial_applied_profile
         tolerance = self.TRIAL_PERIOD_TOLERANCE
 
         if not trusted:
@@ -1589,16 +1594,20 @@ class AppControllerTrialMixin(AppControllerContract):
             comp_hi = max(p["compensated"] for p in predictions) + tolerance
             expected_comp = predictions[0]["compensated"]
 
-            lines.append(f"{place}: сырой {raw_a}, после платы {board}, итог прибора {comp}, по расчёту {expected_comp}")
+            lines.append(f"{place}: сырой {raw_a}, после платы {board}, итог прибора {comp}, по расчёту {expected_comp}, "
+                         f"поправка {comp - raw_a:+d}")
 
             if not (board_lo <= board <= board_hi):
                 problems.append(
                     f"{place}: после ступени платы {board}, а по расчёту {predictions[0]['board_stage']}")
             if not (comp_lo <= comp <= comp_hi):
                 problems.append(f"{place}: итоговый период {comp}, а по расчёту {expected_comp}")
-            needed = profile_model.MODE_MAIN_LUT | profile_model.MODE_TUBE_MAIN
-            if (mode & needed) != needed:
-                problems.append(f"{place}: прибор не сообщил о работе обеих ступеней, признаки 0x{mode:02X}")
+            # Какие ступени обязаны работать - по расчёту: у профиля из камеры без трубок ступени трубки нет.
+            stages = profile_model.MODE_MAIN_LUT | profile_model.MODE_TUBE_MAIN
+            needed = predictions[0]["mode_main"] & stages
+            if (mode & stages) != needed:
+                problems.append(f"{place}: прибор сообщил не те ступени: признаки 0x{mode:02X}, "
+                                f"по расчёту 0x{needed:02X}")
 
         return problems, lines
 
@@ -1956,6 +1965,14 @@ class AppControllerTrialMixin(AppControllerContract):
             lines.append(f"{row['number']:>2}. {row['title']}: {row['statusText']}{time_text}")
             for detail_line in str(row["detail"]).splitlines():
                 lines.append(f"    {detail_line}")
+        bench = getattr(self, "_bench_view", None)
+        rows = bench()["rows"] if bench is not None else []
+        if rows:
+            lines += ["", "Профиль из камеры, проверка на столе:"]
+            for row in rows:
+                lines.append(f"  {row['name']} ({row['saText']}): {row['statusText']}. {row['summary']}")
+                for detail_line in str(row["detail"]).splitlines():
+                    lines.append(f"    {detail_line}")
         lines += ["", "Журнал:"]
         for entry in self._trial_log:
             indent = "    " if entry["level"] == "detail" else ""

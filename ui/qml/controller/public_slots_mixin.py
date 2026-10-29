@@ -3243,6 +3243,16 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         """Цель функции в забывании тестовой точки, затем раздел показывает только опорные точки прибора."""
         self._capacitance_clear_test_point()
 
+    @Slot(bool)
+    def startBenchProfileCheck(self, all_boards):
+        """Цель функции в проверке профиля из камеры на столе, затем платы проверяются по очереди без записи."""
+        self._bench_start(bool(all_boards))
+
+    @Slot()
+    def stopBenchProfileCheck(self):
+        """Цель функции в остановке проверки профиля, затем текущая плата доводится до конца."""
+        self._bench_stop()
+
     @Slot()
     def trialEmulationOff(self):
         """Цель функции в выключении эмуляции, затем прибор возвращается к настоящим датчикам."""
