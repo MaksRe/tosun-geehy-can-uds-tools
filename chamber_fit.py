@@ -509,8 +509,14 @@ def compute_tables(records, air_note: str = AIR_NOTE, liquid_note: str = LIQUID_
     single_model разрешает считать таблицу платы по одной ёмкости в узле (см.
     build_board_table_single). board_only - прогон одной платы без трубки:
     отсутствие точек «воздух» и «жидкость» тогда не считается недостатком.
+    Без board_only single_model - второй этап после прогона одной платы: таблица
+    платы по своей ёмкости из журнала первого этапа, строки трубки - после неё.
+
+    Ключ «сведения» - то, что оператор должен знать, но что запись не запрещает:
+    достроенные строки «в жидкости», таблица платы по одной ёмкости под трубкой.
     """
     report: list[str] = []
+    notes: list[str] = []
     boards: dict[str, list | None] = {}
     nodes: dict[str, list[int]] = {}
 
@@ -538,12 +544,27 @@ def compute_tables(records, air_note: str = AIR_NOTE, liquid_note: str = LIQUID_
     # Прогон одной платы: трубки нет, и её отсутствие - не недостаток данных.
     tube_report: list[str] = []
     tube = build_tube_tables(records, boards, air_note, liquid_note, tube_report)
+    if extend_liquid:
+        extended: list[str] = []
+        tube = extend_liquid_rows(tube, extended, span_main=span_main, span_media=span_media)
+        # Достроенный узел погружением уже не пуст: недостатком остаётся только то, что не достроено.
+        for item in extended:
+            (notes if "достроены по размаху" in item else report).append(item)
+        tube_report = [item for item in tube_report if not item.startswith("нет замера погружённой")]
+        still = [node for index, node in enumerate(NODES_X10) if tube["full_main"][index] == 0]
+        if still:
+            tube_report.append("нет замера погружённой трубки в узлах: " + ", ".join(node_text(node) for node in still))
     if not board_only:
         report.extend(tube_report)
-    if extend_liquid:
-        tube = extend_liquid_rows(tube, report, span_main=span_main, span_media=span_media)
 
     has_tube_points = any(any(tube[key]) for key in ("air_main", "full_main", "air_media", "full_media"))
+    if has_tube_points and not board_only and single_model in SINGLE_MODELS and any(
+            channel_fits and not any(len(stages[channel].get(node, {})) >= MIN_REFERENCES_PER_NODE
+                                     for node in channel_fits)
+            for channel, channel_fits in nodes.items()):
+        notes.append(
+            f"таблица платы - по одной своей ёмкости (весь уход отнесён к модели «{single_model}»): "
+            "строки трубки посчитаны после неё, а при подключённой трубке такая поправка - допущение")
     if has_tube_points and not any(stages.values()):
         report.append(
             "строки трубки посчитаны без поправки платы: в журнале нет эталонов. Если таблицы "
@@ -559,6 +580,7 @@ def compute_tables(records, air_note: str = AIR_NOTE, liquid_note: str = LIQUID_
         "ступень_платы_вида": pairs(boards["media"]),
         "ступень_трубки": tube,
         "замечания": report,
+        "сведения": notes,
         "узлы_ступени_платы": nodes["main"],
         "узлы_ступени_платы_вида": nodes["media"],
         "одна_ёмкость": single_model if single_model in SINGLE_MODELS else "",

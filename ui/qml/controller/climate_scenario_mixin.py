@@ -156,6 +156,10 @@ class AppControllerClimateScenarioMixin(AppControllerContract):
             self._climate_scenario_set(climate_scenario.refill_scenario(),
                                        status=f"Новый сценарий «{climate_scenario.REFILL_NAME}». Перед стартом откройте "
                                               "журнал прошлого прогона: точки допишутся к нему.")
+        elif kind == "assembly":
+            self._climate_scenario_set(climate_scenario.assembly_scenario(),
+                                       status=f"Новый сценарий «{climate_scenario.ASSEMBLY_NAME}». Перед стартом у "
+                                              "каждой платы откройте журнал первого этапа: точки допишутся к нему.")
         elif kind == "board_cycle":
             self._climate_scenario_set(climate_scenario.board_cycle_scenario(),
                                        status=f"Новый сценарий «{climate_scenario.BOARD_CYCLE_NAME}». "

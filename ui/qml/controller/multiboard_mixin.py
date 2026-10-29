@@ -105,6 +105,8 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         self._mb_switch_note_s = 0.0
         # Точка вручную («Записать точку» в окне, на сайте, в боте): у всех плат, когда она началась.
         self._mb_manual_capture: float | None = None
+        # Адреса плат, у которых снимается эта точка вручную (погружение - только у показанной).
+        self._mb_manual_boards: list[int] = []
         self._mb_load()
         self._mb_apply_period()
 
@@ -493,13 +495,14 @@ class AppControllerMultiBoardMixin(AppControllerContract):
 
     # ------------------------------------------------------------------ точки шага
 
-    def _mb_run_capture(self, now: float, node: float) -> bool:
-        """Снять точку шага у всех плат. True - все сняты (или время ожидания вышло)."""
+    def _mb_run_capture(self, now: float, node: float, only: list[int] | None = None) -> bool:
+        """Снять точку шага у всех плат (или у плат only). True - все сняты (или время ожидания вышло)."""
         if self._mb_capture_stage_since is None:
             self._mb_capture_stage_since = now
             self._mb_captured = set()
         wanted = None if node is None else chamber_fit.nearest_node(int(round(float(node) * 10)))
-        for board in self._mb_boards:
+        boards = [board for board in self._mb_boards if only is None or board["sa"] in only]
+        for board in boards:
             sa = board["sa"]
             if sa in self._mb_captured:
                 continue
@@ -515,7 +518,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                                         f"не в узле {chamber_fit.node_text(wanted)} (±3 °C), в таблицу узла не "
                                         "попадёт.", "warn")
         self._mb_changed()
-        missing = [board for board in self._mb_boards if board["sa"] not in self._mb_captured]
+        missing = [board for board in boards if board["sa"] not in self._mb_captured]
         if not missing:
             self._mb_capture_stage_since = None
             return True
@@ -540,6 +543,18 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         if self._mb_capture_stage_since is not None:
             return False, "точки плат сейчас снимает прогон"
         now = time.monotonic()
+        label = str(getattr(self, "_chamber_label", "") or "").strip()
+        if label.casefold() == chamber_fit.LIQUID_NOTE and self._mb_active_sa is not None:
+            # Трубку погружают по одной: «жидкость» у всех плат записала бы сухие трубки как погружённые.
+            self._mb_manual_boards = [self._mb_active_sa]
+            name = self._mb_name(self._mb_active_sa)
+            self._mb_manual_capture = now
+            self._mb_captured = set()
+            self._mb_status = f"Записываю точку «{label}» у показанной платы «{name}»..."
+            self._mb_manual_capture_tick(now)
+            return True, (f"точка «{label}» записывается только у показанной платы «{name}»: погружают по одной "
+                          "трубке. Для следующей платы покажите её в ленте плат и запишите точку снова")
+        self._mb_manual_boards = [board["sa"] for board in self._mb_boards]
         self._mb_manual_capture = now
         self._mb_captured = set()
         self._mb_status = f"Записываю точку у {len(self._mb_boards)} плат по их средним..."
@@ -552,13 +567,20 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         if self._mb_manual_capture is None or not self._mb_on():
             self._mb_manual_capture = None
             return
-        if not self._mb_run_capture(now, None):
+        only = list(self._mb_manual_boards) or [board["sa"] for board in self._mb_boards]
+        if not self._mb_run_capture(now, None, only):
             return
         self._mb_manual_capture = None
-        done = [board["name"] for board in self._mb_boards if board["sa"] in self._mb_captured]
-        missing = [board["name"] for board in self._mb_boards if board["sa"] not in self._mb_captured]
+        wanted = [board for board in self._mb_boards if board["sa"] in only]
+        done = [board["name"] for board in wanted if board["sa"] in self._mb_captured]
+        missing = [board["name"] for board in wanted if board["sa"] not in self._mb_captured]
         label = str(getattr(self, "_chamber_label", "") or "").strip()
-        self._mb_status = (f"Точка «{label}» записана у {len(done)} из {len(self._mb_boards)} плат"
+        if len(wanted) == 1:
+            self._mb_status = (f"Точка «{label}» записана у платы «{wanted[0]['name']}»." if done else
+                               f"Точка «{label}» у платы «{wanted[0]['name']}» не записана: нет среднего.")
+            self._mb_changed()
+            return
+        self._mb_status = (f"Точка «{label}» записана у {len(done)} из {len(wanted)} плат"
                            + (f"; без среднего: {', '.join(missing)}" if missing else "") + ".")
         self._mb_changed()
 

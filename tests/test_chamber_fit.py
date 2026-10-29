@@ -228,9 +228,14 @@ def test_liquid_rows_are_built_from_the_reference_span():
 
 
 def test_built_rows_are_named_in_the_report():
-    """Достройка это допущение, и она обязана быть видна оператору, а не молчать."""
+    """Достройка это допущение, и она обязана быть видна оператору, а не молчать.
+
+    Но запись она не запрещает: это сведение, а не недостаток. Узлы, достроенные
+    погружением, больше не числятся «без замера погружённой трубки».
+    """
     result = chamber_fit.compute_tables(_run_without_liquid_above_room(), extend_liquid=True)
-    assert any("достроены по размаху" in item for item in result["замечания"])
+    assert any("достроены по размаху" in item for item in result["сведения"])
+    assert not any("погружённой" in item or "достроены по размаху" in item for item in result["замечания"])
 
 
 def test_span_given_by_hand_wins_over_the_measured_one():

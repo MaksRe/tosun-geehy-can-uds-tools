@@ -438,7 +438,7 @@ class AppControllerClimateControlMixin(AppControllerContract):
         if busy:
             return False, busy, ""
         kind = str(params.get("kind", "board_cycle"))
-        kind = kind if kind in ("board_cycle", "refill") else "empty"
+        kind = kind if kind in ("board_cycle", "refill", "assembly") else "empty"
         ok = self._climate_scenario_new(kind)
         return ok, f"новый сценарий «{self._climate_scenario.get('name', '')}»." if ok else "не создан", kind
 

@@ -339,10 +339,17 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             add("test", not test_on, "Тестовый режим выключен" if not test_on
                 else "Включён тестовый режим: точки будут пробными. Выключите его в «Прогоне в камере»")
 
-        hint = self._climate_mode_hint()
-        add("mode", not hint, "Режим расчёта подходит камере" if not hint else hint)
-
         labels = [label for label in plan["labels"] if label]
+        tube_labels = {chamber_fit.AIR_NOTE, chamber_fit.LIQUID_NOTE}
+        stage2 = bool(labels) and all(label.casefold() in tube_labels for label in labels)
+        hint = self._climate_mode_hint()
+        if stage2 and hint and not getattr(self, "_chamber_board_only", False):
+            # Изделие в сборе в камере для плат: можно, если корпус в неё помещается - только предупреждение.
+            add("mode", False, "Камера рассчитана на испытание платы, а прогон - изделия с трубкой: проверьте, что "
+                               "корпус помещается и кабель выведен", "warn")
+        else:
+            add("mode", not hint, "Режим расчёта подходит камере" if not hint else hint)
+
         if not labels:
             add("labels", False, "Не задано, что подключено к прибору: впишите пометку, например 0/0")
         elif len(labels) > 1:
@@ -352,6 +359,8 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             add("labels", True, f"Пометка «{labels[0]}»: оператор не нужен")
         if getattr(self, "_chamber_board_only", False) and labels and labels != ["0/0"]:
             add("board_label", False, "В режиме «только плата» пометка должна быть «0/0»", "warn")
+        if stage2:
+            self._climate_auto_stage2_checks(add, getattr(self, "_chamber_board_only", False))
 
         auto_write = bool(getattr(self, "_chamber_auto_write", False))
         add("auto_write", auto_write, "Профиль запишется в прибор сам, когда данных хватит во всех узлах"
@@ -390,11 +399,58 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
                     "только у одной платы. Включите режим в «Прогоне в камере» -> «Несколько плат в камере»", "warn")
 
         points = len(getattr(self, "_chamber_points", []) or [])
-        if points:
+        if points and not stage2:
             name = pathlib.Path(str(getattr(self, "_chamber_file_path", "") or "")).name
             add("journal", True, f"В журнале{f' {name}' if name else ''} уже {points} точек: новые допишутся к ним. "
                                  "Для нового профиля начните новый журнал («Прогон в камере» -> «Журналы»)", "warn")
         return checks
+
+    def _climate_auto_stage2_checks(self, add, board_only: bool):
+        """Второй этап (только «воздух»/«жидкость»): у каждой платы открыт журнал первого этапа по всем узлам.
+
+        Строки трубки считаются после поправки платы, а её таблица берётся из точек
+        первого этапа в том же журнале. Без них прогон с трубкой пройдёт впустую.
+        """
+        if board_only:
+            add("stage2", False, "Пометки трубки («воздух», «жидкость») при включённом «Только плата»: строки "
+                                 "трубки в профиль не попадут. Выключите «Только плата» в «Прогоне в камере»")
+            return
+
+        def lacking(points) -> list[int]:
+            covered = {chamber_fit.nearest_node(point["board_temp_x10"]) for point in points or []
+                       if not point.get("rehearsal")
+                       and any(value is not None for value in chamber_fit.parse_references(point["note"]).values())}
+            return [node for node in chamber_fit.NODES_X10 if node not in covered]
+
+        multi = getattr(self, "_mb_on", None)
+        if multi is not None and multi():
+            problems = []
+            for board in self._mb_boards:
+                with self._mb_context(board["sa"], notify=False):
+                    missing = lacking(self._chamber_points)
+                    if len(missing) == len(chamber_fit.NODES_X10):
+                        problems.append(f"«{board['name']}» - журнал первого этапа не открыт")
+                    elif missing:
+                        problems.append(f"«{board['name']}» - в журнале нет узлов "
+                                        + ", ".join(chamber_fit.node_text(node) for node in missing))
+            add("stage2", not problems,
+                f"Второй этап: у всех {len(self._mb_boards)} плат открыт журнал первого этапа по всем узлам - "
+                "строки трубки посчитаются после поправки каждой платы" if not problems else
+                "Второй этап: " + "; ".join(problems) + ". Покажите плату в ленте и откройте её журнал "
+                "первого этапа («Прогон в камере» -> «Журналы»)")
+        else:
+            missing = lacking(getattr(self, "_chamber_points", []))
+            add("stage2", not missing,
+                "Второй этап: открыт журнал первого этапа по всем узлам" if not missing else
+                "Второй этап: откройте журнал первого этапа этой платы («Прогон в камере» -> «Журналы»)"
+                if len(missing) == len(chamber_fit.NODES_X10) else
+                "Второй этап: в журнале первого этапа нет узлов "
+                + ", ".join(chamber_fit.node_text(node) for node in missing))
+        extend = bool(getattr(self, "_chamber_extend_liquid", False))
+        add("stage2_liquid", extend,
+            "Строки «в жидкости» достроятся по размаху пары, снятой с топливом при комнатной температуре" if extend
+            else "«Достроить строки в жидкости по постоянному размаху» выключено: без погружения в каждом узле "
+                 "таблицы трубки не будут полными и профиль сам не запишется", "warn")
 
     def _climate_auto_blockers(self) -> list[str]:
         """Что не даёт начать прогон."""

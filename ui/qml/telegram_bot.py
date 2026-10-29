@@ -979,7 +979,8 @@ class TelegramBot:
         if command == "/new":
             word = words[0].lower() if words else ""
             kind = ("empty" if word.startswith(("пуст", "empty")) else
-                    "refill" if word.startswith(("добор", "refill")) else "board_cycle")
+                    "refill" if word.startswith(("добор", "refill")) else
+                    "assembly" if word.startswith(("издел", "сбор", "трубк", "assembly")) else "board_cycle")
             return "scenario_new", {"kind": kind}, "Создать новый сценарий? Несохранённые изменения текущего пропадут."
         if command == "/cmd":
             if not words:

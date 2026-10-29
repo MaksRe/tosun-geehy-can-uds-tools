@@ -405,6 +405,13 @@ Popup {
                         onClicked: if (dialog.appController) dialog.appController.newClimateScenario("refill")
                     }
                     SmallButton {
+                        Layout.preferredWidth: 150
+                        text: "Изделие в сборе"
+                        toolTipText: "Второй этап: плата в корпусе с трубкой, пометка «воздух» во всех 7 узлах. Перед стартом у каждой платы откройте журнал первого этапа"
+                        enabled: !dialog.locked
+                        onClicked: if (dialog.appController) dialog.appController.newClimateScenario("assembly")
+                    }
+                    SmallButton {
                         Layout.preferredWidth: 110
                         text: "Пустой"
                         enabled: !dialog.locked

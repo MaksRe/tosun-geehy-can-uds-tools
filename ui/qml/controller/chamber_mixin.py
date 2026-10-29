@@ -880,10 +880,12 @@ class AppControllerChamberMixin(AppControllerContract):
             report_status(f"Расчёт не выполнен: {error}", "#dc2626")
             return False
 
-        self._chamber_report = list(result.get("замечания") or [])
+        problems = list(result.get("замечания") or [])
         # Полнота считается по замечаниям самого расчёта: предупреждение о пробных
-        # точках в тестовом режиме ожидаемо и запись на стенде не запрещает.
-        data_complete = not self._chamber_report
+        # точках в тестовом режиме ожидаемо и запись на стенде не запрещает. Сведения
+        # (достроенные строки, таблица платы по одной ёмкости) видны, но запись не держат.
+        data_complete = not problems
+        self._chamber_report = problems + [f"к сведению: {item}" for item in result.get("сведения") or []]
         rehearsal = any(point.get("rehearsal") for point in self._chamber_points)
         if rehearsal:
             self._chamber_report.insert(0, (
@@ -920,7 +922,7 @@ class AppControllerChamberMixin(AppControllerContract):
         if not complete:
             self._chamber_set_tables_state(
                 f"Таблицы пересчитаны и перенесены в профиль (сумма 0x{crc:04X}), "
-                f"но данных хватило не везде: замечаний {len(self._chamber_report)}.", "#d97706")
+                f"но данных хватило не везде: замечаний {len(problems) + int(rehearsal)}.", "#d97706")
             report_status(
                 "Таблицы посчитаны, но данных хватило не везде. Смотрите список ниже.", "#d97706")
         else:
@@ -961,10 +963,14 @@ class AppControllerChamberMixin(AppControllerContract):
     # ------------------------------------------------------------------ показ
 
     def _chamber_fit_mode(self) -> dict:
-        """Параметры расчёта для прогона одной платы, если он включён."""
-        if not getattr(self, "_chamber_board_only", False):
-            return {}
-        return {"single_model": self._chamber_single_model, "board_only": True}
+        """Параметры расчёта: модель ухода по одной ёмкости и прогон одной платы, если он включён.
+
+        Модель ухода передаётся и без «Только плата»: второй этап (трубка в корпусе)
+        дописывается в журнал прогона одной платы, где в узле одна своя ёмкость «0/0».
+        Где эталонов два и больше, расчёт её не применяет.
+        """
+        board_only = bool(getattr(self, "_chamber_board_only", False))
+        return {"single_model": self._chamber_single_model, "board_only": board_only}
 
     def _chamber_set_board_only(self, enabled: bool):
         """Включает прогон одной платы: одна своя ёмкость, без эталонов и трубки."""
@@ -984,8 +990,8 @@ class AppControllerChamberMixin(AppControllerContract):
             return False
         if model != self._chamber_single_model:
             self._chamber_single_model = model
-            if self._chamber_board_only:
-                self._chamber_auto_compute()
+            # Модель нужна и второму этапу: таблица платы из журнала прогона одной платы.
+            self._chamber_auto_compute()
             self.chamberChanged.emit()
         return True
 
@@ -1059,23 +1065,33 @@ class AppControllerChamberMixin(AppControllerContract):
             elif note == chamber_fit.LIQUID_NOTE:
                 bucket["liquid"] += 1
 
+        board_only = bool(getattr(self, "_chamber_board_only", False))
+        # Второй этап после прогона одной платы: в журнале в каждом узле одна своя ёмкость,
+        # таблица платы считается по ней - узлу хватает одной.
+        single_stage = not any(len(bucket["main"]) >= chamber_fit.MIN_REFERENCES_PER_NODE
+                               or len(bucket["media"]) >= chamber_fit.MIN_REFERENCES_PER_NODE
+                               for bucket in counts.values())
+        # Достройка «в жидкости»: погружение достаточно снять в одном узле или задать размах.
+        extend = bool(getattr(self, "_chamber_extend_liquid", False)) and (
+            any(bucket["liquid"] for bucket in counts.values())
+            or getattr(self, "_chamber_span_main", None) is not None)
         rows = []
         for node in chamber_fit.NODES_X10:
             bucket = counts.get(node, {"main": set(), "media": set(), "air": 0, "liquid": 0})
             main_caps = len(bucket["main"])
             media_caps = len(bucket["media"])
-            board_only = bool(getattr(self, "_chamber_board_only", False))
             # Таблица платы нужна обоим контурам: у каждого свои эталоны.
-            need = 1 if board_only else chamber_fit.MIN_REFERENCES_PER_NODE
+            need = 1 if board_only or single_stage else chamber_fit.MIN_REFERENCES_PER_NODE
             board_ok = min(main_caps, media_caps) >= need
-            tube_ok = board_only or (bucket["air"] > 0 and bucket["liquid"] > 0)
+            tube_ok = board_only or (bucket["air"] > 0 and (bucket["liquid"] > 0 or extend))
             rows.append({
                 "node": chamber_fit.node_text(node),
                 # Сколько разных эталонов снято у основного контура и у контура вида топлива.
                 "caps": (("плата снята" if board_ok else "нет точки") if board_only
                          else f"эталоны {main_caps} · {media_caps}"),
                 "capsOk": board_ok,
-                "tube": ("не нужна" if board_only else "есть" if tube_ok else
+                "tube": ("не нужна" if board_only else
+                         ("сухая, погружение по размаху" if bucket["liquid"] == 0 else "есть") if tube_ok else
                          ("нет обеих" if (bucket["air"] == 0 and bucket["liquid"] == 0) else
                           ("нет погружённой" if bucket["liquid"] == 0 else "нет сухой"))),
                 "tubeOk": tube_ok,
