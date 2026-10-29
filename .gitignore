@@ -34,6 +34,11 @@ logs/**
 # Текущий сценарий прогона и состояние идущего прогона - рабочие файлы программы
 **/config/climate_scenario_current.json
 **/config/climate_run_state.json
+# Платы камеры и история смены их адресов - у каждого рабочего места свои
+**/config/chamber_boards.json
+**/config/board_addressing.json
+# cloudflared для туннеля сайта - сторонняя программа, кладётся рядом сама
+tools/cloudflared*.exe
 # Сценарии прогона, сохранённые на рабочем месте (готовый программа создаёт сама)
 **/scenarios/
 
