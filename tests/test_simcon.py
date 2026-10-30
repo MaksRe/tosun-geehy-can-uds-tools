@@ -4,9 +4,14 @@
 protocol», раздел ASCII-2. Строки ниже - примеры прямо из инструкции.
 Тесты закрепляют:
 - ответ на «$xxI» разбирается по порядку полей инструкции;
-- строка «$xxE» собирается по образцу инструкции и не трогает влажность,
-  вентилятор и цифровые каналы, которые программа менять не должна;
-- пуск и остановка - это только канал 1 «Старт»;
+- строка «$xxE» собирается по образцу инструкции и не трогает уставку
+  влажности, вентилятор и остальные цифровые каналы;
+- канал 2 «Влажность» программа выключает: испытание только по температуре;
+- пуск и остановка - канал 1 «Старт»;
+- уставка и пуск сверяются чтением: в режиме INTERN камера их не меняет, и
+  программа говорит об этом словами;
+- если камера не приняла отрицательное число в виде «-040.0», драйвер сам
+  пробует «-40.0» и запоминает принятый вид;
 - между строками выдерживается пауза 5 с, которую требует инструкция;
 - молчание камеры называется словами, с подсказкой что проверить;
 - контрольная сумма ASCII-1 совпадает с примером инструкции.
@@ -83,6 +88,10 @@ class _FakeSimcon:
         self.sent = []
         self.answer = b""
         self.silent = False
+        # Режим INTERN: строки «E» принимаются, но ничего не меняют.
+        self.intern = False
+        # Камера понимает отрицательные числа только как «-40.0».
+        self.plain_negative_only = False
 
     def reset_input_buffer(self):
         self.answer = b""
@@ -99,6 +108,9 @@ class _FakeSimcon:
             self.answer = (" ".join(simcon_number(n) for n in numbers) + " " + s.digital + "\r").encode("ascii")
         elif line[3] == "E":
             fields = line[4:].split()
+            self.answer = b"0\r"
+            if self.intern or (self.plain_negative_only and fields[0].startswith("-0")):
+                return
             self.state.temp_setpoint = float(fields[0])
             self.state.humidity_setpoint = float(fields[1])
             self.state.fan_setpoint = float(fields[2])
@@ -131,24 +143,51 @@ def test_driver_reads_and_sets_only_the_temperature():
 
     reading = driver.read()
     assert reading.actual_c == 20.5 and reading.setpoint_c == 23.0 and reading.running is True
+    assert reading.details["humidity_on"] is True
     assert port.sent[0] == "$00I\r"
 
     driver.set_setpoint(-40.0)
-    assert port.sent[-1] == "$00E -040.0 0050.0 0080.0 0000.0 0000.0 0000.0 0000.0 01101010101010101010101010101010\r"
-    # Влажность, вентилятор и каналы остались как были.
-    assert port.state.humidity_setpoint == 50.0
-    assert port.state.digital == "01101010101010101010101010101010"
+    # Канал 2 «Влажность» выключен, остальное как было; после строки - чтение для сверки.
+    assert port.sent[-2] == "$00E -040.0 0050.0 0080.0 0000.0 0000.0 0000.0 0000.0 01001010101010101010101010101010\r"
+    assert port.sent[-1] == "$00I\r"
+    assert port.state.humidity_setpoint == 50.0 and port.state.fan_setpoint == 80.0
+    assert port.state.digital == "01001010101010101010101010101010"
 
 
-def test_start_and_stop_touch_only_channel_one():
+def test_start_and_stop_touch_channel_one_and_keep_humidity_off():
     port = _FakeSimcon()
     driver = _driver(port)
     driver.read()
     driver.set_running(False)
-    assert port.state.digital == "00101010101010101010101010101010"
-    driver.read()
+    assert port.state.digital == "00001010101010101010101010101010"
     driver.set_running(True)
-    assert port.state.digital == "01101010101010101010101010101010"
+    assert port.state.digital == "01001010101010101010101010101010"
+
+
+def test_setpoint_not_taken_in_intern_mode_is_named():
+    """Режим INTERN: камера строку принимает, но уставку не меняет."""
+    port = _FakeSimcon()
+    port.intern = True
+    driver = _driver(port)
+    driver.read()
+    with pytest.raises(ChamberError, match="EXTERN"):
+        driver.set_setpoint(30.0)
+    with pytest.raises(ChamberError, match="не остановилась"):
+        driver.set_running(False)
+
+
+def test_negative_number_falls_back_to_plain_form():
+    """Камера, которая понимает только «-40.0»: драйвер переходит на этот вид и помнит его."""
+    port = _FakeSimcon()
+    port.plain_negative_only = True
+    driver = _driver(port)
+    driver.read()
+    driver.set_setpoint(-40.0)
+    assert port.state.temp_setpoint == -40.0 and driver.negative == "plain"
+    assert port.sent[-2].startswith("$00E -40.0 ")
+    driver.set_setpoint(-20.0)
+    assert port.sent[-2].startswith("$00E -20.0 ") and port.state.temp_setpoint == -20.0
+    assert simcon_number(-40.0, "plain") == "-40.0" and simcon_number(25.0, "plain") == "0025.0"
 
 
 def test_five_seconds_between_strings():
@@ -160,7 +199,8 @@ def test_five_seconds_between_strings():
     driver.read()
     clock[0] += 1.0
     driver.set_setpoint(-20.0)
-    assert pauses == [pytest.approx(4.0)]
+    # Уставка через 4 с после чтения, сверка - ещё через 5 с.
+    assert pauses == [pytest.approx(4.0), pytest.approx(5.0)]
 
 
 def test_silent_chamber_is_named():

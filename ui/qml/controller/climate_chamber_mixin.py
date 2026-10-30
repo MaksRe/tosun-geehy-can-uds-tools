@@ -52,6 +52,7 @@ from ui.qml.climate_chamber import (
     ChamberError,
     ChamberLink,
     ModbusMap,
+    SimconAscii2Chamber,
     build_espec_command,
     describe_espec_answer,
     espec_is_setting,
@@ -74,6 +75,8 @@ DRIVERS = (DRIVER_NONE, DRIVER_ESPEC, DRIVER_SIMCON, DRIVER_SIMULATOR, DRIVER_MO
 # board_only - какой режим раздела «Прогон в камере» подходит этой камере.
 # Паспортный диапазон температур камеры (range_c, °C): за него программа не задаст уставку.
 # ESPEC серии MC-811 (MC-811, MC-812R): -85...+180 °C по данным производителя.
+# Weiss WK1-600/70: «/70» в типе - нижняя граница -70 °C, верх серии WK1 - +180 °C
+# (сверить с табличкой камеры на месте).
 # У камер без range_c пределы задаёт только оператор.
 CHAMBERS = {
     DRIVER_ESPEC: {
@@ -90,6 +93,7 @@ CHAMBERS = {
         "link": "RS-232",
         "accent": "#1d4ed8",
         "board_only": False,
+        "range_c": (-70.0, 180.0),
     },
     DRIVER_SIMULATOR: {
         "name": "Имитатор камеры",
@@ -587,7 +591,17 @@ class AppControllerClimateChamberMixin(AppControllerContract):
 
     def _climate_fresh(self, now: float | None = None) -> bool:
         now = time.monotonic() if now is None else now
-        return self._climate_reading is not None and now - self._climate_last_ok_s <= self.CLIMATE_STALE_S
+        return self._climate_reading is not None and now - self._climate_last_ok_s <= self._climate_stale_s()
+
+    def _climate_stale_s(self) -> float:
+        """Сколько показание камеры считается текущим, с.
+
+        Weiss не принимает строки чаще раза в 5 с, а после уставки драйвер ещё и
+        перечитывает её: между показаниями бывает 10-15 с, при одном молчании - больше.
+        """
+        if self._climate_settings.get("driver") == DRIVER_SIMCON:
+            return max(self.CLIMATE_STALE_S, 6 * SimconAscii2Chamber.MIN_INTERVAL_S)
+        return self.CLIMATE_STALE_S
 
     def _climate_watch_alarm(self):
         alarm = getattr(self._climate_reading, "alarm", None)
@@ -876,7 +890,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             changed = True
             if not self._climate_fresh(now) and self._climate_last_ok_s > 0.0 and not self._climate_lost_reported:
                 self._climate_lost_reported = True
-                self._climate_event(f"нет связи с камерой дольше {int(self.CLIMATE_STALE_S)} с.", "bad")
+                self._climate_event(f"нет связи с камерой дольше {int(self._climate_stale_s())} с.", "bad")
             self._climate_note_history(now)
             self._climate_bridge(now)
         self._climate_note_board(now)
@@ -907,17 +921,32 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         if now - self._climate_last_board_s < self.CLIMATE_BOARD_STEP_S:
             return
         self._climate_last_board_s = now
+        key = self._climate_steer_key()
         if self._climate_multi():
             # Несколько плат: камера одна - устаивание и доводка по средней температуре плат.
-            value = self._mb_board_temp_x10(now)
+            value = self._mb_board_temp_x10(now, key)
             if value is not None:
                 self._climate_board.append((now, round(float(value) / 10.0, 3)))
             return
-        if not self._chamber_live_fresh("board_temp", now):
+        if not self._chamber_live_fresh(key, now):
             return
-        stats = self._chamber_live_stats("board_temp", now)
-        value = stats["mean"] if stats is not None else int(self._chamber_live_last["board_temp"])
+        stats = self._chamber_live_stats(key, now)
+        value = stats["mean"] if stats is not None else int(self._chamber_live_last[key])
         self._climate_board.append((now, round(float(value) / 10.0, 3)))
+
+    def _climate_steer_key(self) -> str:
+        """По какому датчику прибора камера ведёт изделие к узлу.
+
+        Обычно - по датчику платы: по нему считается таблица платы. Во втором этапе
+        (пометки «воздух» / «жидкость») строки трубки раскладываются по узлам по
+        датчику топлива, и прибор применяет их по нему же (0x003A = 0). Плата в
+        корпусе с компаундом греется сильнее трубки, и по датчику платы точки трубки
+        ушли бы дальше ±3 °C от узла и в таблицу не попали.
+        """
+        if getattr(self, "_chamber_board_only", False):
+            return "board_temp"
+        label = str(getattr(self, "_chamber_label", "") or "").strip().casefold()
+        return "fuel_temp" if label in (chamber_fit.AIR_NOTE, chamber_fit.LIQUID_NOTE) else "board_temp"
 
     def _climate_multi(self) -> bool:
         """Идёт ли прогон нескольких плат (multiboard_mixin)."""

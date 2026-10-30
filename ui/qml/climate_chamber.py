@@ -680,20 +680,33 @@ def parse_simcon_state(line: str) -> SimconState:
     )
 
 
-def simcon_number(value: float) -> str:
-    """Число в виде протокола ASCII-2: шесть знаков с одной цифрой после точки, «0023.0», «-040.0»."""
-    return f"{float(value):06.1f}"
+SIMCON_NEGATIVE_PADDED = "padded"
+SIMCON_NEGATIVE_PLAIN = "plain"
 
 
-def build_simcon_setpoints(address: int, temp: float, humidity: float, fan: float, digital: str) -> str:
+def simcon_number(value: float, negative: str = SIMCON_NEGATIVE_PADDED) -> str:
+    """Число в виде протокола ASCII-2: шесть знаков с одной цифрой после точки, «0023.0», «-040.0».
+
+    Как камера ждёт отрицательные числа, из инструкции не видно. negative="plain"
+    пишет их без нулей впереди: «-40.0». Драйвер сам переходит на этот вид, если
+    камера не приняла «-040.0».
+    """
+    number = float(value)
+    if number < 0 and negative == SIMCON_NEGATIVE_PLAIN:
+        return f"{number:.1f}"
+    return f"{number:06.1f}"
+
+
+def build_simcon_setpoints(address: int, temp: float, humidity: float, fan: float, digital: str,
+                           negative: str = SIMCON_NEGATIVE_PADDED) -> str:
     """Строка «$xxE»: уставки температуры, влажности, вентилятора и все цифровые каналы сразу.
 
     Команда задаёт всё одной строкой, поэтому влажность, вентилятор и каналы
     берутся из последнего ответа камеры: менять их программа не должна.
     """
     unused = " ".join(simcon_number(0.0) for _ in range(4))
-    return (f"${int(address):02d}E {simcon_number(temp)} {simcon_number(humidity)} {simcon_number(fan)} "
-            f"{unused} {digital}\r")
+    return (f"${int(address):02d}E {simcon_number(temp, negative)} {simcon_number(humidity)} "
+            f"{simcon_number(fan)} {unused} {digital}\r")
 
 
 class SimconAscii2Chamber(ChamberDriver):
@@ -705,6 +718,11 @@ class SimconAscii2Chamber(ChamberDriver):
     - строки нельзя слать чаще одной в 5 секунд: иначе страдает регулирование;
     - чтобы компьютер мог задавать уставку, на пульте включается режим EXTERN.
     Пуск и остановка - цифровой канал 1 «Старт».
+
+    Канал 2 «Влажность» программа держит выключенным: изделие с платой и
+    разъёмами испытывается по температуре, увлажнение дало бы конденсат и воду
+    на корпусе. Каждая уставка и пуск сверяются повторным чтением: в режиме
+    INTERN камера строку примет, но уставку не сменит.
     """
 
     title = "SIMCON/32 (Weiss, RS-232)"
@@ -712,6 +730,11 @@ class SimconAscii2Chamber(ChamberDriver):
     can_run = True
     # Пауза между строками, с. Её требует инструкция, сокращать нельзя.
     MIN_INTERVAL_S = 5.0
+    # Цифровые каналы: 1 - «Старт», 2 - «Влажность».
+    START_CHANNEL = 1
+    HUMIDITY_CHANNEL = 2
+    # Уставка в ответе камеры считается принятой с таким допуском, °C.
+    SETPOINT_TOLERANCE_C = 0.15
 
     def __init__(self, port: str, baudrate: int, address: int, timeout_s: float = 3.0, serial_factory=None,
                  sleep=time.sleep, clock=time.monotonic):
@@ -725,6 +748,8 @@ class SimconAscii2Chamber(ChamberDriver):
         self._clock = clock
         self._last_send = -1e9
         self.last_state: SimconState | None = None
+        # Вид отрицательных чисел, который камера приняла; меняется сам, если «-040.0» не принят.
+        self.negative = SIMCON_NEGATIVE_PADDED
         self.title = f"Weiss на {self.port}"
 
     def _connect(self):
@@ -781,34 +806,68 @@ class SimconAscii2Chamber(ChamberDriver):
         return answer.decode("ascii", errors="replace").strip()
 
     def read(self) -> ChamberReading:
-        state = parse_simcon_state(self._exchange(f"${self.address:02d}I\r"))
-        self.last_state = state
+        state = self.read_state()
+        humidity = len(state.digital) > self.HUMIDITY_CHANNEL and state.digital[self.HUMIDITY_CHANNEL] == "1"
         return ChamberReading(actual_c=state.temp_actual, setpoint_c=state.temp_setpoint,
-                              running=state.running, alarm=None)
+                              running=state.running, alarm=None,
+                              details={"humidity_on": humidity, "humidity_c": state.humidity_actual,
+                                       "negative": self.negative})
 
     def _current(self) -> SimconState:
         return self.last_state if self.last_state is not None else parse_simcon_state(
             self._exchange(f"${self.address:02d}I\r"))
 
-    def _send_setpoints(self, temp: float, digital: str):
+    def _channels(self, digital: str, start: bool | None = None) -> str:
+        """Цифровые каналы для строки «E»: влажность выключена, «Старт» - как задано или как был."""
+        channels = list(digital)
+        if len(channels) > self.HUMIDITY_CHANNEL and channels[self.HUMIDITY_CHANNEL] != "0":
+            channels[self.HUMIDITY_CHANNEL] = "0"
+            self._trace_event("HUMIDITY", "канал «Влажность» был включён - выключаю: испытание только по температуре")
+        if start is not None and len(channels) > self.START_CHANNEL:
+            channels[self.START_CHANNEL] = "1" if start else "0"
+        return "".join(channels)
+
+    def _send(self, temp: float, digital: str) -> SimconState:
+        """Строка «E» и сразу чтение: что камера на самом деле поставила."""
         state = self._current()
-        if not digital:
-            raise ChamberError("камера не отдала цифровые каналы, задать уставку безопасно нельзя")
         self._exchange(build_simcon_setpoints(self.address, temp, state.humidity_setpoint,
-                                              state.fan_setpoint, digital))
+                                              state.fan_setpoint, digital, self.negative))
+        return self.read_state()
+
+    def read_state(self) -> SimconState:
+        state = parse_simcon_state(self._exchange(f"${self.address:02d}I\r"))
+        self.last_state = state
+        return state
 
     def set_setpoint(self, value_c: float):
         state = self._current()
-        self._send_setpoints(value_c, state.digital)
+        if len(state.digital) < 2:
+            raise ChamberError("камера не отдала цифровые каналы, задать уставку безопасно нельзя")
+        digital = self._channels(state.digital)
+        after = self._send(value_c, digital)
+        if abs(after.temp_setpoint - float(value_c)) <= self.SETPOINT_TOLERANCE_C:
+            return
+        if float(value_c) < 0:
+            # Вид отрицательного числа из инструкции не ясен: пробуем второй и запоминаем принятый.
+            other = SIMCON_NEGATIVE_PLAIN if self.negative == SIMCON_NEGATIVE_PADDED else SIMCON_NEGATIVE_PADDED
+            tried, self.negative = self.negative, other
+            after = self._send(value_c, digital)
+            if abs(after.temp_setpoint - float(value_c)) <= self.SETPOINT_TOLERANCE_C:
+                self._trace_event("FORMAT", f"камера приняла отрицательную уставку в виде "
+                                            f"«{simcon_number(value_c, other)}», а не «{simcon_number(value_c, tried)}»")
+                return
+            self.negative = tried
+        raise ChamberError(f"камера не приняла уставку {float(value_c):+.1f} °C (на пульте осталось "
+                           f"{after.temp_setpoint:+.1f}): проверьте, что на пульте режим EXTERN")
 
     def set_running(self, on: bool):
         state = self._current()
-        digital = state.digital
-        if len(digital) < 2:
+        if len(state.digital) < 2:
             raise ChamberError("камера не отдала цифровые каналы, пустить её нельзя")
-        digital = digital[0] + ("1" if on else "0") + digital[2:]
-        self._exchange(build_simcon_setpoints(self.address, state.temp_setpoint, state.humidity_setpoint,
-                                              state.fan_setpoint, digital))
+        after = self._send(state.temp_setpoint, self._channels(state.digital, start=bool(on)))
+        if after.running != bool(on):
+            raise ChamberError(("камера не пустилась" if on else "камера не остановилась")
+                               + ": проверьте, что на пульте режим EXTERN и нет аварии")
 
     def raw(self, text: str) -> str:
         """Строка оператора как есть, для проверки на месте: «$01I» и т. п."""

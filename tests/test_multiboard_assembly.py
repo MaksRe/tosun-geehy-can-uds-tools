@@ -63,8 +63,10 @@ def _raw(points, board_c: float, index: int) -> float:
 class _Rig:
     """Пять плат в корпусах: показания каждой - её первый этап плюс трубка."""
 
-    def __init__(self, tmp_path: Path):
+    def __init__(self, tmp_path: Path, board_heat_c: float = 0.0):
         self.stub = _MbStub(tmp_path)
+        # На сколько плата в корпусе с компаундом теплее трубки (датчика топлива).
+        self.board_heat_c = float(board_heat_c)
         self.stage1 = {}
         self.files = {}
         self.dipped: int | None = None
@@ -89,8 +91,8 @@ class _Rig:
         if self.room_c is not None:
             product = self.room_c
         for sa, _name, offset in BOARDS:
-            board_c = product + offset
-            fuel_c = product
+            board_c = product + offset + self.board_heat_c
+            fuel_c = product + offset / 2.0
             main = _raw(self.stage1[sa], board_c, 1) + TUBE_MAIN + TUBE_DRIFT * (fuel_c - 25.0)
             media = _raw(self.stage1[sa], board_c, 2) + TUBE_MEDIA
             if sa == self.dipped:
@@ -159,8 +161,11 @@ def test_stage2_needs_stage1_journal_of_every_board(tmp_path: Path):
     assert not rig.checks()["stage2"]["ok"], "трубка при «Только плата» в профиль не попадёт"
 
 
-def test_stage2_run_of_five_boards_gives_each_its_own_tube_rows(tmp_path: Path):
-    rig = _Rig(tmp_path)
+@pytest.mark.parametrize("board_heat_c", [0.0, 12.0])
+def test_stage2_run_of_five_boards_gives_each_its_own_tube_rows(tmp_path: Path, board_heat_c: float):
+    """board_heat_c=12: плата в компаунде на 12 °C теплее трубки - камера ведёт по датчику трубки,
+    и точки трубки ложатся во все 7 узлов, а таблица платы применяется при её настоящей температуре."""
+    rig = _Rig(tmp_path, board_heat_c)
     stub = rig.stub
     rig.open_stage1()
     _assembly(rig)

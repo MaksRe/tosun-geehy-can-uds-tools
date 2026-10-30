@@ -1028,7 +1028,8 @@ class AppControllerChamberMixin(AppControllerContract):
         first = max(0, len(self._chamber_points) - self.CHAMBER_VISIBLE_ROWS)
         for index in range(len(self._chamber_points) - 1, first - 1, -1):
             point = self._chamber_points[index]
-            node = chamber_fit.nearest_node(point["board_temp_x10"])
+            tube = str(point["note"]).strip().casefold() in (chamber_fit.AIR_NOTE, chamber_fit.LIQUID_NOTE)
+            node = chamber_fit.nearest_node(point["fuel_temp_x10"] if tube else point["board_temp_x10"])
             rows.append({
                 # Номер точки в журнале (с нуля) и её время: по ним точку убирают из окна, с сайта и из бота.
                 "index": index,
@@ -1050,12 +1051,14 @@ class AppControllerChamberMixin(AppControllerContract):
         """Показывает, чего не хватает: по каждому узлу сетки что уже снято."""
         counts: dict[int, dict[str, int]] = {}
         for point in self._chamber_points:
-            node = chamber_fit.nearest_node(point["board_temp_x10"])
+            note = str(point["note"]).strip().casefold()
+            # Трубка раскладывается по узлам по датчику топлива, ступень платы - по датчику платы (как в расчёте).
+            tube = note in (chamber_fit.AIR_NOTE, chamber_fit.LIQUID_NOTE)
+            node = chamber_fit.nearest_node(point["fuel_temp_x10"] if tube else point["board_temp_x10"])
             if node is None:
                 continue
             bucket = counts.setdefault(node, {"main": set(), "media": set(), "air": 0, "liquid": 0})
             references = chamber_fit.parse_references(point["note"])
-            note = str(point["note"]).strip().casefold()
             if references["main"] is not None or references["media"] is not None:
                 for channel in ("main", "media"):
                     if references[channel] is not None:

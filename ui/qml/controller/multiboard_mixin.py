@@ -434,15 +434,18 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             self._chamber_live_pending = pending
         return True
 
-    def _mb_board_temp_x10(self, now: float) -> float | None:
-        """Средняя температура плат (0,1 °C) - по ней прогон судит об устаивании и доводке."""
+    def _mb_board_temp_x10(self, now: float, key: str = "board_temp") -> float | None:
+        """Средняя температура плат (0,1 °C) - по ней прогон судит об устаивании и доводке.
+
+        key - какой датчик: платы или, во втором этапе, топлива (трубки).
+        """
         values = []
         for board in self._mb_boards:
             with self._mb_context(board["sa"], notify=False):
-                if not self._chamber_live_fresh("board_temp", now):
+                if not self._chamber_live_fresh(key, now):
                     continue
-                stats = self._chamber_live_stats("board_temp", now)
-                values.append(stats["mean"] if stats is not None else float(self._chamber_live_last["board_temp"]))
+                stats = self._chamber_live_stats(key, now)
+                values.append(stats["mean"] if stats is not None else float(self._chamber_live_last[key]))
         return sum(values) / len(values) if values else None
 
     def _mb_silent_boards(self, now: float) -> list[str]:
@@ -512,9 +515,13 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                     continue
                 self._chamber_append_point(point, detail)
                 self._mb_captured.add(sa)
-                got = chamber_fit.nearest_node(point["board_temp_x10"])
+                # Узел точки - по тому датчику, по которому её разложит расчёт (трубка - по датчику топлива).
+                steer = getattr(self, "_climate_steer_key", None)
+                field = "fuel_temp_x10" if steer is not None and steer() == "fuel_temp" else "board_temp_x10"
+                got = chamber_fit.nearest_node(point[field])
                 if wanted is not None and got != wanted:
-                    self._climate_event(f"плата «{board['name']}»: точка при {point['board_temp_x10'] / 10:+.1f} °C - "
+                    what = "трубки" if field == "fuel_temp_x10" else "платы"
+                    self._climate_event(f"плата «{board['name']}»: точка при {point[field] / 10:+.1f} °C ({what}) - "
                                         f"не в узле {chamber_fit.node_text(wanted)} (±3 °C), в таблицу узла не "
                                         "попадёт.", "warn")
         self._mb_changed()
