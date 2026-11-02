@@ -59,6 +59,7 @@ from ui.qml.climate_chamber import (
     espec_mode_text,
     list_serial_ports,
     make_driver,
+    parse_simcon_channels,
     reading_text,
     resolve_port,
 )
@@ -302,6 +303,9 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             "weiss_baud": 9600,
             # Адрес камеры Weiss из меню пульта «Address», по умолчанию там 0.
             "simcon_address": 0,
+            # Каналы пульта S!MCON/32, включённые вместе с «Старт» на время прогона, например «3, 5»
+            # (защита от конденсата, осушитель). Пусто - программа их не трогает.
+            "simcon_extra_channels": "",
             "sim_speed": 1.0,
             "sim_bridge": True,
             "map": ModbusMap().to_dict(),
@@ -438,6 +442,13 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 value = str(value).upper()
                 if value not in ("CRLF", "CR", "LF"):
                     return False
+            if key == "simcon_extra_channels":
+                try:
+                    value = ", ".join(str(number) for number in parse_simcon_channels(value))
+                except ValueError as error:
+                    self._climate_command_status = f"Каналы не изменены: {error}."
+                    self.climateChanged.emit()
+                    return False
             if key == "espec_address" and not (1 <= int(value) <= 16):
                 self._climate_command_status = "Адрес камеры ESPEC - от 1 до 16, как в меню её пульта."
                 self.climateChanged.emit()
@@ -466,7 +477,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             reconnect = key in ("driver", "poll_s", "unit", "tcp_host", "tcp_port", "rtu_port", "rtu_baud",
                                 "rtu_parity", "rtu_stopbits", "sim_speed", "simcon_address",
                                 "espec_port", "espec_baud", "espec_address", "espec_delimiter",
-                                "weiss_port", "weiss_baud")
+                                "weiss_port", "weiss_baud", "simcon_extra_channels")
         self._climate_save_settings()
         if reconnect and self._climate_link is not None:
             self._climate_connect()

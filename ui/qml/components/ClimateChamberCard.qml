@@ -1127,6 +1127,18 @@ Card {
                         SettingField { key: "weiss_baud"; Layout.preferredWidth: 80 }
                         Caption { text: "Адрес" }
                         SettingField { key: "simcon_address"; Layout.preferredWidth: 50 }
+                        Caption { text: "Каналы при пуске" }
+                        SettingField {
+                            key: "simcon_extra_channels"
+                            Layout.preferredWidth: 90
+                            placeholderText: "3, 5"
+                            hoverEnabled: true
+                            ToolTip.visible: hovered
+                            ToolTip.delay: 400
+                            ToolTip.text: "Каналы пульта, которые программа включает вместе с «Старт» и выключает при остановке. "
+                                          + "VT 7100: 3 - защита от конденсата, 5 - осушитель сжатого воздуха. Пусто - не трогает. "
+                                          + "Можно 3-12: 1 и 2 программа ведёт сама, 13-16 - сервис и сброс ошибки"
+                        }
                         Item { Layout.fillWidth: true }
                     }
 
@@ -1134,7 +1146,8 @@ Card {
                         Layout.fillWidth: true
                         visible: root.climate.driver === "simcon_ascii2"
                         text: "Нуль-модемный кабель RS-232: 2↔3 крест, 5 - земля. На пульте: протокол ASCII-2, те же скорость и адрес, режим EXTERN. "
-                              + "Камера принимает не больше одной строки в 5 секунд, показания обновляются раз в 5 с."
+                              + "Камера принимает не больше одной строки в 5 секунд, показания обновляются раз в 5 с. "
+                              + "В режиме EXTERN каналы на пульте не переключаются: защиту от конденсата (3) и осушитель (5) включает программа, если они заданы в поле «Каналы при пуске»."
                         color: root.textSoft
                         font.pixelSize: 11
                         font.family: "Bahnschrift"

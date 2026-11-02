@@ -686,6 +686,40 @@ def parse_simcon_state(line: str) -> SimconState:
     )
 
 
+# Каналы, которые программа может держать включёнными на время прогона (защита от конденсата,
+# осушитель и т. п.). Не входят: 1 «Старт» и 2 «Влажность» - ими программа управляет сама;
+# 13-15 - подстройка датчика температуры (сервис), 16 - сброс ошибки: их трогать нельзя.
+SIMCON_EXTRA_CHANNELS = tuple(range(3, 13))
+# Названия каналов на пульте большой камеры Vötsch VT 7100 (меню «Digitalkanäle»).
+SIMCON_CHANNEL_NAMES = {
+    3: "Betauungsschutz - защита от конденсата",
+    4: "Kapazitiver Fühler - ёмкостный датчик влажности",
+    5: "Drucklufttrockner - осушитель сжатого воздуха",
+    6: "Regenerierung Trockner - регенерация осушителя",
+    7: "Schadgas - вредный газ",
+    8: "CO2 - доохлаждение CO2",
+    9: "Kunde A1", 10: "Kunde A2", 11: "Kunde A3", 12: "Kunde A4",
+}
+
+
+def parse_simcon_channels(text) -> list[int]:
+    """Номера дополнительных каналов из строки «3, 5». Неверный номер - ValueError с объяснением."""
+    numbers = []
+    for part in re.split(r"[;,\s]+", str(text or "").strip()):
+        if not part:
+            continue
+        if not part.isdigit():
+            raise ValueError(f"«{part}» - не номер канала")
+        number = int(part)
+        if number not in SIMCON_EXTRA_CHANNELS:
+            raise ValueError(f"канал {number} программа не включает: можно {SIMCON_EXTRA_CHANNELS[0]}-"
+                             f"{SIMCON_EXTRA_CHANNELS[-1]} (1 «Старт» и 2 «Влажность» она ведёт сама, "
+                             "13-16 - сервис и сброс ошибки)")
+        if number not in numbers:
+            numbers.append(number)
+    return sorted(numbers)
+
+
 SIMCON_NEGATIVE_PADDED = "padded"
 SIMCON_NEGATIVE_PLAIN = "plain"
 
@@ -749,8 +783,11 @@ class SimconAscii2Chamber(ChamberDriver):
     SETPOINT_TOLERANCE_C = 0.15
 
     def __init__(self, port: str, baudrate: int, address: int, timeout_s: float = 3.0, serial_factory=None,
-                 sleep=time.sleep, clock=time.monotonic):
+                 sleep=time.sleep, clock=time.monotonic, extra_channels=()):
         self.port = str(port)
+        # Каналы, включённые, пока камера работает, и выключенные при остановке (например 3 и 5).
+        self.extra_channels = tuple(int(number) for number in extra_channels
+                                    if int(number) in SIMCON_EXTRA_CHANNELS)
         self.baudrate = int(baudrate)
         self.address = int(address)
         self.timeout_s = float(timeout_s)
@@ -837,6 +874,19 @@ class SimconAscii2Chamber(ChamberDriver):
             self._trace_event("HUMIDITY", "канал «Влажность» был включён - выключаю: испытание только по температуре")
         if start is not None and len(channels) > self.START_CHANNEL:
             channels[self.START_CHANNEL] = "1" if start else "0"
+        # Дополнительные каналы идут вместе с «Старт»: включены, пока камера работает.
+        running = len(channels) > self.START_CHANNEL and channels[self.START_CHANNEL] == "1"
+        changed = []
+        for number in self.extra_channels:
+            if number >= len(channels):
+                continue
+            wanted = "1" if running else "0"
+            if channels[number] != wanted:
+                channels[number] = wanted
+                changed.append(number)
+        if changed:
+            self._trace_event("CHANNELS", f"каналы {', '.join(map(str, changed))} "
+                                          f"{'включаю' if running else 'выключаю'} вместе с «Старт»")
         return "".join(channels)
 
     def _send(self, temp: float, digital: str) -> SimconState:
@@ -880,6 +930,13 @@ class SimconAscii2Chamber(ChamberDriver):
         if after.running != bool(on):
             raise ChamberError(("камера не пустилась" if on else "камера не остановилась")
                                + ": проверьте, что на пульте режим EXTERN и нет аварии")
+        wanted = "1" if on else "0"
+        stuck = [number for number in self.extra_channels
+                 if number < len(after.digital) and after.digital[number] != wanted]
+        if stuck:
+            # Канал опции, которой у камеры нет, не включится. Прогону это не мешает - только запись.
+            self._trace_event("CHANNELS", f"камера не {'включила' if on else 'выключила'} каналы "
+                                          f"{', '.join(map(str, stuck))}: есть ли у неё эта опция?", "WARN")
 
     def raw(self, text: str) -> str:
         """Строка оператора как есть, для проверки на месте: «$01I» и т. п."""
@@ -1756,8 +1813,12 @@ def make_driver(settings: dict) -> ChamberDriver | None:
         return EspecChamber(settings.get("espec_port", ""), int(settings.get("espec_baud", 9600)),
                             int(settings.get("espec_address", 1)), str(settings.get("espec_delimiter", "CRLF")))
     if kind == DRIVER_SIMCON:
+        try:
+            extra = parse_simcon_channels(settings.get("simcon_extra_channels", ""))
+        except ValueError:
+            extra = []
         return SimconAscii2Chamber(settings.get("weiss_port", ""), int(settings.get("weiss_baud", 9600)),
-                                   int(settings.get("simcon_address", 0)))
+                                   int(settings.get("simcon_address", 0)), extra_channels=extra)
     if kind == DRIVER_MODBUS_RTU:
         client = ModbusRtuClient(settings.get("rtu_port", ""), int(settings.get("rtu_baud", 9600)),
                                  settings.get("rtu_parity", "N"), int(settings.get("rtu_stopbits", 1)), unit)

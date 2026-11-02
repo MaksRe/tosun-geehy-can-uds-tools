@@ -38,7 +38,8 @@ from collections import deque
 
 import chamber_fit
 from ui.qml import climate_scenario
-from ui.qml.climate_chamber import DRIVER_ESPEC, DRIVER_SIMCON, DRIVER_SIMULATOR
+from ui.qml.climate_chamber import (DRIVER_ESPEC, DRIVER_SIMCON, DRIVER_SIMULATOR, SIMCON_CHANNEL_NAMES,
+                                    parse_simcon_channels)
 
 from .contract import AppControllerContract
 from .stability import rate_and_spread
@@ -318,6 +319,14 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
                 else f"Пределы аварии камеры {_c(alarm_low)} ... {_c(alarm_high)} не охватывают узлы: камера "
                      f"откажет в уставке. Поправьте их в «Ручном управлении ESPEC»")
 
+        if settings["driver"] == DRIVER_SIMCON:
+            try:
+                extra = parse_simcon_channels(settings.get("simcon_extra_channels", ""))
+            except ValueError:
+                extra = []
+            if extra:
+                names = "; ".join(f"{number} ({SIMCON_CHANNEL_NAMES.get(number, 'канал')})" for number in extra)
+                add("channels", True, f"При пуске камеры включу каналы {names}, при остановке выключу", "warn")
         if settings["driver"] == DRIVER_SIMCON and details.get("humidity_on"):
             add("humidity", True, "У камеры включён канал «Влажность»: при пуске программа его выключит - "
                                   "испытание только по температуре", "warn")

@@ -32,6 +32,7 @@ from ui.qml.climate_chamber import (
     SimconAscii2Chamber,
     build_simcon_setpoints,
     make_driver,
+    parse_simcon_channels,
     parse_simcon_state,
     simcon_ascii1_checksum,
     simcon_number,
@@ -181,6 +182,33 @@ def test_start_and_stop_touch_channel_one_and_keep_humidity_off():
     assert port.state.digital == "01001010101010101010101010101010"
 
 
+def test_extra_channels_go_on_with_start_and_off_with_stop():
+    """Каналы 3 и 5 (защита от конденсата, осушитель) включаются вместе с «Старт» и выключаются с ним."""
+    port = _FakeSimcon()
+    port.state.digital = "0" * 32
+    driver = SimconAscii2Chamber("COM4", 9600, 0, serial_factory=lambda **kwargs: port,
+                                 sleep=lambda seconds: None, clock=lambda: 0.0, extra_channels=(3, 5))
+    driver.read()
+    driver.set_running(True)
+    assert port.state.digital[:7] == "0101010"
+    # Уставка посреди прогона каналы не сбивает.
+    driver.set_setpoint(-30.0)
+    assert port.state.digital[:7] == "0101010" and port.state.temp_setpoint == -30.0
+    driver.set_running(False)
+    assert port.state.digital[:7] == "0000000"
+
+
+def test_extra_channels_are_checked():
+    assert parse_simcon_channels("3, 5") == [3, 5]
+    assert parse_simcon_channels(" 5;3 3 ") == [3, 5]
+    assert parse_simcon_channels("") == []
+    for bad in ("1", "2", "13", "16", "x"):
+        with pytest.raises(ValueError):
+            parse_simcon_channels(bad)
+    driver = make_driver({"driver": "simcon_ascii2", "weiss_port": "COM7", "simcon_extra_channels": "5, 3"})
+    assert driver.extra_channels == (3, 5)
+
+
 def test_setpoint_not_taken_in_intern_mode_is_named():
     """Режим INTERN: камера строку принимает, но уставку не меняет."""
     port = _FakeSimcon()
@@ -250,3 +278,20 @@ def test_link_never_polls_faster_than_the_chamber_allows():
         assert link.poll_s == 5.0
     finally:
         link.close()
+
+
+def test_extra_channels_setting_is_checked_and_named_before_the_run(tmp_path):
+    """Поле «Каналы при пуске»: номер вне 3-12 не принимается, проверка перед прогоном называет каналы."""
+    from tests.test_climate_supervisor import _SupStub
+
+    stub = _SupStub(tmp_path)
+    stub._climate_link = None
+    assert stub._climate_set("driver", "simcon_ascii2")
+    assert stub._climate_settings["min_c"] == -70.0 and stub._climate_settings["max_c"] == 180.0
+    assert stub._climate_set("simcon_extra_channels", "5;3")
+    assert stub._climate_settings["simcon_extra_channels"] == "3, 5"
+    assert not stub._climate_set("simcon_extra_channels", "16")
+    assert "сброс ошибки" in stub._climate_command_status
+    assert stub._climate_settings["simcon_extra_channels"] == "3, 5"
+    checks = {item["key"]: item for item in stub._climate_auto_checks()}
+    assert "Betauungsschutz" in checks["channels"]["text"] and "Drucklufttrockner" in checks["channels"]["text"]
