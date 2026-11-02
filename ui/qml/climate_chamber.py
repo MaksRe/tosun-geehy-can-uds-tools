@@ -690,16 +690,30 @@ def parse_simcon_state(line: str) -> SimconState:
 # осушитель и т. п.). Не входят: 1 «Старт» и 2 «Влажность» - ими программа управляет сама;
 # 13-15 - подстройка датчика температуры (сервис), 16 - сброс ошибки: их трогать нельзя.
 SIMCON_EXTRA_CHANNELS = tuple(range(3, 13))
-# Названия каналов на пульте большой камеры Vötsch VT 7100 (меню «Digitalkanäle»).
+# Названия цифровых каналов по меню «Digitalkanäle» пульта большой камеры Vötsch VT 7100,
+# по-русски. У другой камеры с S!MCON/32 назначение каналов с 3-го может отличаться.
 SIMCON_CHANNEL_NAMES = {
-    3: "Betauungsschutz - защита от конденсата",
-    4: "Kapazitiver Fühler - ёмкостный датчик влажности",
-    5: "Drucklufttrockner - осушитель сжатого воздуха",
-    6: "Regenerierung Trockner - регенерация осушителя",
-    7: "Schadgas - вредный газ",
-    8: "CO2 - доохлаждение CO2",
-    9: "Kunde A1", 10: "Kunde A2", 11: "Kunde A3", 12: "Kunde A4",
+    1: "Пуск",
+    2: "Влажность",
+    3: "Защита от конденсата",
+    4: "Ёмкостный датчик влажности",
+    5: "Осушитель сжатого воздуха",
+    6: "Регенерация осушителя",
+    7: "Вредный газ",
+    8: "Доохлаждение CO2",
+    9: "Выход заказчика A1",
+    10: "Выход заказчика A2",
+    11: "Выход заказчика A3",
+    12: "Выход заказчика A4",
+    13: "Подстройка датчика: низ",
+    14: "Подстройка датчика: верх",
+    15: "Подстройка датчика: расчёт",
+    16: "Сброс ошибки",
 }
+
+
+def simcon_channel_name(number: int) -> str:
+    return SIMCON_CHANNEL_NAMES.get(int(number), f"Канал {int(number)}")
 
 
 def parse_simcon_channels(text) -> list[int]:
@@ -860,7 +874,8 @@ class SimconAscii2Chamber(ChamberDriver):
         return ChamberReading(actual_c=state.temp_actual, setpoint_c=state.temp_setpoint,
                               running=state.running, alarm=None,
                               details={"humidity_on": humidity, "humidity_c": state.humidity_actual,
-                                       "negative": self.negative})
+                                       "humidity_set": state.humidity_setpoint, "channels": state.digital,
+                                       "extra_channels": list(self.extra_channels), "negative": self.negative})
 
     def _current(self) -> SimconState:
         return self.last_state if self.last_state is not None else parse_simcon_state(

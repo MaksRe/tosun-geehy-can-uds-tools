@@ -294,4 +294,39 @@ def test_extra_channels_setting_is_checked_and_named_before_the_run(tmp_path):
     assert "сброс ошибки" in stub._climate_command_status
     assert stub._climate_settings["simcon_extra_channels"] == "3, 5"
     checks = {item["key"]: item for item in stub._climate_auto_checks()}
-    assert "Betauungsschutz" in checks["channels"]["text"] and "Drucklufttrockner" in checks["channels"]["text"]
+    text = checks["channels"]["text"]
+    assert "защита от конденсата" in text and "осушитель сжатого воздуха" in text
+
+
+def test_window_shows_every_channel_in_russian_and_what_is_wrong(tmp_path):
+    """Блок «Каналы пульта»: все 16 каналов по-русски, кто ими управляет, что стоит не так, как задала программа."""
+    from tests.test_climate_supervisor import _SupStub
+    from ui.qml.climate_chamber import ChamberReading
+
+    stub = _SupStub(tmp_path)
+    stub._climate_link = None
+    assert stub._climate_set("driver", "simcon_ascii2")
+    assert stub._climate_set("simcon_extra_channels", "3, 5")
+    # Пуск и влажность включены, 3 включён, 5 не включился.
+    digital = "0111" + "0" * 28
+    reading = ChamberReading(actual_c=20.0, setpoint_c=20.0, running=True,
+                             details={"humidity_on": True, "humidity_c": 41.0, "humidity_set": 50.0,
+                                      "channels": digital})
+    view = stub._climate_simcon_view(reading)
+    assert view["visible"] and len(view["channels"]) == 16
+    names = {item["number"]: item for item in view["channels"]}
+    assert names[5]["name"] == "Осушитель сжатого воздуха" and names[16]["name"] == "Сброс ошибки"
+    assert all(not any(word in item["name"] for word in ("Druck", "Betau", "Feuchte")) for item in view["channels"])
+    assert names[1]["managed"] == "по прогону" and names[3]["managed"] == "вместе с пуском"
+    assert names[2]["problem"] and names[5]["problem"] and not names[3]["problem"] and not names[1]["problem"]
+    assert len(view["problems"]) == 2 and "Влажность" in view["problems"][0]
+    assert view["humidityText"] == "включена, уставка 50,0 %" and view["humidityActualText"] == "41,0 %"
+    # Влажность выключена, 5 включился: проблем нет; каналы выше 16 видны, только если включены.
+    reading.details["channels"] = "0101010000000000000" + "1" + "0" * 12
+    view = stub._climate_simcon_view(reading)
+    assert view["problems"] == [] and view["humidityText"] == "выключена"
+    assert [item["number"] for item in view["channels"]][-1] == 19
+    assert view["channels"][-1]["name"] == "Канал 19" and view["channels"][-1]["on"]
+    # Другая камера - блока нет.
+    assert stub._climate_set("driver", "simulator")
+    assert stub._climate_simcon_view(reading)["visible"] is False

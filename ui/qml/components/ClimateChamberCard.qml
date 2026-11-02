@@ -39,6 +39,7 @@ Card {
     readonly property bool modbus: root.climate.driver === "modbus_tcp" || root.climate.driver === "modbus_rtu"
     readonly property bool espec: root.climate.driver === "espec"
     readonly property var especState: root.climate.espec || ({})
+    readonly property var simconState: root.climate.simcon || ({})
     // Во время автоматического прогона камерой управляет программа: ручные настройки только на паузе.
     readonly property bool manualAllowed: !root.run.active || root.run.paused === true
     // Выбранная команда в списке команд ESPEC и значения её параметров.
@@ -511,6 +512,98 @@ Card {
                     font.pixelSize: 12
                     font.family: "Bahnschrift"
                     wrapMode: Text.WordWrap
+                }
+
+                // Камера с пультом S!MCON/32 (Vötsch VT 7100, Weiss WK1): влажность и все цифровые каналы пульта.
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    visible: root.simconState.visible === true && root.climate.ok === true
+                    spacing: 6
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: "Влажность: " + (root.simconState.humidityText || "—")
+                              + "   ·   в камере " + (root.simconState.humidityActualText || "—")
+                              + "   ·   включено: " + (root.simconState.summary || "—")
+                        color: root.simconState.humidityOn ? "#b45309" : root.textSoft
+                        font.pixelSize: 12
+                        font.family: "Bahnschrift"
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Caption { text: "Каналы пульта" }
+
+                    Flow {
+                        Layout.fillWidth: true
+                        spacing: 6
+
+                        Repeater {
+                            model: root.simconState.channels || []
+
+                            Rectangle {
+                                width: 236
+                                height: 46
+                                radius: 8
+                                color: modelData.problem ? "#fef2f2" : (modelData.on ? "#ecfdf5" : root.inputBg)
+                                border.width: modelData.problem ? 2 : 1
+                                border.color: modelData.problem ? "#dc2626" : (modelData.on ? "#16a34a" : root.inputBorder)
+
+                                Column {
+                                    anchors.fill: parent
+                                    anchors.margins: 6
+                                    spacing: 1
+
+                                    Row {
+                                        width: parent.width
+                                        spacing: 6
+                                        Text {
+                                            text: modelData.number + "  " + modelData.name
+                                            width: parent.width - stateText.width - 6
+                                            elide: Text.ElideRight
+                                            color: root.textMain
+                                            font.pixelSize: 12
+                                            font.family: "Bahnschrift"
+                                        }
+                                        Text {
+                                            id: stateText
+                                            text: modelData.stateText
+                                            color: modelData.on ? "#15803d" : root.textSoft
+                                            font.pixelSize: 12
+                                            font.bold: true
+                                            font.family: "Bahnschrift"
+                                        }
+                                    }
+                                    Text {
+                                        text: modelData.managed ? "программа: " + modelData.managed : "как на камере"
+                                        width: parent.width
+                                        elide: Text.ElideRight
+                                        color: modelData.problem ? "#dc2626" : root.textSoft
+                                        font.pixelSize: 10
+                                        font.family: "Bahnschrift"
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        visible: (root.simconState.problems || []).length > 0
+                        text: "Не так, как задала программа: " + (root.simconState.problems || []).join("; ") + "."
+                        color: "#dc2626"
+                        font.pixelSize: 12
+                        font.family: "Bahnschrift"
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: "Названия каналов - как на пульте Vötsch VT 7100. У другой камеры смотрите её меню «Digitalkanäle»: с 3-го канала назначение может отличаться."
+                        color: root.textSoft
+                        font.pixelSize: 10
+                        font.family: "Bahnschrift"
+                        wrapMode: Text.WordWrap
+                    }
                 }
 
                 Text {

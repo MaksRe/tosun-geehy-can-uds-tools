@@ -78,6 +78,13 @@
   .node { background: var(--bg); border-radius: 10px; padding: 6px 8px; font-size: 12px; }
   .node b { display: block; font-size: 13px; }
   .node.done { outline: 1.5px solid var(--ok); }
+  /* Каналы пульта камеры S!MCON/32: вкл - зелёная рамка, не так, как задала программа - красная. */
+  .chans { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; margin-top: 6px; }
+  .chan { background: var(--bg); border-radius: 10px; padding: 5px 8px; font-size: 12px; min-width: 0; }
+  .chan .row { align-items: flex-start; }
+  .chan .row b { font-weight: 600; overflow-wrap: anywhere; }
+  .chan.on { outline: 1.5px solid var(--ok); }
+  .chan.bad { outline: 2px solid var(--bad); }
   /* Несколько плат: строка платы и узлы температуры (закрашен - у платы есть точка в узле). */
   table.boards td, table.boards th { white-space: nowrap; }
   .dots { display: inline-flex; gap: 2px; }
@@ -471,6 +478,23 @@
   const siteUrl = window.location.origin + "/";
   const $ = (id) => document.getElementById(id);
   const esc = (text) => String(text ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+  // Каналы пульта камеры S!MCON/32 (Vötsch VT 7100, Weiss WK1): влажность и что включено.
+  const simconHtml = (simcon) => {
+    const channels = simcon.channels || [];
+    const problems = simcon.problems || [];
+    const tile = (c) =>
+      `<div class="chan ${c.problem ? "bad" : (c.on ? "on" : "")}"><div class="row"><b>${c.number} ${esc(c.name)}</b>` +
+      `<span class="${c.on ? "ok" : "soft"}">${esc(c.stateText)}</span></div>` +
+      `<div class="soft" style="font-size:11px">${c.managed ? "программа: " + esc(c.managed) : "как на камере"}</div></div>`;
+    // На виду - то, что важно: каналы программы, включённые и с ошибкой; остальные - под раскрытием.
+    const main = channels.filter((c) => c.managed || c.on || c.problem);
+    const rest = channels.filter((c) => !(c.managed || c.on || c.problem));
+    return `<div class="${simcon.humidityOn ? "warn" : "soft"}" style="margin-top:6px">Влажность: ${esc(simcon.humidityText)} · в камере ${esc(simcon.humidityActualText)}</div>` +
+      `<div class="chans">${main.map(tile).join("")}</div>` +
+      (rest.length ? `<details class="soft" style="margin-top:6px"><summary>Остальные каналы пульта: ${rest.length}, все выключены</summary>` +
+        `<div class="chans">${rest.map(tile).join("")}</div></details>` : "") +
+      (problems.length ? `<div class="bad" style="margin-top:6px">Не так, как задала программа: ${esc(problems.join("; "))}.</div>` : "");
+  };
   const LEVELS = [
     ["all", "Все события", "весь ход прогона"],
     ["important", "Важные", "этапы, итоги, предупреждения"],
@@ -831,6 +855,7 @@
 
     const chamber = climate.chamber || {};
     const espec = climate.espec || {};
+    const simcon = climate.simcon || {};
     $("chamberName").textContent = chamber.name || "";
     $("chamber").innerHTML = !climate.connected
       ? `<span class="soft">Связь с камерой не включена в программе.</span>`
@@ -841,7 +866,8 @@
          <div style="margin-top:8px">${esc(climate.runningText)}${espec.modeText && espec.modeText !== "—"
              ? " · " + esc(espec.modeText) : ""} · авария: <span class="${climate.alarm ? "bad" : ""}">${esc(climate.alarmText)}</span></div>` +
         (espec.heaterText && espec.heaterText !== "—"
-          ? `<div class="soft">Нагреватель ${esc(espec.heaterText)} · холодильник ${esc(espec.refText)} · пределы ${esc(espec.lowText)} … ${esc(espec.highText)}</div>` : "");
+          ? `<div class="soft">Нагреватель ${esc(espec.heaterText)} · холодильник ${esc(espec.refText)} · пределы ${esc(espec.lowText)} … ${esc(espec.highText)}</div>` : "") +
+        (climate.connected && simcon.visible ? simconHtml(simcon) : "");
 
     const live = s.live || {};
     const board = live.boardTemp || {}, fuel = live.fuelTemp || {}, main = live.main || {}, media = live.media || {};

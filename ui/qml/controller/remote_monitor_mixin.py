@@ -961,7 +961,7 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         steps = [dict(step) for step in (self._climate_run_steps if active else scenario.get("steps") or [])]
         return {key: climate.get(key) for key in (
             "connected", "ok", "status", "chamber", "actualText", "setpointText", "runningText", "alarmText", "alarm",
-            "run", "history", "espec", "control")} | {
+            "run", "history", "espec", "simcon", "control")} | {
             "scenario": (climate.get("scenario") or {}).get("summary", ""),
             "scenarioName": scenario.get("name", ""),
             "steps": steps,

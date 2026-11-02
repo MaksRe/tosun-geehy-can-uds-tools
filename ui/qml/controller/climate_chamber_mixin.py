@@ -60,6 +60,7 @@ from ui.qml.climate_chamber import (
     list_serial_ports,
     make_driver,
     parse_simcon_channels,
+    simcon_channel_name,
     reading_text,
     resolve_port,
 )
@@ -143,6 +144,13 @@ def _c(value) -> str:
     if value is None:
         return "—"
     return f"{float(value):+.1f} °C".replace(".", ",")
+
+
+def _pct(value) -> str:
+    """Относительная влажность для показа: «45,0 %»."""
+    if value is None:
+        return "—"
+    return f"{float(value):.1f} %".replace(".", ",")
 
 
 def parse_nodes(text: str) -> list[float]:
@@ -1869,6 +1877,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             "moxaCheck": self._climate_moxa_check(),
             "selftest": dict(getattr(self, "_climate_selftest", {"active": False, "text": "", "results": []})),
             "espec": self._climate_espec_view(reading),
+            "simcon": self._climate_simcon_view(reading),
             "commands": ESPEC_COMMAND_LIST if settings["driver"] == DRIVER_ESPEC else [],
             "bridgeStatus": self._climate_bridge_status,
             "settings": {key: (value if not isinstance(value, float) else f"{value:g}".replace(".", ","))
@@ -1930,6 +1939,59 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             return f"Moxa UPort на {link.driver.port}"
         moxa = [item["device"] for item in self._climate_ports if item.get("moxa")]
         return f"Moxa UPort на {moxa[0]}" if moxa else "Moxa UPort (не найден)"
+
+    # Сколько каналов пульта S!MCON/32 показывать всегда; дальше - только включённые.
+    SIMCON_SHOWN_CHANNELS = 16
+
+    def _climate_simcon_view(self, reading) -> dict:
+        """Каналы пульта S!MCON/32 и влажность по последнему ответу камеры: что включено и кто им управляет.
+
+        «Ведёт программа» - канал, который программа ставит сама: 1 «Пуск» (по
+        прогону), 2 «Влажность» (всегда выключена) и каналы из «Каналы при пуске»
+        (включены, пока камера работает). Если такой канал стоит не так, как
+        должен, это проблема: например, у камеры нет этой опции.
+        """
+        details = dict(getattr(reading, "details", None) or {}) if reading is not None else {}
+        digital = str(details.get("channels") or "")
+        if self._climate_settings.get("driver") != DRIVER_SIMCON or not digital:
+            return {"visible": False, "channels": [], "problems": []}
+        try:
+            extra = parse_simcon_channels(self._climate_settings.get("simcon_extra_channels", ""))
+        except ValueError:
+            extra = []
+        running = len(digital) > 1 and digital[1] == "1"
+        channels, problems = [], []
+        for number in range(1, len(digital)):
+            on = digital[number] == "1"
+            if number > self.SIMCON_SHOWN_CHANNELS and not on:
+                continue
+            name = simcon_channel_name(number)
+            if number == 1:
+                managed, expected = "по прогону", None
+            elif number == 2:
+                managed, expected = "всегда выключена", False
+            elif number in extra:
+                managed, expected = "вместе с пуском", running
+            else:
+                managed, expected = "", None
+            problem = expected is not None and on != expected
+            if problem:
+                problems.append(f"канал {number} «{name}» {'включён' if on else 'выключен'}, а должен быть "
+                                f"{'включён' if expected else 'выключен'}"
+                                + (" (есть ли у камеры эта опция)" if expected else ""))
+            channels.append({"number": number, "name": name, "on": on, "stateText": "вкл" if on else "выкл",
+                             "managed": managed, "problem": problem})
+        humidity_on = len(digital) > 2 and digital[2] == "1"
+        return {
+            "visible": True,
+            "channels": channels,
+            "problems": problems,
+            "humidityOn": humidity_on,
+            "humidityText": ("включена, уставка " + _pct(details.get("humidity_set")) if humidity_on
+                             else "выключена"),
+            "humidityActualText": _pct(details.get("humidity_c")),
+            "summary": ", ".join(item["name"].lower() for item in channels if item["on"]) or "ничего не включено",
+        }
 
     def _climate_espec_view(self, reading) -> dict:
         """Подробное состояние камеры ESPEC для блока ручного управления."""
