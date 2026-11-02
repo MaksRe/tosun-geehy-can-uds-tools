@@ -16,7 +16,7 @@
 - ESPEC (MC-811P) по RS-485 через переходник Moxa UPort 1150: порт «auto»
   находит переходник сам, поиск находит адрес, скорость и конец строки,
   каталог команд руководства даёт окну ручное управление камерой.
-- Weiss WK1-600/70 (контроллер SIMCON/32, протокол ASCII-2) по RS-232.
+- Vötsch VT 7100 и Weiss WK1-600/70 (контроллер S!MCON/32, протокол ASCII-2) по RS-232.
 - Имитатор. Ведёт себя как камера: воздух идёт к уставке с ограниченной
   скоростью, изделие отстаёт от воздуха. Ускоряется в 10 и 60 раз, чтобы
   автоматический прогон отлаживался на столе за минуты, а не за сутки.
@@ -639,6 +639,9 @@ class SimconState:
     fan_actual: float
     pt100: list
     digital: str
+    # Все уставки ответа (числа на чётных местах), сколько их отдала камера: у разных
+    # исполнений S!MCON/32 их разное число, и строка «E» повторяет их столько же.
+    setpoints: list = field(default_factory=list)
 
     @property
     def running(self) -> bool:
@@ -660,7 +663,8 @@ def parse_simcon_state(line: str) -> SimconState:
         # Отзыв адреса, если контроллер его добавит, к данным не относится.
         if token.startswith("$"):
             continue
-        if len(token) >= 3 and set(token) <= {"0", "1"} and len(numbers) >= 6:
+        # Строка цифровых каналов - длинная, только из 0 и 1 и без точки (у чисел точка есть всегда).
+        if len(token) >= 8 and set(token) <= {"0", "1"} and len(numbers) >= 2:
             digital = token
             continue
         try:
@@ -669,6 +673,7 @@ def parse_simcon_state(line: str) -> SimconState:
             raise ChamberError(f"камера ответила непонятно: {line.strip()[:60]}") from None
     if len(numbers) < 4:
         raise ChamberError(f"в ответе камеры мало чисел: {line.strip()[:60]}")
+    setpoints = numbers[0:(len(numbers) // 2) * 2:2]
     while len(numbers) < 14:
         numbers.append(0.0)
     return SimconState(
@@ -677,6 +682,7 @@ def parse_simcon_state(line: str) -> SimconState:
         fan_setpoint=numbers[4], fan_actual=numbers[5],
         pt100=[numbers[7], numbers[9], numbers[11], numbers[13]],
         digital=digital,
+        setpoints=setpoints,
     )
 
 
@@ -698,12 +704,18 @@ def simcon_number(value: float, negative: str = SIMCON_NEGATIVE_PADDED) -> str:
 
 
 def build_simcon_setpoints(address: int, temp: float, humidity: float, fan: float, digital: str,
-                           negative: str = SIMCON_NEGATIVE_PADDED) -> str:
+                           negative: str = SIMCON_NEGATIVE_PADDED, setpoints: list | None = None) -> str:
     """Строка «$xxE»: уставки температуры, влажности, вентилятора и все цифровые каналы сразу.
 
     Команда задаёт всё одной строкой, поэтому влажность, вентилятор и каналы
     берутся из последнего ответа камеры: менять их программа не должна.
+    setpoints - все уставки последнего ответа «I»: строка повторяет их столько же,
+    сколько отдала камера (у Weiss WK1 - 7, у других исполнений S!MCON/32 бывает
+    иначе), и меняет только первую - температуру.
     """
+    if setpoints and len(setpoints) >= 2:
+        rest = " ".join(simcon_number(value) for value in setpoints[1:])
+        return f"${int(address):02d}E {simcon_number(temp, negative)} {rest} {digital}\r"
     unused = " ".join(simcon_number(0.0) for _ in range(4))
     return (f"${int(address):02d}E {simcon_number(temp, negative)} {simcon_number(humidity)} "
             f"{simcon_number(fan)} {unused} {digital}\r")
@@ -831,7 +843,7 @@ class SimconAscii2Chamber(ChamberDriver):
         """Строка «E» и сразу чтение: что камера на самом деле поставила."""
         state = self._current()
         self._exchange(build_simcon_setpoints(self.address, temp, state.humidity_setpoint,
-                                              state.fan_setpoint, digital, self.negative))
+                                              state.fan_setpoint, digital, self.negative, state.setpoints))
         return self.read_state()
 
     def read_state(self) -> SimconState:

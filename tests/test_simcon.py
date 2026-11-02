@@ -75,6 +75,23 @@ def test_numbers_keep_six_characters():
     assert simcon_number(-5.25) == "-005.2" or simcon_number(-5.25) == "-005.3"
 
 
+def test_setpoint_string_repeats_as_many_groups_as_the_chamber_gave():
+    """Исполнения S!MCON/32 (Weiss, Vötsch VT) отдают разное число уставок: строка «E» повторяет их все."""
+    state = parse_simcon_state(MANUAL_ANSWER)
+    assert state.setpoints == [23.0, 50.0, 80.0, 0.0, 0.0, 0.0, 0.0]
+    line = build_simcon_setpoints(0, -40.0, state.humidity_setpoint, state.fan_setpoint, state.digital,
+                                  setpoints=state.setpoints)
+    assert line == ("$00E -040.0 0050.0 0080.0 0000.0 0000.0 0000.0 0000.0 "
+                    "01101010101010101010101010101010\r")
+    # Камера только с температурой и вентилятором: две пары чисел и каналы.
+    short = parse_simcon_state("0025.0 0024.1 0100.0 0098.0 01000000000000000000000000000000")
+    assert short.temp_actual == 24.1 and short.setpoints == [25.0, 100.0]
+    assert short.digital.startswith("01") and short.running is True
+    line = build_simcon_setpoints(1, 30.0, short.humidity_setpoint, short.fan_setpoint, short.digital,
+                                  setpoints=short.setpoints)
+    assert line == "$01E 0030.0 0100.0 01000000000000000000000000000000\r"
+
+
 def test_ascii1_checksum_matches_the_manual():
     # Пример инструкции: STX "1?" -> "8E".
     assert simcon_ascii1_checksum("\x021?") == "8E"

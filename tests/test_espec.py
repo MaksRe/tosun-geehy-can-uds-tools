@@ -283,7 +283,7 @@ def test_section_names_the_chamber_and_hints_the_mode(tmp_path: Path):
 
     assert stub._climate_set("driver", "simcon_ascii2")
     view = stub._climate_view()
-    assert view["chamber"]["name"] == "Weiss WK1-600/70"
+    assert view["chamber"]["name"] == "Vötsch VT 7100 / Weiss WK1"
     assert "выключите" in view["modeHint"]
 
 

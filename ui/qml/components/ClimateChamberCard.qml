@@ -6,7 +6,7 @@ import "."
 /*
   Раздел «Климатическая камера».
   Назначение:
-  - выбор камеры: ESPEC MC-811P (испытания платы), Weiss WK1-600/70 (изделие в сборе),
+  - выбор камеры: ESPEC MC-811P (испытания платы), Vötsch VT 7100 / Weiss WK1 (изделие в сборе),
     имитатор (отладка на столе) или другая камера с Modbus;
   - карта регистров камеры: адреса вписываются из её документации;
   - температура, уставка, пуск и авария камеры, ручная уставка;
@@ -277,7 +277,7 @@ Card {
                 Repeater {
                     model: [
                         { "key": "espec", "name": "ESPEC MC-811P", "purpose": "Испытания платы", "link": "RS-485, 4 провода", "accent": "#0f766e", "fill": "#ecfdf5" },
-                        { "key": "simcon_ascii2", "name": "Weiss WK1-600/70", "purpose": "Изделие в сборе: с трубками, в корпусе", "link": "RS-232", "accent": "#1d4ed8", "fill": "#eff6ff" },
+                        { "key": "simcon_ascii2", "name": "Vötsch VT 7100 / Weiss WK1", "purpose": "Изделие в сборе: с трубками, в корпусе", "link": "RS-232, пульт S!MCON/32", "accent": "#1d4ed8", "fill": "#eff6ff" },
                         { "key": "simulator", "name": "Имитатор", "purpose": "Отладка на столе, без камеры", "link": "", "accent": "#9a3412", "fill": "#fff7ed" }
                     ]
 
@@ -1116,7 +1116,7 @@ Card {
                         wrapMode: Text.WordWrap
                     }
 
-                    // Weiss WK1-600/70: контроллер SIMCON/32, протокол ASCII-2 по RS-232.
+                    // Vötsch VT 7100 / Weiss WK1: контроллер S!MCON/32, протокол ASCII-2 по RS-232.
                     RowLayout {
                         Layout.fillWidth: true
                         visible: root.climate.driver === "simcon_ascii2"
