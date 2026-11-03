@@ -24,7 +24,8 @@ Rectangle {
     property color textSoft: "#607084"
 
     readonly property var view: strip.appController ? strip.appController.chamberBoards : ({})
-    readonly property var boards: strip.view.boards || []
+    // Только платы в работе: участники прогона, вне прогона - те, что на шине.
+    readonly property var boards: (strip.view.boards || []).filter(function(board) { return board.working !== false })
     readonly property var toneColors: ({ "ok": "#15803d", "bad": "#dc2626", "run": "#1d4ed8", "normal": "#64748b" })
 
     implicitHeight: stripLayout.implicitHeight + 20

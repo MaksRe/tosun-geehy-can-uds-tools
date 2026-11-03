@@ -1237,7 +1237,9 @@
       return;
     }
     const rows = view.rows || [];
-    $("boardsSummary").textContent = `${view.total} · средняя ${view.avgText} · устоялись ${view.stableCount} из ${view.total}`;
+    const offline = view.offline || [];
+    $("boardsSummary").textContent = `${view.total} ${view.runBoards ? "в прогоне" : "на шине"} · средняя ${view.avgText} · устоялись ${view.stableCount} из ${view.total}`
+      + (offline.length ? ` · ещё в списке без связи: ${offline.join(", ")}` : "");
     const st = s.stability || {};
     $("boardsStability").innerHTML = `<span class="${st.ok ? "ok" : "warn"}">${st.ok ? "● " : "○ "}${esc(st.text)}</span>`;
     $("boardsStatus").textContent = view.status || "";

@@ -130,12 +130,63 @@ def test_doctoring_follows_the_mean_of_boards(tmp_path: Path):
             assert all(abs(value - target) <= 2.0 for value, target in zip(boards, (25.0, -40.0))), (name, boards)
 
 
-def test_start_needs_every_board(tmp_path: Path):
+def test_start_with_part_of_the_listed_boards(tmp_path: Path):
+    """В списке плат больше, чем сейчас в камере (7 без трубок, потом 3 в корпусе): прогон идёт с теми, что на шине."""
     stub = _stub(tmp_path)
     with stub._mb_context(0x81):
         stub._chamber_live_reset()
+    checks = {item["key"]: item for item in stub._climate_auto_checks()}
+    assert checks["device"]["ok"] and "2 из 3" in checks["device"]["text"] and "«П2» (0x81)" in checks["device"]["text"]
+    assert not any("П2" in text for text in stub._climate_auto_blockers())
+    silent = BOARDS[1]
+
+    def feed_two(now):
+        _feed(stub, now)
+        with stub._mb_context(silent[0]):
+            stub._chamber_live_reset()
+
+    feed_two(time.monotonic())
+    assert stub._climate_run_start(), stub._climate_run_status
+    assert stub._mb_run_sas == [0x80, 0x82]
+    assert any("Плат в прогоне 2" in text and "в прогон не вошли: «П2» (0x81)" in text for text in stub.kinds())
+    # Плата П2 вернулась на шину посреди прогона: в этот прогон она всё равно не входит.
+    _walk(stub)
+    with stub._mb_context(silent[0]):
+        assert stub._chamber_points == [], "точки - только у участников прогона"
+    for sa, name, *_rest in (BOARDS[0], BOARDS[2]):
+        with stub._mb_context(sa):
+            assert len(stub._chamber_points) == 2, name
+
+
+def test_start_needs_at_least_one_board(tmp_path: Path):
+    stub = _stub(tmp_path)
+    for sa, *_rest in BOARDS:
+        with stub._mb_context(sa):
+            stub._chamber_live_reset()
     blockers = stub._climate_auto_blockers()
-    assert any("«П2» (0x81)" in text for text in blockers), blockers
+    assert any("Ни одна плата списка" in text for text in blockers), blockers
+
+
+def test_only_working_boards_go_to_the_site_and_the_strip(tmp_path: Path):
+    stub = _stub(tmp_path)
+    with stub._mb_context(0x82):
+        stub._chamber_live_reset()
+    view = stub._mb_view()
+    assert len(view["boards"]) == 3, "для правки списка - все платы"
+    assert [row["name"] for row in view["boards"] if row["working"]] == ["П1", "П2"]
+    assert view["offline"] == ["П3"] and view["workingCount"] == 2
+    assert sorted(stub._mb_board_temps(time.monotonic())) == [0x80, 0x81]
+    ok, text = stub._mb_manual_capture_start()
+    assert ok and "2 плат" in text, text
+
+
+def test_restart_keeps_the_run_participants(tmp_path: Path):
+    stub = _stub(tmp_path)
+    stub._mb_set_run_boards([0x80, 0x82])
+    stub._climate_run_stage = "settle"
+    assert [board["name"] for board in stub._mb_working_boards()] == ["П1", "П3"]
+    assert [board["sa"] for board in stub._mb_polled_boards()] == [0x80, 0x82]
+    stub._climate_run_stage = ""
 
 
 def test_polling_goes_round_all_boards_and_answers_go_to_their_board(tmp_path: Path):

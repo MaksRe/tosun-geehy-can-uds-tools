@@ -343,9 +343,16 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         if multi is not None and multi():
             silent = self._mb_silent_boards(time.monotonic())
             boards = len(self._mb_boards)
-            add("device", not silent,
-                f"Все {boards} платы на связи, температура приходит" if not silent
-                else f"Не присылают температуру платы: {', '.join(silent)}. Проверьте адреса и подключение")
+            alive = boards - len(silent)
+            if not silent:
+                add("device", True, f"Все {boards} платы на связи, температура приходит")
+            elif alive:
+                # Плат в камере сейчас меньше, чем в списке (остальные - в другой камере или сняты): не помеха.
+                add("device", True, f"На связи {alive} из {boards} плат списка - в прогон войдут они. Без связи "
+                                    f"и в прогон не войдут: {', '.join(silent)}", "warn")
+            else:
+                add("device", False, f"Ни одна плата списка не присылает температуру: {', '.join(silent)}. "
+                                     "Проверьте адаптер CAN, адреса и подключение")
         else:
             board_fresh = self._chamber_live_fresh("board_temp", time.monotonic())
             add("device", board_fresh,
@@ -409,10 +416,11 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         if len(boards) >= 2:
             if multi_on is not None and multi_on():
                 auto_write = bool(getattr(self, "_chamber_auto_write", False))
+                count = len(self._mb_working_boards()) or len(boards)
                 add("boards", auto_write,
-                    f"Несколько плат: {len(boards)} - у каждой свой журнал и таблицы; профили запишутся в каждую плату "
+                    f"Несколько плат: {count} на шине - у каждой свой журнал и таблицы; профили запишутся в каждую плату "
                     "по очереди после прогона" if auto_write else
-                    f"Несколько плат: {len(boards)}, но автозапись профиля выключена - профили в платы не запишутся "
+                    f"Несколько плат: {count}, но автозапись профиля выключена - профили в платы не запишутся "
                     "(«Прогон в камере» -> «Режим прогона»)", "warn")
             else:
                 add("boards", False,
@@ -446,7 +454,9 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         multi = getattr(self, "_mb_on", None)
         if multi is not None and multi():
             problems = []
-            for board in self._mb_boards:
+            # Только платы на шине: остальные платы списка в этот прогон не войдут.
+            working = self._mb_working_boards() or list(self._mb_boards)
+            for board in working:
                 with self._mb_context(board["sa"], notify=False):
                     missing = lacking(self._chamber_points)
                     if len(missing) == len(chamber_fit.NODES_X10):
@@ -455,7 +465,7 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
                         problems.append(f"«{board['name']}» - в журнале нет узлов "
                                         + ", ".join(chamber_fit.node_text(node) for node in missing))
             add("stage2", not problems,
-                f"Второй этап: у всех {len(self._mb_boards)} плат открыт журнал первого этапа по всем узлам - "
+                f"Второй этап: у всех {len(working)} плат на шине открыт журнал первого этапа по всем узлам - "
                 "строки трубки посчитаются после поправки каждой платы" if not problems else
                 "Второй этап: " + "; ".join(problems) + ". Покажите плату в ленте и откройте её журнал "
                 "первого этапа («Прогон в камере» -> «Журналы»)")
@@ -1042,6 +1052,10 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         if boards and restore_boards is not None:
             # Несколько плат: каждый журнал - строго в свою плату (по адресу), а не в показанную.
             events = restore_boards(boards)
+            # Участники прогона - те же платы, что были до перезапуска (их журналы и сохранены).
+            set_run = getattr(self, "_mb_set_run_boards", None)
+            if set_run is not None:
+                set_run([item.get("sa") for item in boards])
             if events:
                 failed = any("не загрузился" in text for text in events)
                 self._climate_event("журналы плат после перезапуска: " + "; ".join(events) + ".",

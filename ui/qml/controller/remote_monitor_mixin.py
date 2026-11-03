@@ -753,7 +753,7 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         """Цель функции в устойчивости каждой платы по правилу сценария, затем общий итог «устоялись N из M»."""
         window_s, rate_limit = self._remote_stable_rule()
         result = {}
-        for board in self._mb_boards:
+        for board in self._mb_working_boards(now):
             sa = int(board["sa"])
             series = ((stamp, temps.get(sa)) for stamp, temps in self._remote_boards_history if temps.get(sa) is not None)
             rate = rate_and_spread(series, now, window_s)
@@ -784,7 +784,10 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         temps = self._mb_board_temps(now)
         details = self._mb_board_details()
         rows = []
-        for row in self._mb_view()["boards"]:
+        view = self._mb_view()
+        # Только платы в работе (участники прогона, вне прогона - на шине): остальные платы списка
+        # сейчас не в камере, их показания и узлы на сайте и в боте только путали бы.
+        for row in [item for item in view["boards"] if item.get("working", True)]:
             sa = int(row["sa"])
             board_c, fuel_c = temps.get(sa, (None, None))
             extra = details.get(sa, {})
@@ -806,7 +809,9 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         return {"enabled": True, "rows": rows, "boardOnly": bool(getattr(self, "_chamber_board_only", False)),
                 "status": str(getattr(self, "_mb_status", "") or ""),
                 "avgText": "—" if avg is None else f"{avg:+.1f} °C".replace(".", ","),
-                "stableCount": sum(1 for row in rows if row["stable"]), "total": len(rows)}
+                "stableCount": sum(1 for row in rows if row["stable"]), "total": len(rows),
+                "listed": len(view["boards"]), "offline": list(view.get("offline") or []),
+                "runBoards": bool(view.get("runBoards"))}
 
     def _remote_watch_device(self, now: float):
         """Следит за адаптером и прибором: о пропаже и возвращении сообщает один раз."""
@@ -849,7 +854,7 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
                 "connected": bool(self._can.is_connect) and bool(self._can.is_trace),
                 "freshText": live.get("freshText", ""),
                 "freshOk": bool(live.get("freshOk")),
-                "node": (f"{len(self._mb_boards)} плат" if self._remote_multi()
+                "node": (f"{len(self._mb_working_boards(now))} плат" if self._remote_multi()
                          else f"0x{int(self._resolve_calibration_target_sa()) & 0xFF:02X}"),
                 "writeOpen": bool(write_open()) if write_open is not None else False,
             },
@@ -899,7 +904,7 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         if not self._remote_multi():
             return {}
         series = []
-        for board in self._mb_boards:
+        for board in self._mb_working_boards():
             sa = int(board["sa"])
             values = [None if temps.get(sa) is None else round(float(temps[sa]), 2)
                       for _stamp, temps in self._remote_boards_history]
@@ -947,7 +952,7 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         multi = getattr(self, "_mb_on", None)
         if not callable(multi) or not multi():
             return []
-        return list(self._mb_view()["boards"])
+        return [row for row in self._mb_view()["boards"] if row.get("working", True)]
 
     def _remote_climate_snapshot(self) -> dict:
         """Камера для страницы: температура, уставка, авария и ход автопрогона."""

@@ -1420,10 +1420,16 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         self._climate_run_steps = plan["steps"]
         self._climate_run_labels = labels
         self._climate_run_connected = str(self._chamber_label).strip()
+        joined, left = ([], [])
+        if self._climate_multi():
+            # Участники - платы, что на шине сейчас; остальные платы списка в этот прогон не входят.
+            joined, left = self._mb_run_begin(time.monotonic())
         self._climate_run_stage = "setpoint"
         self._climate_event(
             f"автоматический прогон начат: {len(nodes)} температур ({', '.join(_c(node) for node in nodes)}), "
-            f"пометки {', '.join(labels)}.", "info")
+            f"пометки {', '.join(labels)}."
+            + (f" Плат в прогоне {len(joined)}: {', '.join(joined)}." if joined else "")
+            + (f" Без связи, в прогон не вошли: {', '.join(left)}." if left else ""), "info")
         started = time.monotonic()
         self._climate_hook("_climate_auto_on_start", started)
         self._climate_run_tick(started)
@@ -1830,17 +1836,22 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         if actual is not None and abs(float(actual) - target) <= tolerance:
             self._climate_run_complete(f" Камера вышла на {_c(target)}.")
         elif now - self._climate_run_since >= limit_s:
+            # Не вышла: камеру не останавливать. Остановленная, она осталась бы горячей или холодной
+            # (03.11.2026 Vötsch без охлаждения так и встала при +58,9 °C); пусть держит уставку «в конце».
+            kept = (f" Камера не остановлена: оставлена работать с уставкой {_c(target)}, остановите её, когда "
+                    f"выйдет на уставку." if self._climate_run_finish_stop else "")
             self._climate_run_complete(f" Камера не вышла на {_c(target)} за "
-                                       f"{self._climate_run_param('reach_timeout_min'):g} мин (сейчас {_c(actual)}).")
+                                       f"{self._climate_run_param('reach_timeout_min'):g} мин (сейчас {_c(actual)})."
+                                       + kept, stop=False)
         else:
             then = ", затем остановлю её" if self._climate_run_finish_stop else ""
             self._climate_run_set(f"Все шаги пройдены. Возвращаю камеру к {_c(target)}{then}: сейчас {_c(actual)}.",
                                   "#16a34a")
 
-    def _climate_run_complete(self, tail: str):
-        """Конец прогона: остановить камеру, если так задано в сценарии, итог - в события."""
+    def _climate_run_complete(self, tail: str, stop: bool = True):
+        """Конец прогона: остановить камеру, если так задано в сценарии (и stop), итог - в события."""
         self._climate_run_stage = ""
-        if getattr(self, "_climate_run_finish_stop", False):
+        if stop and getattr(self, "_climate_run_finish_stop", False):
             self._climate_send_run(False)
             tail += " Камера остановлена."
         self._climate_run_set(f"Автоматический прогон закончен: пройдено {len(self._climate_run_done)} температур.{tail}",

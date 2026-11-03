@@ -108,6 +108,30 @@ def test_chamber_is_stopped_only_after_reaching_the_finish_setpoint(tmp_path: Pa
     assert "Камера вышла на +25,0 °C" in stub._climate_run_status and "Камера остановлена" in stub._climate_run_status
 
 
+def test_chamber_that_did_not_reach_the_finish_setpoint_is_left_running(tmp_path: Path):
+    """03.11.2026: Vötsch без охлаждения за 120 мин остыла лишь до +58,9 °C, и её остановили горячей."""
+    stub = _run(tmp_path, "25, 85", finish_setpoint=25.0, finish_stop=True)
+    stops = []
+    original = stub._climate_link.command
+
+    def command(name, value=None):
+        if name == "run" and value is False:
+            stops.append(stub.sim.air_c)
+        return original(name, value)
+    stub._climate_link.command = command
+    finish = stub._climate_run_finish
+
+    def broken_finish(now=None):
+        stub.sim.cool_ramp_c_per_min = 0.1
+        finish(now)
+    stub._climate_run_finish = broken_finish
+    assert stub._climate_run_start()
+    _walk(stub, limit=20000)
+    assert stops == [], "камеру, не вышедшую на уставку конца, не останавливаем"
+    assert "не вышла на +25,0 °C" in stub._climate_run_status and "оставлена работать" in stub._climate_run_status
+    assert stub.sim.running and stub.sim.setpoint_c == 25.0
+
+
 def test_run_trace_is_written(tmp_path: Path):
     stub = _run(tmp_path, "25, -20")
     assert stub._climate_run_start()

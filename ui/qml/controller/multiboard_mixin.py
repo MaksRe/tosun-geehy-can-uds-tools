@@ -73,6 +73,8 @@ class AppControllerMultiBoardMixin(AppControllerContract):
     MB_SWITCH_WAIT_S = 15.0
     # Показание считается текущим, пока не старше стольких кругов опроса своей величины.
     MB_STALE_ROUNDS = 2.5
+    # Плата «на шине», если присылала температуру не позже стольких секунд назад.
+    MB_PRESENT_S = 60.0
 
     # ------------------------------------------------------------------ состояние
 
@@ -107,6 +109,9 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         self._mb_manual_capture: float | None = None
         # Адреса плат, у которых снимается эта точка вручную (погружение - только у показанной).
         self._mb_manual_boards: list[int] = []
+        # Участники прогона: платы списка, которые были на шине при старте. Остальные платы списка
+        # (снятые, в другой камере) прогону не мешают. None - прогона с участниками ещё не было.
+        self._mb_run_sas: list[int] | None = None
         self._mb_load()
         self._mb_apply_period()
 
@@ -373,6 +378,60 @@ class AppControllerMultiBoardMixin(AppControllerContract):
 
     # ------------------------------------------------------------------ опрос по кругу
 
+    # ------------------------------------------------------------------ какие платы в работе
+
+    def _mb_run_active(self) -> bool:
+        return bool(getattr(self, "_climate_run_stage", "")) and self._mb_run_sas is not None
+
+    def _mb_on_bus(self, sa: int, now: float | None = None) -> bool:
+        """Плата присылала температуру за последнюю минуту."""
+        now = time.monotonic() if now is None else now
+        with self._mb_context(sa, notify=False):
+            seen = float((self._chamber_live_seen or {}).get("board_temp", 0.0) or 0.0)
+        return seen > 0.0 and now - seen <= self.MB_PRESENT_S
+
+    def _mb_working_boards(self, now: float | None = None) -> list[dict]:
+        """Платы, с которыми идёт работа: в прогоне - его участники, вне прогона - те, что на шине.
+
+        Список плат камеры - все платы, когда-либо поставленные в камеру; в этот раз их может
+        быть меньше (7 плат без трубок, затем 3 в корпусе в другой камере). Точки, средняя
+        температура, профили, сайт и бот - только по работающим платам.
+        """
+        if self._mb_run_active():
+            return [board for board in self._mb_boards if board["sa"] in self._mb_run_sas]
+        return [board for board in self._mb_boards if self._mb_on_bus(board["sa"], now)]
+
+    def _mb_polled_boards(self) -> list[dict]:
+        """Кого опрашивать: в прогоне - только участников (опрос чаще), иначе всех - чтобы найти, кто на шине."""
+        if self._mb_run_active():
+            return [board for board in self._mb_boards if board["sa"] in self._mb_run_sas] or list(self._mb_boards)
+        return list(self._mb_boards)
+
+    def _mb_profile_boards(self) -> list[dict]:
+        """Кому писать профиль и о ком итог: участникам прогона (после него - тем из них, кто на шине)."""
+        working = self._mb_working_boards()
+        if self._mb_run_active() or self._mb_run_sas is None:
+            return working
+        return [board for board in working if board["sa"] in self._mb_run_sas] or working
+
+    def _mb_run_begin(self, now: float) -> tuple[list[str], list[str]]:
+        """Старт прогона: участники - платы, приславшие температуру. (кто вошёл, кто без связи)."""
+        alive, silent = [], []
+        for board in self._mb_boards:
+            with self._mb_context(board["sa"], notify=False):
+                fresh = self._chamber_live_fresh("board_temp", now)
+            (alive if fresh else silent).append(board)
+        self._mb_run_sas = [int(board["sa"]) for board in alive]
+        self._mb_changed()
+        return ([f"«{board['name']}» (0x{board['sa']:02X})" for board in alive],
+                [f"«{board['name']}» (0x{board['sa']:02X})" for board in silent])
+
+    def _mb_set_run_boards(self, sas):
+        """После перезапуска программы: участники прогона - те, чьи журналы сохранены в состоянии."""
+        wanted = {int(sa) & 0xFF for sa in sas or []}
+        self._mb_run_sas = [int(board["sa"]) for board in self._mb_boards if int(board["sa"]) in wanted] or None
+        self._mb_changed()
+
     def _mb_stale_s(self, base: float, order_length: int) -> float:
         """Цель функции в пороге «показание устарело» при нескольких платах: опрос по кругу идёт дольше.
 
@@ -382,7 +441,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         """
         if not self._mb_on():
             return float(base)
-        round_s = float(order_length) * len(self._mb_boards) * self.MB_LIVE_PERIOD_MS / 1000.0
+        round_s = float(order_length) * len(self._mb_polled_boards()) * self.MB_LIVE_PERIOD_MS / 1000.0
         return max(float(base), self.MB_STALE_ROUNDS * round_s)
 
     def _mb_live_tick(self, now: float):
@@ -392,7 +451,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         self._mb_quiet_keep(now)
         if self._chamber_live_pending is not None and now - self._chamber_live_pending_s < self.CHAMBER_LIVE_PENDING_S:
             return
-        boards = [board["sa"] for board in self._mb_boards]
+        boards = [board["sa"] for board in self._mb_polled_boards()]
         for _attempt in range(len(boards)):
             sa = boards[self._mb_poll_index % len(boards)]
             self._mb_poll_index += 1
@@ -440,7 +499,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         key - какой датчик: платы или, во втором этапе, топлива (трубки).
         """
         values = []
-        for board in self._mb_boards:
+        for board in self._mb_working_boards(now):
             with self._mb_context(board["sa"], notify=False):
                 if not self._chamber_live_fresh(key, now):
                     continue
@@ -504,7 +563,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             self._mb_capture_stage_since = now
             self._mb_captured = set()
         wanted = None if node is None else chamber_fit.nearest_node(int(round(float(node) * 10)))
-        boards = [board for board in self._mb_boards if only is None or board["sa"] in only]
+        boards = [board for board in self._mb_working_boards(now) if only is None or board["sa"] in only]
         for board in boards:
             sa = board["sa"]
             if sa in self._mb_captured:
@@ -561,12 +620,15 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             self._mb_manual_capture_tick(now)
             return True, (f"точка «{label}» записывается только у показанной платы «{name}»: погружают по одной "
                           "трубке. Для следующей платы покажите её в ленте плат и запишите точку снова")
-        self._mb_manual_boards = [board["sa"] for board in self._mb_boards]
+        working = self._mb_working_boards(now)
+        if not working:
+            return False, "ни одна плата из списка не присылает температуру: точку снимать не у кого"
+        self._mb_manual_boards = [board["sa"] for board in working]
         self._mb_manual_capture = now
         self._mb_captured = set()
-        self._mb_status = f"Записываю точку у {len(self._mb_boards)} плат по их средним..."
+        self._mb_status = f"Записываю точку у {len(working)} плат по их средним..."
         self._mb_manual_capture_tick(now)
-        return True, (f"точка записывается у всех {len(self._mb_boards)} плат по их средним; плата без среднего "
+        return True, (f"точка записывается у всех {len(working)} плат на шине по их средним; плата без среднего "
                       f"ждётся до {self.MB_CAPTURE_WAIT_S:g} с")
 
     def _mb_manual_capture_tick(self, now: float):
@@ -574,7 +636,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         if self._mb_manual_capture is None or not self._mb_on():
             self._mb_manual_capture = None
             return
-        only = list(self._mb_manual_boards) or [board["sa"] for board in self._mb_boards]
+        only = list(self._mb_manual_boards) or [board["sa"] for board in self._mb_working_boards(now)]
         if not self._mb_run_capture(now, None, only):
             return
         self._mb_manual_capture = None
@@ -600,7 +662,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         if self._mb_profiles_busy():
             return "профили уже пишутся"
         queue = []
-        for board in self._mb_boards:
+        for board in self._mb_profile_boards():
             with self._mb_context(board["sa"], notify=False):
                 if self._chamber_tables_complete:
                     queue.append(board["sa"])
@@ -617,7 +679,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
 
     def _mb_clear_journals(self):
         """Цель функции в новом журнале у всех плат сразу: следующая точка каждой начнёт новый файл."""
-        for board in self._mb_boards:
+        for board in self._mb_working_boards():
             with self._mb_context(board["sa"], notify=False):
                 self._chamber_clear_points()
         self._mb_changed()
@@ -625,7 +687,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
     def _mb_board_temps(self, now: float) -> dict[int, tuple]:
         """Цель функции в средних температурах платы и топлива каждой платы (°C или None), для сайта и истории."""
         temps = {}
-        for board in self._mb_boards:
+        for board in self._mb_working_boards(now):
             with self._mb_context(board["sa"], notify=False):
                 values = []
                 for key in ("board_temp", "fuel_temp"):
@@ -637,7 +699,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
     def _mb_board_details(self) -> dict[int, dict]:
         """Цель функции в подробностях каждой платы для сайта: что снято в узлах, журнал, итог таблиц, последняя точка."""
         details = {}
-        for board in self._mb_boards:
+        for board in self._mb_working_boards():
             with self._mb_context(board["sa"], notify=False):
                 points = list(self._chamber_points)
                 details[int(board["sa"])] = {
@@ -651,7 +713,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
     def _mb_all_rows(self, limit: int = 60) -> list[dict]:
         """Цель функции в точках журналов всех плат одним списком (свежие сверху), с именем и адресом платы."""
         rows = []
-        for board in self._mb_boards:
+        for board in self._mb_working_boards():
             with self._mb_context(board["sa"], notify=False):
                 for row in self._chamber_rows():
                     rows.append(dict(row, board=str(board["name"]), sa=int(board["sa"])))
@@ -753,7 +815,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         if not self._mb_on():
             return []
         result = []
-        for board in self._mb_boards:
+        for board in self._mb_working_boards():
             with self._mb_context(board["sa"], notify=False):
                 result.append({"sa": int(board["sa"]), "journal": str(self._chamber_file_path or "")})
         return result
@@ -804,7 +866,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         if not self._mb_on():
             return ""
         parts = []
-        for board in self._mb_boards:
+        for board in self._mb_profile_boards():
             with self._mb_context(board["sa"], notify=False):
                 points = len(self._chamber_points)
             result = self._mb_profile_results.get(board["sa"], "")
@@ -819,6 +881,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         # Показанная плата - до перебора: внутри контекста платы «показана» на время она сама.
         shown = self._mb_active_sa
         rows = []
+        working = {int(board["sa"]) for board in self._mb_working_boards(now)}
         for board in self._mb_boards:
             with self._mb_context(board["sa"], notify=False):
                 temp = self._chamber_live_stats("board_temp", now)
@@ -830,6 +893,8 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                     "sa": board["sa"], "saText": f"0x{board['sa']:02X}", "name": board["name"],
                     "active": board["sa"] == shown,
                     "fresh": bool(fresh),
+                    # В работе: участник прогона, а вне прогона - на шине. Лента, сайт и бот - только такие.
+                    "working": int(board["sa"]) in working,
                     "boardTemp": "—" if temp is None else f"{temp['mean'] / 10.0:+.1f} °C".replace(".", ","),
                     "main": "—" if main is None else str(int(round(main["mean"]))),
                     "media": "—" if media is None else str(int(round(media["mean"]))),
@@ -844,6 +909,8 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         shown_board = self._mb_board(shown) if shown is not None else None
         return {"enabled": self._mb_on(), "configured": bool(self._mb_enabled), "quietBus": bool(self._mb_quiet_bus),
                 "boards": rows, "candidates": [f"0x{sa:02X}" for sa in self._mb_bus_candidates()],
+                "workingCount": len(working), "runBoards": self._mb_run_active(),
+                "offline": [str(row["name"]) for row in rows if not row["working"]],
                 "status": self._mb_status,
                 "shownName": "" if shown_board is None else str(shown_board["name"]),
                 "switchNote": self._mb_switch_note if now - self._mb_switch_note_s < 8.0 else "",
