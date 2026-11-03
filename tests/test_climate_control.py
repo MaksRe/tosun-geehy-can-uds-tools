@@ -286,6 +286,31 @@ def test_files_are_sent_to_the_asking_chat(tmp_path: Path):
     assert not ok
 
 
+def test_day_log_of_the_chamber_is_sent_for_any_day(tmp_path: Path):
+    """Полный журнал камеры за день: сегодня, вчера или любая дата; нет файла - сказано почему."""
+    from datetime import date, timedelta
+
+    stub = _started(tmp_path)
+    folder = stub._climate_logs_directory()
+    folder.mkdir(parents=True, exist_ok=True)
+    today, yesterday = date.today(), date.today() - timedelta(days=1)
+    for day in (today, yesterday, date(today.year, 11, 2) if date(today.year, 11, 2) <= today else None):
+        if day is not None:
+            (folder / f"chamber_{day.isoformat()}.log").write_text("журнал\n", encoding="utf-8")
+    for day_text, day in (("", today), ("вчера", yesterday), (yesterday.strftime("%d.%m"), yesterday),
+                          (yesterday.isoformat(), yesterday)):
+        ok, text = stub._control_submit(_as(stub, "2"), "send_file", {"which": "daylog", "day": day_text})
+        assert ok, (day_text, text)
+        assert f"chamber_{day.isoformat()}.log" in stub._remote_telegram.sent[-1][1], day_text
+        assert stub._remote_telegram.sent[-1][0] == "2"
+    ok, text = stub._control_submit(_as(stub, "2"), "send_file", {"which": "daylog", "day": "2001-01-01"})
+    assert not ok and "30 дней" in text
+    ok, text = stub._control_submit(_as(stub, "2"), "send_file", {"which": "daylog", "day": "позавчера-ish"})
+    assert not ok and "дата журнала" in text
+    # «31.12» без года - прошедшая дата, не будущая.
+    assert stub._control_log_day("31.12") <= today
+
+
 def test_chamber_settings_changes_are_logged(tmp_path: Path):
     """Пределы уставки влияют на камеру и доводку: их смена - в журнал с именем оператора."""
     stub = _ControlStub(tmp_path)

@@ -38,6 +38,7 @@ import json
 import pathlib
 import threading
 import time
+from datetime import date, datetime, timedelta
 
 import chamber_fit
 
@@ -565,15 +566,47 @@ class AppControllerClimateControlMixin(AppControllerContract):
             path, title = str(getattr(self, "_chamber_file_path", "") or ""), "журнал точек прогона"
         elif which == "trace":
             path, title = str(getattr(self, "_climate_trace_path", "") or ""), "ход прогона по времени"
+        elif which == "daylog":
+            day = self._control_log_day(params.get("day", ""))
+            if day is None:
+                return False, "дата журнала: «сегодня», «вчера», 02.11 или 2026-11-02", str(params.get("day", ""))
+            path = str(self._climate_logs_directory() / f"chamber_{day.isoformat()}.log")
+            title = f"журнал камеры за {day.strftime('%d.%m.%Y')}"
+            which = f"daylog {day.isoformat()}"
         else:
-            return False, "какой файл: report, journal или trace", which
+            return False, "какой файл: report, journal, trace или daylog", which
         telegram = getattr(self, "_remote_telegram", None)
         if not path or not pathlib.Path(path).is_file():
+            if which.startswith("daylog"):
+                # Журнал пишется, пока программа связана с камерой; хранятся последние 30 дней.
+                return False, (f"{title}: файла нет - в этот день программа не была связана с камерой "
+                               "или журнал старше 30 дней"), which
             return False, f"{title}: файла пока нет", which
         if telegram is None or not actor.get("id"):
             return False, "файл можно прислать только в чат Telegram", which
         telegram.send_document(path, title, [actor["id"]])
         return True, f"{title} - {pathlib.Path(path).name} - отправлен в чат.", pathlib.Path(path).name
+
+    @staticmethod
+    def _control_log_day(text) -> date | None:
+        """День журнала камеры из слов оператора: пусто или «сегодня», «вчера», «02.11», «02.11.2026», «2026-11-02»."""
+        word = str(text or "").strip().lower()
+        today = date.today()
+        if word in ("", "сегодня", "today"):
+            return today
+        if word in ("вчера", "yesterday"):
+            return today - timedelta(days=1)
+        for pattern in ("%Y-%m-%d", "%d.%m.%Y", "%d.%m.%y"):
+            try:
+                return datetime.strptime(word, pattern).date()
+            except ValueError:
+                pass
+        try:
+            day = datetime.strptime(f"{word}.{today.year}", "%d.%m.%Y").date()
+        except ValueError:
+            return None
+        # «02.11» в январе - это прошлогодний ноябрь, а не будущий.
+        return day.replace(year=today.year - 1) if day > today else day
 
     def _control_do_label(self, actor: dict, params: dict):
         label = str(params.get("label", "")).strip()

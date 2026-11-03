@@ -110,7 +110,9 @@ def test_text_commands_become_control_actions(tmp_path: Path):
     _say(bot, 2, "/rule board_max_shift_c 25")
     _say(bot, 2, "/limits -60 110")
     _say(bot, 2, "/cmd set_ref ref=9")
+    _say(bot, 2, "/daylog 02.11")
     _say(bot, 2, "/report")
+    assert ("2", "send_file", {"which": "daylog", "day": "02.11"}) in calls
     assert calls[0] == ("2", "setpoint", {"value": "-55"})
     assert calls[1] == ("2", "mode", {"mode": "standby"})
     assert calls[2][1] == "scenario_steps" and calls[2][2]["steps"][1] == {"temp": -40.0, "hold_min": 15.0, "capture": True}

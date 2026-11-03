@@ -20,7 +20,7 @@
 (/status, /steps, /points, /events, /log, /rules, /scenarios, /commands,
 /answers) и управление (/setpoint, /mode, /pause, /resume, /next, /goto,
 /capture, /step, /addstep, /delstep, /rule, /limits, /label, /load, /save,
-/new, /cmd, /report, /journal, /trace, /estop) - те же действия, с теми же
+/new, /cmd, /report, /journal, /trace, /daylog, /estop) - те же действия, с теми же
 правами и журналом.
 
 КНОПКИ ВМЕСТО КОМАНД
@@ -105,7 +105,7 @@ SIMPLE_CONTROL = {"/pause": ("run_pause", None), "/resume": ("run_resume", None)
 FILE_COMMANDS = {"/report": "report", "/journal": "journal", "/trace": "trace"}
 CONTROL_COMMANDS = set(SIMPLE_CONTROL) | set(FILE_COMMANDS) | {
     "/setpoint", "/mode", "/goto", "/label", "/limits", "/step", "/addstep", "/delstep", "/rule", "/load", "/new",
-    "/cmd", "/quiet"}
+    "/cmd", "/quiet", "/daylog"}
 # Слова для /quiet: включить «только админу» или вернуть рассылку всем.
 QUIET_WORDS = {"on": True, "вкл": True, "да": True, "админ": True, "admin": True,
                "off": False, "выкл": False, "нет": False, "все": False, "всем": False, "all": False}
@@ -987,6 +987,9 @@ class TelegramBot:
                 return "Пример: /cmd set_ref ref=9 - ключи и параметры в /commands"
             values = dict(word.split("=", 1) for word in words[1:] if "=" in word)
             return "espec_command", {"key": words[0], "values": values}, f"Отправить камере команду «{words[0]}»?"
+        if command == "/daylog":
+            # Журнал камеры за день: /daylog, /daylog вчера, /daylog 02.11, /daylog 2026-11-02.
+            return "send_file", {"which": "daylog", "day": words[0] if words else ""}, None
         if command in FILE_COMMANDS:
             return "send_file", {"which": FILE_COMMANDS[command]}, None
         return "Неизвестная команда управления: /help"
@@ -1103,6 +1106,7 @@ class TelegramBot:
                       "/load 1, /save, /new цикл|добор|пустой - сценарии",
                       "/cmd ключ имя=значение - команда ESPEC",
                       "/report, /journal, /trace - файлы в этот чат",
+            "/daylog [вчера | 02.11] - полный журнал камеры за день",
                       "/control - кнопки, /login - вход на сайт"]
         if (user or {}).get("role") == "admin":
             lines += ["", "Только админу:",
