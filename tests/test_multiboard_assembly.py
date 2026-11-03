@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import csv
+import math
 import shutil
 import sys
 import time
@@ -63,10 +64,14 @@ def _raw(points, board_c: float, index: int) -> float:
 class _Rig:
     """Пять плат в корпусах: показания каждой - её первый этап плюс трубка."""
 
-    def __init__(self, tmp_path: Path, board_heat_c: float = 0.0):
+    def __init__(self, tmp_path: Path, board_heat_c: float = 0.0, board_tau_min: float = 0.0):
         self.stub = _MbStub(tmp_path)
         # На сколько плата в корпусе с компаундом теплее трубки (датчика топлива).
         self.board_heat_c = float(board_heat_c)
+        # Плата в компаунде отстаёт от трубки с этой постоянной времени, мин (0 - не отстаёт).
+        self.board_tau_min = float(board_tau_min)
+        self.board_lag: dict[int, float] = {}
+        self.last_feed: float | None = None
         self.stage1 = {}
         self.files = {}
         self.dipped: int | None = None
@@ -92,6 +97,12 @@ class _Rig:
             product = self.room_c
         for sa, _name, offset in BOARDS:
             board_c = product + offset + self.board_heat_c
+            if self.board_tau_min > 0:
+                lag = self.board_lag.setdefault(sa, board_c)
+                dt_min = 0.0 if self.last_feed is None else (now - self.last_feed) * stub.sim.speed / 60.0
+                lag += (board_c - lag) * (1.0 - math.exp(-dt_min / self.board_tau_min))
+                self.board_lag[sa] = lag
+                board_c = lag
             fuel_c = product + offset / 2.0
             main = _raw(self.stage1[sa], board_c, 1) + TUBE_MAIN + TUBE_DRIFT * (fuel_c - 25.0)
             media = _raw(self.stage1[sa], board_c, 2) + TUBE_MEDIA
@@ -104,6 +115,7 @@ class _Rig:
                     stub._chamber_live_note("fuel_temp", int(round(fuel_c * 10)), stamp)
                     stub._chamber_live_note("main", int(round(main)), stamp)
                     stub._chamber_live_note("media", int(round(media)), stamp)
+        self.last_feed = now
 
     def walk(self, limit=40000, step_s=30.0) -> float:
         stub = self.stub
@@ -247,3 +259,34 @@ def test_coverage_shows_stage2_nodes_as_done(tmp_path: Path):
         rows = {row["node"]: row for row in stub._chamber_coverage_rows()}
         assert all(row["tubeOk"] for row in rows.values())
         assert rows["-40 °C"]["tube"] == "сухая, погружение по размаху" and rows["+25 °C"]["tube"] == "есть"
+
+
+def test_stage2_waits_for_the_board_in_the_housing_too(tmp_path: Path):
+    """Плата в компаунде отстаёт от трубки (постоянная 60 мин): точку снимают, когда устоялась и плата."""
+    rig = _Rig(tmp_path, board_heat_c=6.0, board_tau_min=60.0)
+    stub = rig.stub
+    rig.open_stage1()
+    _assembly(rig)
+    stub._climate_scenario["steps"] = [cs.new_step(25.0), cs.new_step(-20.0)]
+    rig.feed(time.monotonic())
+    assert stub._climate_run_start(), stub._climate_run_status
+    waited = []
+    original = stub._climate_run_set
+
+    def spy(text, color="#0f766e"):
+        if "жду, пока устоится плата в корпусе" in text:
+            waited.append(text)
+        return original(text, color)
+    stub._climate_run_set = spy
+    rig.walk()
+    assert waited, "пока плата идёт, а трубка уже стоит, прогон ждёт плату"
+    for sa, name, offset in BOARDS:
+        with stub._mb_context(sa):
+            air = [point for point in stub._chamber_points if point["note"] == "воздух"]
+            cold = [point for point in air if chamber_fit.nearest_node(point["fuel_temp_x10"]) == -200]
+            assert cold, name
+            # Плата в точке - у своего места (воздух + самонагрев) с остатком правила устаивания:
+            # скорость ниже 0,03 °C/мин при постоянной 60 мин - это до 0,03 × 60 = 1,8 °C. Без ожидания
+            # платы точка снималась бы, как только устоялась трубка, - на 15-25 °C раньше.
+            steady = cold[-1]["fuel_temp_x10"] / 10.0 - offset / 2.0 + offset + 6.0
+            assert abs(cold[-1]["board_temp_x10"] / 10.0 - steady) <= 0.03 * 60.0 + 0.4, (name, cold[-1], steady)

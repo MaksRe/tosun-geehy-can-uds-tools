@@ -204,6 +204,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
 
         self._climate_history: deque = deque(maxlen=int(3 * 3600 / self.CLIMATE_BOARD_STEP_S))
         self._climate_board: deque = deque(maxlen=int(3 * 3600 / self.CLIMATE_BOARD_STEP_S))
+        # Второй датчик во втором этапе: камера ведёт по трубке, а плата в компаунде должна устояться тоже.
+        self._climate_board_second: deque = deque(maxlen=int(3 * 3600 / self.CLIMATE_BOARD_STEP_S))
         self._climate_last_board_s = 0.0
         self._climate_bridge_last_s = 0.0
         self._climate_bridge_status = ""
@@ -941,17 +943,26 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             return
         self._climate_last_board_s = now
         key = self._climate_steer_key()
+        for series, name in ((self._climate_board, key), (self._climate_board_second_series(), "board_temp")):
+            if series is None or (series is not self._climate_board and key == "board_temp"):
+                continue
+            value = self._climate_sensor_x10(now, name)
+            if value is not None:
+                series.append((now, round(float(value) / 10.0, 3)))
+
+    def _climate_board_second_series(self):
+        """Ряд датчика платы во втором этапе (камера ведёт по трубке). None - у заглушки без него."""
+        return getattr(self, "_climate_board_second", None)
+
+    def _climate_sensor_x10(self, now: float, key: str):
+        """Среднее за окно одного датчика (0,1 °C): при нескольких платах - средняя по платам в работе."""
         if self._climate_multi():
             # Несколько плат: камера одна - устаивание и доводка по средней температуре плат.
-            value = self._mb_board_temp_x10(now, key)
-            if value is not None:
-                self._climate_board.append((now, round(float(value) / 10.0, 3)))
-            return
+            return self._mb_board_temp_x10(now, key)
         if not self._chamber_live_fresh(key, now):
-            return
+            return None
         stats = self._chamber_live_stats(key, now)
-        value = stats["mean"] if stats is not None else int(self._chamber_live_last[key])
-        self._climate_board.append((now, round(float(value) / 10.0, 3)))
+        return stats["mean"] if stats is not None else int(self._chamber_live_last[key])
 
     def _climate_steer_key(self) -> str:
         """По какому датчику прибора камера ведёт изделие к узлу.
@@ -1530,11 +1541,21 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             # После сдвига уставки доводкой плата должна устояться заново: старое ровное окно не в счёт.
             fresh_window = not self._climate_run_board_attempts or now - self._climate_run_board_since >= window_s
             stable = fresh_window and is_stable(result, window_s, rate_limit, self.CLIMATE_STABLE_SPREAD_C)
+            # Второй этап: камера ведёт по трубке, но плата в компаунде отстаёт - устояться должны оба датчика.
+            # Таблица платы применяется при её температуре в момент точки: плата «на ходу» дала бы смещение.
+            board_wait = None
+            second = self._climate_board_second_series()
+            if self._climate_steer_key() == "fuel_temp" and second:
+                second_result = rate_and_spread(second, now, window_s)
+                if second_result is not None and not is_stable(second_result, window_s, rate_limit,
+                                                               self.CLIMATE_STABLE_SPREAD_C):
+                    board_wait = second_result
+                    stable = False
             # Плата в среднем стоит, но показание колеблется (шум датчика у края шкалы): скорость по окну
             # втрое длиннее мала - тоже «устоялась». Так было на стенде при -40: -38,6...-39,6 три часа.
             long_s = 3.0 * window_s
             long = rate_and_spread(self._climate_board, now, long_s)
-            quiet_long = (not self._climate_run_board_attempts or now - self._climate_run_board_since >= long_s)                 and now - self._climate_run_since >= long_s and long is not None and long[2] >= long_s * 0.9                 and abs(long[0]) < rate_limit
+            quiet_long = (not self._climate_run_board_attempts or now - self._climate_run_board_since >= long_s)                 and now - self._climate_run_since >= long_s and long is not None and long[2] >= long_s * 0.9                 and abs(long[0]) < rate_limit and board_wait is None
             # Не висеть: устаивание дольше «предупредить, если не устоялась за» - решение по текущему среднему.
             overdue = now - self._climate_run_since >= self._climate_run_param("settle_timeout_min") * 60.0 / speed
             if (stable or quiet_long or overdue) and self._climate_board:
@@ -1568,7 +1589,12 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 return
             rate = "—" if result is None else f"{result[0] / speed:+.3f} °C/мин".replace(".", ",")
             forecast = f", по прогнозу придёт к {_c(final)}" if final is not None else ""
-            self._climate_run_set(f"Узел {where}: камера на уставке, жду, пока устоится плата ({rate}{forecast}).")
+            if board_wait is not None:
+                board_rate = f"{board_wait[0] / speed:+.3f} °C/мин".replace(".", ",")
+                self._climate_run_set(f"Узел {where}: трубка устоялась ({rate}), жду, пока устоится плата в "
+                                      f"корпусе ({board_rate}).")
+            else:
+                self._climate_run_set(f"Узел {where}: камера на уставке, жду, пока устоится плата ({rate}{forecast}).")
             self._climate_run_timeout(now, "settle_timeout_min", f"плата не устоялась при {_c(node)}")
             return
 

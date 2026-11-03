@@ -68,6 +68,7 @@ class _ClimateStub(AppControllerClimateChamberMixin, _TestStub):
         self._climate_alarm_reported = 0
         self._climate_history = deque(maxlen=5000)
         self._climate_board = deque(maxlen=5000)
+        self._climate_board_second = deque(maxlen=5000)
         self._climate_last_board_s = 0.0
         self._climate_bridge_last_s = 0.0
         self._climate_bridge_status = ""
