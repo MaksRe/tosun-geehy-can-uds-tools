@@ -46,6 +46,7 @@ from ui.qml.climate_chamber import (
     DRIVER_NONE,
     DRIVER_SIMCON,
     DRIVER_SIMULATOR,
+    DRIVER_ZUNDAR,
     ESPEC_COMMANDS,
     ESPEC_COMMANDS_BY_KEY,
     PORT_AUTO,
@@ -71,7 +72,8 @@ from ui.qml.climate_scenario import DEFAULTS as SCENARIO_DEFAULTS
 from .contract import AppControllerContract
 from .stability import air_for_board, fit_board_model, is_stable, predict_final, rate_and_spread
 
-DRIVERS = (DRIVER_NONE, DRIVER_ESPEC, DRIVER_SIMCON, DRIVER_SIMULATOR, DRIVER_MODBUS_TCP, DRIVER_MODBUS_RTU)
+DRIVERS = (DRIVER_NONE, DRIVER_ESPEC, DRIVER_SIMCON, DRIVER_ZUNDAR, DRIVER_SIMULATOR, DRIVER_MODBUS_TCP,
+           DRIVER_MODBUS_RTU)
 
 # Камеры, с которыми работает программа: у каждой своё назначение, чтобы их не путать.
 # board_only - какой режим раздела «Прогон в камере» подходит этой камере.
@@ -96,6 +98,14 @@ CHAMBERS = {
         "accent": "#1d4ed8",
         "board_only": False,
         "range_c": (-70.0, 180.0),
+    },
+    DRIVER_ZUNDAR: {
+        "name": "Zundar EEXTH1000U",
+        "purpose": "Климатика: изделие в сборе или платы",
+        "link": "Ethernet, Modbus TCP",
+        "accent": "#7c3aed",
+        # Можно и платы на своих ёмкостях, и изделие с трубками: режим раздела не навязывается.
+        "board_only": None,
     },
     DRIVER_SIMULATOR: {
         "name": "Имитатор камеры",
@@ -313,6 +323,10 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             "weiss_baud": 9600,
             # Адрес камеры Weiss из меню пульта «Address», по умолчанию там 0.
             "simcon_address": 0,
+            # Zundar EEXTH1000U (контроллер AZ1000): IP с пульта (73 «Связь»), порт 502, станция 0.
+            "zundar_host": "192.168.0.100",
+            "zundar_port": 502,
+            "zundar_unit": 0,
             # Каналы пульта S!MCON/32, включённые вместе с «Старт» на время прогона, например «3, 5»
             # (защита от конденсата, осушитель). Пусто - программа их не трогает.
             "simcon_extra_channels": "",
@@ -487,7 +501,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             reconnect = key in ("driver", "poll_s", "unit", "tcp_host", "tcp_port", "rtu_port", "rtu_baud",
                                 "rtu_parity", "rtu_stopbits", "sim_speed", "simcon_address",
                                 "espec_port", "espec_baud", "espec_address", "espec_delimiter",
-                                "weiss_port", "weiss_baud", "simcon_extra_channels")
+                                "weiss_port", "weiss_baud", "simcon_extra_channels",
+                                "zundar_host", "zundar_port", "zundar_unit")
         self._climate_save_settings()
         if reconnect and self._climate_link is not None:
             self._climate_connect()
@@ -1944,6 +1959,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             "selftest": dict(getattr(self, "_climate_selftest", {"active": False, "text": "", "results": []})),
             "espec": self._climate_espec_view(reading),
             "simcon": self._climate_simcon_view(reading),
+            "zundar": self._climate_zundar_view(reading),
             "commands": ESPEC_COMMAND_LIST if settings["driver"] == DRIVER_ESPEC else [],
             "bridgeStatus": self._climate_bridge_status,
             "settings": {key: (value if not isinstance(value, float) else f"{value:g}".replace(".", ","))
@@ -1983,6 +1999,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                        f"адрес {settings['espec_address']} · разделитель {settings['espec_delimiter']}")
         elif driver == DRIVER_SIMCON:
             summary = f"{settings['weiss_port']} · {settings['weiss_baud']} бод · адрес {settings['simcon_address']}"
+        elif driver == DRIVER_ZUNDAR:
+            summary = f"{settings['zundar_host']}:{settings['zundar_port']} · станция {settings['zundar_unit']}"
         elif driver == DRIVER_SIMULATOR:
             summary = f"ускорение ×{float(settings['sim_speed']):g}"
         elif driver == DRIVER_MODBUS_TCP:
@@ -2005,6 +2023,32 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             return f"Moxa UPort на {link.driver.port}"
         moxa = [item["device"] for item in self._climate_ports if item.get("moxa")]
         return f"Moxa UPort на {moxa[0]}" if moxa else "Moxa UPort (не найден)"
+
+    def _climate_zundar_view(self, reading) -> dict:
+        """Камера Zundar (AZ1000): состояние, нагрев и охлаждение, влажность, управление по сети, пределы аварии."""
+        details = dict(getattr(reading, "details", None) or {}) if reading is not None else {}
+        if self._climate_settings.get("driver") != DRIVER_ZUNDAR or not details:
+            return {"visible": False}
+
+        def pct(key):
+            value = details.get(key)
+            return "—" if value is None else f"{float(value):.0f} %"
+
+        lan = details.get("lan_control")
+        high, low = details.get("high_c"), details.get("low_c")
+        return {
+            "visible": True,
+            "modeText": str(details.get("mode") or "—") + ("" if details.get("fixed") else ", режим программы"),
+            "typeText": str(details.get("type") or ""),
+            "heaterText": pct("heater_pct"), "coolingText": pct("cooling_pct"),
+            "humidityOn": bool(details.get("humidity_on")),
+            "humidityText": ("включена, уставка " + _pct(details.get("humidity_set"))) if details.get("humidity_on")
+                            else "выключена",
+            "humidityActualText": _pct(details.get("humidity_c")),
+            "lanText": "—" if lan is None else ("разрешено" if lan else "ЗАПРЕЩЕНО - только с пульта"),
+            "lanOk": lan is not False,
+            "limitsText": "—" if high is None or low is None else f"{_c(low)} … {_c(high)}",
+        }
 
     # Сколько каналов пульта S!MCON/32 показывать всегда; дальше - только включённые.
     SIMCON_SHOWN_CHANNELS = 16

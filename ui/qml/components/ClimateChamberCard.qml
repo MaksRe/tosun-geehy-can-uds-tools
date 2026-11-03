@@ -40,6 +40,7 @@ Card {
     readonly property bool espec: root.climate.driver === "espec"
     readonly property var especState: root.climate.espec || ({})
     readonly property var simconState: root.climate.simcon || ({})
+    readonly property var zundarState: root.climate.zundar || ({})
     // Во время автоматического прогона камерой управляет программа: ручные настройки только на паузе.
     readonly property bool manualAllowed: !root.run.active || root.run.paused === true
     // Выбранная команда в списке команд ESPEC и значения её параметров.
@@ -271,14 +272,18 @@ Card {
             }
 
             // --- Выбор камеры: у каждой своё назначение ---
-            RowLayout {
+            GridLayout {
+                id: chamberTiles
                 Layout.fillWidth: true
-                spacing: 8
+                columns: chamberTiles.width > 1250 ? 4 : 2
+                columnSpacing: 8
+                rowSpacing: 8
 
                 Repeater {
                     model: [
                         { "key": "espec", "name": "ESPEC MC-811P", "purpose": "Испытания платы", "link": "RS-485, 4 провода", "accent": "#0f766e", "fill": "#ecfdf5" },
                         { "key": "simcon_ascii2", "name": "Vötsch VT 7100 / Weiss WK1", "purpose": "Изделие в сборе: с трубками, в корпусе", "link": "RS-232, пульт S!MCON/32", "accent": "#1d4ed8", "fill": "#eff6ff" },
+                        { "key": "zundar_az1000", "name": "Zundar EEXTH1000U", "purpose": "Климатика: изделие в сборе или платы", "link": "Ethernet, Modbus TCP", "accent": "#7c3aed", "fill": "#f5f3ff" },
                         { "key": "simulator", "name": "Имитатор", "purpose": "Отладка на столе, без камеры", "link": "", "accent": "#9a3412", "fill": "#fff7ed" }
                     ]
 
@@ -288,7 +293,7 @@ Card {
                         readonly property bool selected: root.climate.driver === modelData.key
 
                         Layout.fillWidth: true
-                        Layout.preferredWidth: modelData.key === "simulator" ? 1 : 2
+                        Layout.preferredWidth: 1
                         Layout.preferredHeight: 54
                         radius: 12
                         color: selected ? modelData.fill : "#f8fafc"
@@ -509,6 +514,22 @@ Card {
                           + "   ·   холодильник " + (root.especState.refText || "—")
                           + "   ·   пульт " + (root.especState.keyText || "—")
                     color: root.textSoft
+                    font.pixelSize: 12
+                    font.family: "Bahnschrift"
+                    wrapMode: Text.WordWrap
+                }
+
+                // Zundar AZ1000: состояние, нагрев и охлаждение, влажность, управление по сети, пределы аварии.
+                Text {
+                    Layout.fillWidth: true
+                    visible: root.zundarState.visible === true && root.climate.ok === true
+                    text: "Камера: " + (root.zundarState.modeText || "—")
+                          + "   ·   нагрев " + (root.zundarState.heaterText || "—")
+                          + "   ·   охлаждение " + (root.zundarState.coolingText || "—")
+                          + "   ·   влажность " + (root.zundarState.humidityText || "—") + " (в камере " + (root.zundarState.humidityActualText || "—") + ")"
+                          + "   ·   управление по сети " + (root.zundarState.lanText || "—")
+                          + "   ·   пределы аварии " + (root.zundarState.limitsText || "—")
+                    color: root.zundarState.lanOk === false ? "#dc2626" : (root.zundarState.humidityOn ? "#b45309" : root.textSoft)
                     font.pixelSize: 12
                     font.family: "Bahnschrift"
                     wrapMode: Text.WordWrap
@@ -1203,6 +1224,33 @@ Card {
                               + "Кабель от клеммника переходника Moxa (TB) к DB9 камеры: клемма 1 TxD+ → 3 RD+, 2 TxD− → 4 RD−, "
                               + "3 RxD+ → 1 SD+, 4 RxD− → 2 SD−, 5 GND → 5. Соединять по знаку «+»/«−», буквы A/B у Moxa и ESPEC противоположны. "
                               + "На пульте камеры: 8 бит, без чётности, защита от удалённого управления выключена."
+                        color: root.textSoft
+                        font.pixelSize: 11
+                        font.family: "Bahnschrift"
+                        wrapMode: Text.WordWrap
+                    }
+
+                    // Zundar EEXTH1000U: контроллер AZ1000, Modbus TCP по Ethernet.
+                    RowLayout {
+                        Layout.fillWidth: true
+                        visible: root.climate.driver === "zundar_az1000"
+                        spacing: 8
+                        Caption { text: "IP камеры" }
+                        SettingField { key: "zundar_host"; Layout.preferredWidth: 140 }
+                        Caption { text: "Порт" }
+                        SettingField { key: "zundar_port"; Layout.preferredWidth: 60 }
+                        Caption { text: "Станция" }
+                        SettingField { key: "zundar_unit"; Layout.preferredWidth: 50 }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        visible: root.climate.driver === "zundar_az1000"
+                        text: "Кабель витой пары от разъёма LAN камеры в ноутбук (или через роутер). На пульте: Внутренняя настройка → 7 «Система» → "
+                              + "73 «Связь»: режим «Сервер», IP камеры (например 192.168.0.100); способ управления «Оба» или «Только LAN». "
+                              + "Ноутбуку - адрес в той же сети, например 192.168.0.10, маска 255.255.255.0. Порт 502, станция 0. "
+                              + "Без обмена 20 с камера сама рвёт связь - программа опрашивает её чаще."
                         color: root.textSoft
                         font.pixelSize: 11
                         font.family: "Bahnschrift"

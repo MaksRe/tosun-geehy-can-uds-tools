@@ -47,6 +47,7 @@ DRIVER_MODBUS_TCP = "modbus_tcp"
 DRIVER_MODBUS_RTU = "modbus_rtu"
 DRIVER_SIMCON = "simcon_ascii2"
 DRIVER_ESPEC = "espec"
+DRIVER_ZUNDAR = "zundar_az1000"
 
 VALUE_TYPES = ("int16", "uint16", "int32", "uint32", "float32")
 
@@ -540,6 +541,167 @@ class ModbusChamber(ChamberDriver):
             self.client.write_coil(spec.address, bool(on))
         else:
             self.client.write_registers(spec.address, [int(spec.on_value if on else spec.off_value)])
+
+    def close(self):
+        self.client.close()
+
+
+# ====================================================================== Zundar AZ1000
+
+# Регистры контроллера AZ1000 (камера Zundar EEXTH1000U), по инструкции, раздел 5.3. Holding, функции 03/06/10.
+ZUNDAR_STATE = 0x0001          # 1 - ожидание, 2 - работа, 3 - удержание, 4 - пропуск; запись 2 - пуск, 1 - стоп
+ZUNDAR_TYPE = 0x0002           # 0 AZ1000-T, 1 AZ1000-TH, 2 AZ1000-TS, 3 ZD800-T, 4 ZD800-TH
+ZUNDAR_MODE = 0x0003           # 0 - программа, 1 - фиксированный режим
+ZUNDAR_FIXED_TEMP = 0x002E     # уставка температуры фиксированного режима, ×10
+ZUNDAR_FIXED_HUMIDITY = 0x002F  # уставка влажности фиксированного режима, ×10; 0 - влажность выключена
+ZUNDAR_LAN_CONTROL = 0x00E0    # 1 - управление по сети разрешено
+ZUNDAR_ALARM_LIMITS = 0x00EB   # пределы аварии: верхний, нижний, превышение верхнего, нижнего, ×10
+ZUNDAR_NO_ALARM = 9999
+ZUNDAR_BLOCK = (0x0001, 0x1C)  # одним чтением: состояние ... номер аварии (0x001C)
+ZUNDAR_STATES = {1: "ожидание", 2: "работа", 3: "удержание", 4: "пропуск"}
+ZUNDAR_TYPES = {0: "AZ1000-T", 1: "AZ1000-TH", 2: "AZ1000-TS", 3: "ZD800-T", 4: "ZD800-TH"}
+
+
+def _s16(value: int) -> int:
+    value = int(value) & 0xFFFF
+    return value - 0x10000 if value >= 0x8000 else value
+
+
+class ZundarChamber(ChamberDriver):
+    """Камера Zundar (контроллер AZ1000, у нас EEXTH1000U) по Modbus TCP, порт 502, станция 0.
+
+    По инструкции контроллера (раздел 5):
+    - уставка задаётся в фиксированном режиме: 0x0003 = 1, затем 0x002E = температура ×10;
+      читается она из 0x0006, температура в камере - из 0x0004 (×10, со знаком);
+    - пуск - 0x0001 = 2, остановка - 0x0001 = 1 (ожидание);
+    - уставка влажности 0x002F = 0 выключает влажность: программа держит её выключенной;
+    - номер аварии 0x001C, 9999 - аварии нет;
+    - управление с компьютера возможно, только если на пульте выбран способ «Оба» или «Только LAN»
+      (0x00E0 = 1); без обмена 20 с контроллер сам закрывает соединение - опрос идёт чаще.
+    Каждая уставка и пуск сверяются чтением.
+    """
+
+    can_set = True
+    can_run = True
+    SETPOINT_TOLERANCE_C = 0.15
+    # Пределы аварии и признак управления по сети читаются не каждый опрос, а раз в столько опросов.
+    SLOW_EVERY = 15
+    SELFTEST_QUERIES = ("r 0001 28", "r 00E0 1", "r 00EB 4")
+
+    def __init__(self, host: str, port: int = 502, unit: int = 0, client: ModbusClient | None = None):
+        self.host = str(host)
+        self.port = int(port)
+        self.unit = int(unit)
+        self.client = client if client is not None else ModbusTcpClient(self.host, self.port, self.unit, timeout_s=3.0)
+        self.title = f"Zundar AZ1000 на {self.host}:{self.port}"
+        self._slow_left = 0
+        self.lan_control: bool | None = None
+        self.alarm_limits: tuple | None = None
+        self.last: dict = {}
+
+    def _read_block(self) -> dict:
+        start, count = ZUNDAR_BLOCK
+        regs = self.client.read_registers("holding", start, count)
+
+        def reg(address):
+            return regs[address - start]
+
+        return {
+            "state": reg(0x0001), "type": reg(0x0002), "mode": reg(0x0003),
+            "temp": _s16(reg(0x0004)) / 10.0, "humidity": _s16(reg(0x0005)) / 10.0,
+            "temp_sv": _s16(reg(0x0006)) / 10.0, "humidity_sv": _s16(reg(0x0007)) / 10.0,
+            "heat_pct": _s16(reg(0x000A)) / 10.0, "cool_pct": _s16(reg(0x000C)) / 10.0,
+            "humidify_pct": _s16(reg(0x000E)) / 10.0, "dehumidify_pct": _s16(reg(0x0010)) / 10.0,
+            "alarm": reg(0x001C),
+        }
+
+    def _read_slow(self):
+        """Признак управления по сети и пределы аварии: меняются редко, ошибка чтения не мешает работе."""
+        try:
+            self.lan_control = bool(self.client.read_registers("holding", ZUNDAR_LAN_CONTROL, 1)[0])
+            limits = self.client.read_registers("holding", ZUNDAR_ALARM_LIMITS, 4)
+            self.alarm_limits = tuple(_s16(value) / 10.0 for value in limits)
+        except ChamberError as error:
+            self._trace_event("SLOW", f"признак управления и пределы аварии не прочитаны: {error}", "WARN")
+
+    def read(self) -> ChamberReading:
+        state = self._read_block()
+        if self._slow_left <= 0:
+            self._read_slow()
+            self._slow_left = self.SLOW_EVERY
+        self._slow_left -= 1
+        self.last = state
+        alarm = None if state["alarm"] in (ZUNDAR_NO_ALARM, 0) else int(state["alarm"])
+        high, low = (self.alarm_limits[0], self.alarm_limits[1]) if self.alarm_limits else (None, None)
+        return ChamberReading(
+            actual_c=state["temp"], setpoint_c=state["temp_sv"], running=state["state"] in (2, 3), alarm=alarm,
+            details={
+                "mode": ZUNDAR_STATES.get(state["state"], f"состояние {state['state']}"),
+                "fixed": state["mode"] == 1, "type": ZUNDAR_TYPES.get(state["type"], str(state["type"])),
+                "humidity_on": state["humidity_sv"] > 0, "humidity_c": state["humidity"],
+                "humidity_set": state["humidity_sv"], "heater_pct": state["heat_pct"],
+                "cooling_pct": state["cool_pct"], "humidify_pct": state["humidify_pct"],
+                "lan_control": self.lan_control, "high_c": high, "low_c": low,
+            })
+
+    def _write(self, address: int, value: int):
+        try:
+            self.client.write_registers(address, [int(value) & 0xFFFF])
+        except ChamberError as error:
+            raise ChamberError(f"{error}. Проверьте на пульте способ управления «Оба» или «Только LAN» "
+                               "(Внутренняя настройка → 7 → 73 «Связь»)") from None
+
+    def _fixed_mode(self):
+        if self.last.get("mode") != 1:
+            self._write(ZUNDAR_MODE, 1)
+            self._trace_event("MODE", "камера переведена в фиксированный режим (0x0003 = 1)")
+
+    def set_setpoint(self, value_c: float):
+        raw = int(round(float(value_c) * 10.0))
+        if not -32768 <= raw <= 32767:
+            raise ChamberError(f"уставка {value_c} не помещается в регистр")
+        if not self.last:
+            self._read_block()
+        self._fixed_mode()
+        self._write(ZUNDAR_FIXED_TEMP, raw)
+        after = self._read_block()
+        self.last = after
+        if abs(after["temp_sv"] - float(value_c)) > self.SETPOINT_TOLERANCE_C:
+            raise ChamberError(f"камера не приняла уставку {float(value_c):+.1f} °C (в ней {after['temp_sv']:+.1f}): "
+                               "проверьте на пульте фиксированный режим и способ управления «Оба» или «Только LAN»")
+
+    def set_running(self, on: bool):
+        if not self.last:
+            self._read_block()
+        if on:
+            self._fixed_mode()
+            # Влажность программа держит выключенной: изделие испытывается только по температуре.
+            self._write(ZUNDAR_FIXED_HUMIDITY, 0)
+            self._trace_event("HUMIDITY", "уставка влажности 0: влажность выключена")
+        self._write(ZUNDAR_STATE, 2 if on else 1)
+        after = self._read_block()
+        self.last = after
+        running = after["state"] in (2, 3)
+        if running != bool(on):
+            raise ChamberError(("камера не пустилась" if on else "камера не остановилась")
+                               + f" (состояние {ZUNDAR_STATES.get(after['state'], after['state'])}): проверьте "
+                                 "аварии и способ управления на пульте")
+
+    def raw(self, text: str) -> str:
+        """Для проверки на месте: «r 0001 28» - прочитать регистры, «w 002E 800» - записать один регистр (HEX)."""
+        words = str(text).split()
+        try:
+            if len(words) == 3 and words[0].lower() in ("r", "read", "ч"):
+                address, count = int(words[1], 16), int(words[2])
+                values = self.client.read_registers("holding", address, count)
+                return " ".join(f"{address + index:04X}={value}" for index, value in enumerate(values))
+            if len(words) == 3 and words[0].lower() in ("w", "write", "з"):
+                address, value = int(words[1], 16), int(words[2])
+                self.client.write_registers(address, [value & 0xFFFF])
+                return f"{address:04X} <- {value}: записано"
+        except ValueError:
+            pass
+        raise ChamberError("строка для Zundar: «r 0001 28» (прочитать) или «w 002E 800» (записать), адрес - HEX")
 
     def close(self):
         self.client.close()
@@ -1841,6 +2003,9 @@ def make_driver(settings: dict) -> ChamberDriver | None:
             extra = []
         return SimconAscii2Chamber(settings.get("weiss_port", ""), int(settings.get("weiss_baud", 9600)),
                                    int(settings.get("simcon_address", 0)), extra_channels=extra)
+    if kind == DRIVER_ZUNDAR:
+        return ZundarChamber(settings.get("zundar_host", ""), int(settings.get("zundar_port", 502)),
+                             int(settings.get("zundar_unit", 0)))
     if kind == DRIVER_MODBUS_RTU:
         client = ModbusRtuClient(settings.get("rtu_port", ""), int(settings.get("rtu_baud", 9600)),
                                  settings.get("rtu_parity", "N"), int(settings.get("rtu_stopbits", 1)), unit)

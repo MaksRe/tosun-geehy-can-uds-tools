@@ -856,6 +856,7 @@
     const chamber = climate.chamber || {};
     const espec = climate.espec || {};
     const simcon = climate.simcon || {};
+    const zundar = climate.zundar || {};
     $("chamberName").textContent = chamber.name || "";
     $("chamber").innerHTML = !climate.connected
       ? `<span class="soft">Связь с камерой не включена в программе.</span>`
@@ -867,7 +868,10 @@
              ? " · " + esc(espec.modeText) : ""} · авария: <span class="${climate.alarm ? "bad" : ""}">${esc(climate.alarmText)}</span></div>` +
         (espec.heaterText && espec.heaterText !== "—"
           ? `<div class="soft">Нагреватель ${esc(espec.heaterText)} · холодильник ${esc(espec.refText)} · пределы ${esc(espec.lowText)} … ${esc(espec.highText)}</div>` : "") +
-        (climate.connected && simcon.visible ? simconHtml(simcon) : "");
+        (climate.connected && simcon.visible ? simconHtml(simcon) : "") +
+        (climate.connected && zundar.visible
+          ? `<div class="${zundar.lanOk === false ? "bad" : "soft"}" style="margin-top:6px">${esc(zundar.modeText)} · нагрев ${esc(zundar.heaterText)} · охлаждение ${esc(zundar.coolingText)}<br>` +
+            `влажность ${esc(zundar.humidityText)} (в камере ${esc(zundar.humidityActualText)}) · управление по сети ${esc(zundar.lanText)} · пределы аварии ${esc(zundar.limitsText)}</div>` : "");
 
     const live = s.live || {};
     const board = live.boardTemp || {}, fuel = live.fuelTemp || {}, main = live.main || {}, media = live.media || {};

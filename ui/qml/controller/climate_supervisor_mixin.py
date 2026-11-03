@@ -38,8 +38,8 @@ from collections import deque
 
 import chamber_fit
 from ui.qml import climate_scenario
-from ui.qml.climate_chamber import (DRIVER_ESPEC, DRIVER_SIMCON, DRIVER_SIMULATOR, parse_simcon_channels,
-                                    simcon_channel_name)
+from ui.qml.climate_chamber import (DRIVER_ESPEC, DRIVER_SIMCON, DRIVER_SIMULATOR, DRIVER_ZUNDAR,
+                                    parse_simcon_channels, simcon_channel_name)
 
 from .contract import AppControllerContract
 from .stability import rate_and_spread
@@ -319,13 +319,24 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
                                     "журнале: новые точки сверятся со старыми (повторяемость) и усреднятся", "warn")
 
         details = (getattr(reading, "details", None) or {}) if reading is not None else {}
-        if settings["driver"] == DRIVER_ESPEC and nodes and details.get("high_c") is not None:
+        if settings["driver"] in (DRIVER_ESPEC, DRIVER_ZUNDAR) and nodes and details.get("high_c") is not None                 and details.get("low_c") is not None:
             alarm_low, alarm_high = float(details["low_c"]), float(details["high_c"])
             inside = alarm_low < min(nodes) and max(nodes) < alarm_high
             add("espec_limits", inside,
                 f"Пределы аварии камеры {_c(alarm_low)} ... {_c(alarm_high)} охватывают все узлы" if inside
                 else f"Пределы аварии камеры {_c(alarm_low)} ... {_c(alarm_high)} не охватывают узлы: камера "
-                     f"откажет в уставке. Поправьте их в «Ручном управлении ESPEC»")
+                     f"откажет в уставке или уйдёт в аварию. Поправьте их "
+                     + ("в «Ручном управлении ESPEC»" if settings["driver"] == DRIVER_ESPEC
+                        else "на пульте камеры («Аварии» → пределы температуры)"))
+
+        if settings["driver"] == DRIVER_ZUNDAR and reading is not None:
+            lan = details.get("lan_control")
+            add("lan_control", lan is not False,
+                "Управление камерой по сети разрешено" if lan else
+                "Не прочитано, разрешено ли управление по сети: проверьте на пульте способ управления «Оба»"
+                if lan is None else
+                "На пульте камеры выбрано «Только сенсорное управление»: программа не сможет задать уставку. "
+                "Внутренняя настройка → 7 «Система» → выберите «Оба» или «Только LAN»", "block" if lan is False else "warn")
 
         if settings["driver"] == DRIVER_SIMCON:
             try:
@@ -335,8 +346,8 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             if extra:
                 names = "; ".join(f"{number} ({simcon_channel_name(number).lower()})" for number in extra)
                 add("channels", True, f"При пуске камеры включу каналы {names}, при остановке выключу", "warn")
-        if settings["driver"] == DRIVER_SIMCON and details.get("humidity_on"):
-            add("humidity", True, "У камеры включён канал «Влажность»: при пуске программа его выключит - "
+        if settings["driver"] in (DRIVER_SIMCON, DRIVER_ZUNDAR) and details.get("humidity_on"):
+            add("humidity", True, "У камеры включена влажность: при пуске программа её выключит - "
                                   "испытание только по температуре", "warn")
 
         multi = getattr(self, "_mb_on", None)
@@ -835,6 +846,12 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
 
     def _climate_auto_hardware_text(self) -> str:
         """Что делает камера сама: нагреватель и холодильник ESPEC - по ним видна неисправность."""
+        if self._climate_settings["driver"] == DRIVER_ZUNDAR:
+            details = getattr(self._climate_reading, "details", None) or {}
+            if details.get("heater_pct") is None:
+                return ""
+            return (f"Камера: {details.get('mode', '—')}, нагрев {float(details['heater_pct']):.0f} %, охлаждение "
+                    f"{float(details.get('cooling_pct') or 0.0):.0f} %.")
         if self._climate_settings["driver"] != DRIVER_ESPEC:
             return ""
         espec = self._climate_espec_view(self._climate_reading)
