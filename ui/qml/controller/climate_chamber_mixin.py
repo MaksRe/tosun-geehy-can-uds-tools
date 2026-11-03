@@ -65,6 +65,7 @@ from ui.qml.climate_chamber import (
     reading_text,
     resolve_port,
 )
+from ui.qml import net_setup
 from ui.qml.climate_diag import ChamberDiagLog, environment_info, moxa_registry_info
 from ui.qml import climate_scenario
 from ui.qml.climate_scenario import DEFAULTS as SCENARIO_DEFAULTS
@@ -199,6 +200,12 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         """Готовит раздел камеры и подключается, если так было в прошлый раз."""
         self._climate_lock = threading.Lock()
         self._climate_incoming: list[dict] = []
+        # Сеть ноутбука для камеры по Ethernet (Zundar): ход и итог настройки адаптера.
+        self._climate_net_status = ""
+        self._climate_net_ok: bool | None = None
+        self._climate_net_busy = False
+        # Для какого адреса камеры уже пробовали настроить сеть сами (окно разрешения - не чаще раза).
+        self._climate_net_tried_host = ""
         self._climate_settings = self._climate_default_settings()
         self._climate_settings.update(self._climate_load_settings())
         self._climate_limits_upgrade()
@@ -327,6 +334,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             "zundar_host": "192.168.0.100",
             "zundar_port": 502,
             "zundar_unit": 0,
+            # При «Подключить» самой задать проводному адаптеру ноутбука адрес в сети камеры.
+            "zundar_auto_net": True,
             # Каналы пульта S!MCON/32, включённые вместе с «Старт» на время прогона, например «3, 5»
             # (защита от конденсата, осушитель). Пусто - программа их не трогает.
             "simcon_extra_channels": "",
@@ -525,10 +534,44 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             diag.session_start(driver.title, self._climate_session_info())
         self._climate_link = ChamberLink(driver, float(self._climate_settings["poll_s"]), self._climate_queue_state,
                                          diag=diag)
+        if self._climate_settings.get("driver") == DRIVER_ZUNDAR and self._climate_settings.get("zundar_auto_net", True):
+            host = str(self._climate_settings.get("zundar_host", "")).strip()
+            if host and host != self._climate_net_tried_host:
+                # Камера по Ethernet: адрес ноутбука в её сети - сразу, без ручной настройки адаптера.
+                self._climate_net_tried_host = host
+                self._climate_net_setup(auto=True)
         self._climate_apply_live()
         self._climate_status = f"Подключаюсь: {driver.title}..."
         self._climate_ok = False
         self._climate_lost_reported = False
+        self.climateChanged.emit()
+        return True
+
+    def _climate_net_setup(self, auto: bool = False, restore: bool = False) -> bool:
+        """Адрес проводного адаптера ноутбука в сети камеры Zundar (или возврат DHCP) - в своём потоке.
+
+        Смена адреса требует прав администратора: Windows спросит разрешение. При auto (из «Подключить»)
+        адаптер, уже стоящий в сети камеры, не трогается и окно разрешения не появляется.
+        """
+        if self._climate_net_busy:
+            return False
+        host = str(self._climate_settings.get("zundar_host", "")).strip()
+        self._climate_net_busy = True
+        self._climate_net_ok = None
+        self._climate_net_status = ("Возвращаю адаптеру автоматический адрес..." if restore else
+                                    f"Проверяю сеть ноутбука для камеры {host}...")
+
+        def work():
+            try:
+                # Сама (при «Подключить») - только свободный адаптер; кнопкой - и занятый другой сетью.
+                ok, text = (net_setup.restore(host) if restore else net_setup.apply(host, force=not auto))
+            except Exception as error:  # noqa: BLE001 - поток не должен падать
+                ok, text = False, f"Настройка сети не выполнена: {error}"
+            # «Уже настроено» при подключении - без события: ничего не менялось.
+            quiet = auto and ok and text.startswith("Сеть уже настроена")
+            self._climate_queue_state({"kind": "net", "ok": ok, "text": text, "quiet": quiet})
+
+        threading.Thread(target=work, daemon=True, name="climate-net-setup").start()
         self.climateChanged.emit()
         return True
 
@@ -596,6 +639,14 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 self._climate_take_scan(state)
             elif state.get("kind") == "selftest":
                 self._climate_take_selftest(state)
+            elif state.get("kind") == "net":
+                self._climate_net_busy = False
+                self._climate_net_ok = bool(state.get("ok"))
+                self._climate_net_status = str(state.get("text", ""))
+                self._climate_diag_event("NET", self._climate_net_status, "INFO" if state.get("ok") else "WARN")
+                if not state.get("quiet"):
+                    self._climate_event(f"сеть ноутбука для камеры: {self._climate_net_status}",
+                                        "ok" if state.get("ok") else "warn")
             elif state.get("kind") == "reading":
                 self._climate_status = f"Нет связи с камерой: {state.get('text')}. Повторяю..."
                 self._climate_ok = False
@@ -1960,6 +2011,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             "espec": self._climate_espec_view(reading),
             "simcon": self._climate_simcon_view(reading),
             "zundar": self._climate_zundar_view(reading),
+            "net": {"status": self._climate_net_status, "ok": self._climate_net_ok, "busy": self._climate_net_busy,
+                    "laptop": net_setup.laptop_address(str(settings.get("zundar_host", ""))) or ""},
             "commands": ESPEC_COMMAND_LIST if settings["driver"] == DRIVER_ESPEC else [],
             "bridgeStatus": self._climate_bridge_status,
             "settings": {key: (value if not isinstance(value, float) else f"{value:g}".replace(".", ","))

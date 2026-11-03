@@ -1244,6 +1244,53 @@ Card {
                         Item { Layout.fillWidth: true }
                     }
 
+                    // Сеть ноутбука: адрес проводного адаптера в сети камеры (Windows спросит разрешение).
+                    RowLayout {
+                        Layout.fillWidth: true
+                        visible: root.climate.driver === "zundar_az1000"
+                        spacing: 8
+                        FancyButton {
+                            Layout.preferredHeight: 30
+                            fontPixelSize: 12
+                            text: (root.climate.net || {}).busy ? "Настраиваю..." : "Настроить сеть ноутбука"
+                            tone: "#7c3aed"; toneHover: "#6d28d9"; tonePressed: "#5b21b6"
+                            enabled: root.appController !== null && !(root.climate.net || {}).busy
+                            onClicked: if (root.appController) root.appController.setupChamberNetwork()
+                        }
+                        FancyButton {
+                            Layout.preferredHeight: 30
+                            fontPixelSize: 12
+                            text: "Вернуть автоматический адрес"
+                            tone: "#64748b"; toneHover: "#475569"; tonePressed: "#334155"
+                            enabled: root.appController !== null && !(root.climate.net || {}).busy
+                            onClicked: if (root.appController) root.appController.restoreChamberNetwork()
+                        }
+                        FancySwitch {
+                            checked: root.settings.zundar_auto_net !== false
+                            trackWidth: 44; trackHeight: 24
+                            onToggled: if (root.appController) root.appController.setClimateFlag("zundar_auto_net", checked)
+                        }
+                        Text {
+                            text: "сама при «Подключить»"
+                            color: root.textSoft
+                            font.pixelSize: 12
+                            font.family: "Bahnschrift"
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        visible: root.climate.driver === "zundar_az1000"
+                        text: ((root.climate.net || {}).status || "")
+                              || ("Ноутбуку нужен адрес в сети камеры: программа задаст проводному адаптеру " + ((root.climate.net || {}).laptop || "192.168.0.10")
+                                  + ", маска 255.255.255.0, без шлюза (Wi-Fi и интернет не трогаются). Windows спросит разрешение администратора.")
+                        color: (root.climate.net || {}).ok === false ? "#dc2626" : ((root.climate.net || {}).ok === true ? "#15803d" : root.textSoft)
+                        font.pixelSize: 12
+                        font.family: "Bahnschrift"
+                        wrapMode: Text.WordWrap
+                    }
+
                     Text {
                         Layout.fillWidth: true
                         visible: root.climate.driver === "zundar_az1000"

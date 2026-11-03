@@ -3368,6 +3368,16 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._climate_connect()
 
     @Slot()
+    def setupChamberNetwork(self):
+        """Цель функции в адресе проводного адаптера ноутбука в сети камеры Zundar; Windows спросит разрешение."""
+        self._climate_net_setup()
+
+    @Slot()
+    def restoreChamberNetwork(self):
+        """Цель функции в возврате адаптеру автоматического адреса (DHCP), когда камера больше не нужна."""
+        self._climate_net_setup(restore=True)
+
+    @Slot()
     def disconnectClimate(self):
         """Цель функции в отключении от камеры, затем её показания больше не читаются."""
         self._climate_disconnect()
