@@ -65,6 +65,7 @@ RULE_SHORT = {
     "settle_rate": "Порог скорости",
     "reach_timeout_min": "Ждать камеру до",
     "settle_timeout_min": "Ждать плату до",
+    "skip_unreached_min": "Пропуск узла через",
     "board_tolerance_c": "Допуск платы",
     "board_max_shift_c": "Сдвиг уставки до",
     "board_attempts": "Попыток доводки",

@@ -1506,6 +1506,10 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 return
             self._climate_run_set(f"Узел {where}: камера идёт к уставке {_c(setpoint)}, сейчас {_c(actual)}.")
             self._climate_run_timeout(now, "reach_timeout_min", f"камера не вышла на {_c(setpoint)}")
+            skip_min = self._climate_run_param("skip_unreached_min")
+            if skip_min > 0 and now - self._climate_run_since >= skip_min * 60.0 / self._climate_speed():
+                self._climate_run_skip_node(now, f"камера не вышла на {_c(setpoint)} за {skip_min:g} мин "
+                                                 f"(сейчас {_c(actual)})")
             return
 
         if stage == "settle":
@@ -1737,6 +1741,31 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             self._climate_run_finish(now)
         else:
             self._climate_run_enter("setpoint", now)
+
+    def _climate_run_skip_node(self, now: float, why: str):
+        """Узел недостижим (правило «пропустить узел»): без точки, прогон идёт к следующему или к концу.
+
+        В итоге прогона узел - в списке «без точки», как пропущенный человеком.
+        """
+        node = self._climate_run_node()
+        nodes = self._climate_run_nodes
+        last = self._climate_run_index + 1 >= len(nodes)
+        self._climate_event(f"узел {_c(node)} пропущен без точки: {why}. "
+                            + ("Это был последний шаг." if last else
+                               f"Перехожу к шагу {self._climate_run_index + 2} ({_c(nodes[self._climate_run_index + 1])})."),
+                            "warn")
+        self._climate_hook("_climate_auto_on_node_left", node, now, "сам: камера не вышла на уставку")
+        self._climate_run_index += 1
+        self._climate_run_reset_board()
+        self._climate_run_label_index = 0
+        self._climate_run_attempts = 0
+        self._climate_run_retry_at = 0.0
+        self._climate_hook("_climate_auto_alert", "board_miss", False, "")
+        if self._climate_run_index >= len(nodes):
+            self._climate_run_finish(now)
+        else:
+            self._climate_run_enter("setpoint", now)
+        self._climate_hook("_climate_auto_save", now)
 
     def _climate_run_capture_failed(self, now: float):
         """Точка не записалась: несколько повторов, затем пауза и зов оператора."""

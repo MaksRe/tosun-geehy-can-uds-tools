@@ -129,6 +129,6 @@ def test_step_left_by_hand_keeps_its_own_time(tmp_path: Path):
     stub._climate_auto_on_node_left(-40.0, 1000.0 + 6 * 3600 + 47 * 60, "Max")
     assert stub._climate_auto_skipped == [(-40.0, 24420.0)] and stub._climate_auto_node_start == 1000.0 + 24420.0
     assert any("оставлен без точки через 6:47 (Max)" in text for text in stub._climate_auto_problems)
-    assert "Без точки (оставлены вручную): -40,0 °C - 6:47" in stub._climate_auto_nodes_text()
+    assert "Без точки (пропущены): -40,0 °C - 6:47" in stub._climate_auto_nodes_text()
     stub._climate_run_index = 2
     assert stub._climate_auto_eta(stub._climate_auto_node_start) == 1860.0

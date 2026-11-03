@@ -575,11 +575,17 @@ class SimulatedChamber(ChamberDriver):
         self.self_heating_c = 0.0
         # Утечка тепла снаружи (кабель, оснастка): доля, с которой изделие тянется к комнате.
         self.leak = 0.0
+        # Неисправный холодильник (так было на Vötsch 02.11.2026): охлаждение не быстрее
+        # cool_ramp_c_per_min и не ниже cooling_floor_c. None - холодильник исправен.
+        self.cool_ramp_c_per_min: float | None = None
+        self.cooling_floor_c: float | None = None
         self._last = clock()
 
     def advance(self, minutes: float):
         """Проводит модель вперёд на заданное число минут модельного времени."""
         target = self.setpoint_c if self.running else self.AMBIENT_C
+        if self.cooling_floor_c is not None:
+            target = max(target, float(self.cooling_floor_c))
         remaining = float(minutes)
         step = 0.05
         while remaining > 1e-9:
@@ -587,7 +593,8 @@ class SimulatedChamber(ChamberDriver):
             # Мягкий подход к цели, но не быстрее предельной скорости камеры.
             wanted = (target - self.air_c) * (1.0 - math.exp(-dt / self.AIR_TAU_MIN))
             limit = self.RAMP_C_PER_MIN * dt
-            self.air_c += max(-limit, min(limit, wanted))
+            cool_limit = limit if self.cool_ramp_c_per_min is None else float(self.cool_ramp_c_per_min) * dt
+            self.air_c += max(-cool_limit, min(limit, wanted))
             target_product = self.air_c + self.self_heating_c + self.leak * (self.AMBIENT_C - self.air_c)
             self.product_c += (target_product - self.product_c) * (1.0 - math.exp(-dt / self.PRODUCT_TAU_MIN))
             remaining -= dt

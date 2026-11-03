@@ -710,6 +710,18 @@ Popup {
                     }
 
                     FormRow {
+                        label: "Пропустить узел, если камера не вышла на него за"
+                        hint: "Узел остаётся без точки, прогон идёт к следующему; в итоге он в списке «без точки». 0 - ждать, пропускает человек."
+                        NumberField {
+                            text: dialog.draftRevision >= 0 ? dialog.show(dialog.draft.skip_unreached_min) : ""
+                            onTextEdited: dialog.draft.skip_unreached_min = dialog.num(text)
+                            onEditingFinished: dialog.push()
+                        }
+                        Text { text: "мин (0 - ждать)"; color: dialog.textSoft; font.pixelSize: 12; font.family: "Bahnschrift" }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    FormRow {
                         label: "Плата должна дойти до температуры шага с допуском"
                         hint: "Плата греется сама, и её тянет к комнате (тепло по кабелю, оснастка), поэтому она устаивается не там, "
                               + "где воздух. Программа по ходу прогона строит прямую «плата ≈ k × воздух + b»: следующие шаги сразу "

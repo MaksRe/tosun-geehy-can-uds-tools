@@ -83,6 +83,12 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
     # Камера не идёт к уставке: за окно расстояние до уставки сократилось меньше чем на столько.
     AUTO_PROGRESS_WINDOW_S = 1200.0
     AUTO_PROGRESS_MIN_C = 1.0
+    # Камера почти не охлаждает (не греет): за окно воздух шёл к уставке медленнее, °C/мин, пока до неё
+    # дальше чем AUTO_RATE_GAP_C. Исправная камера идёт 1-3 °C/мин (ESPEC 28.10: 2,9 °C/мин к -40);
+    # Vötsch без холодильника 02.11.2026 - 0,02...0,14 °C/мин, а «не идёт к уставке» так и не сработало.
+    AUTO_RATE_WINDOW_S = 900.0
+    AUTO_RATE_MIN_C_MIN = 0.3
+    AUTO_RATE_GAP_C = 5.0
     # Температура ушла с уставки дольше чем на столько, с.
     AUTO_DRIFT_HOLD_S = 300.0
     # Плата не догоняет воздух дольше чем столько после выхода на уставку, с.
@@ -155,6 +161,8 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         self._climate_auto_alerts: dict = {}
         self._climate_auto_watch: dict = {}
         self._climate_auto_progress: deque = deque(maxlen=2000)
+        # Воздух камеры для скорости к уставке: (время, воздух, уставка).
+        self._climate_auto_air: deque = deque(maxlen=2000)
         self._climate_auto_durations: list = []
         # Шаги, оставленные вручную без точки (кнопка «следующий шаг», переход к шагу): узел и время на нём.
         self._climate_auto_skipped: list = []
@@ -488,10 +496,11 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         if stage == "setpoint":
             # Новый узел: всё, что относилось к прошлой уставке, больше не действует.
             self._climate_auto_progress.clear()
+            self._climate_auto_air.clear()
             for key in ("stopped_since", "stopped_retry", "setpoint_since", "setpoint_resent", "drift_since",
                         "gap_since"):
                 self._climate_auto_watch.pop(key, None)
-            for key in ("progress", "drift", "gap", "setpoint", "stopped", "stopped_hard"):
+            for key in ("progress", "drift", "gap", "setpoint", "stopped", "stopped_hard", "cooling", "heating"):
                 self._climate_auto_alert(key, False, "")
         self._climate_diag_event("RUN", f"этап {stage}, узел {self._climate_run_index + 1}")
         if self._climate_run_stage and self._climate_run_stage != "finish":
@@ -550,8 +559,14 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             self._climate_auto_follow_finish(now)
         if not self._climate_run_stage:
             return
-        # Возврат камеры после последнего шага: шагов больше нет - сторожить и сохранять нечего.
+        # Возврат камеры после последнего шага: шагов больше нет - сторожить и сохранять нечего,
+        # кроме одного: идёт ли камера к уставке «в конце» (02.11.2026 она 2 часа остывала сама).
         if self._climate_run_stage == "finish":
+            reading = self._climate_reading if self._climate_fresh(now) else None
+            actual = getattr(reading, "actual_c", None)
+            target = getattr(self, "_climate_run_finish_target", None)
+            if actual is not None and target is not None:
+                self._climate_auto_rate_watch(now, float(actual), float(target), "возврат камеры в конце прогона")
             return
         self._climate_auto_watchdog(now)
         self._climate_auto_maybe_report(now)
@@ -687,6 +702,9 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
                         f"камера не идёт к уставке {_c(node)}: за {int(self.AUTO_PROGRESS_WINDOW_S // 60)} мин "
                         f"приблизилась на {gained:.1f} °C, сейчас {_c(actual)}. {self._climate_auto_hardware_text()}",
                         "warn", "камера снова идёт к уставке.")
+                self._climate_auto_rate_watch(now, float(actual), target, f"узел {_c(node)}")
+            else:
+                self._climate_auto_rate_watch(now, None, target, "")
             # Температура ушла с уставки после выхода на неё.
             drift_limit = max(2.0 * tolerance, 2.0)
             drifting = self._climate_auto_since("drift_since", stage in HOLD_STAGES and distance > drift_limit, now)
@@ -756,6 +774,55 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             self._climate_auto_last_remind = now
             self._climate_event("прогон всё ещё на паузе. Проверьте камеру и нажмите «Продолжить прогон».", "warn")
 
+    def _climate_auto_rate_watch(self, now: float, actual: float | None, target: float, place: str):
+        """Камера почти не охлаждает или не греет: скорость воздуха к уставке за окно ниже порога.
+
+        «Не идёт к уставке» по сокращению расстояния молчит, пока камера ползёт на
+        0,1 °C/мин: за 20 мин это всё ещё больше 1 °C. Здесь - прямо: что не работает и что
+        проверить. actual=None - камера на уставке или этап не тот: предупреждения снимаются.
+        """
+        samples = self._climate_auto_air
+        if actual is None:
+            samples.clear()
+            self._climate_auto_alert("cooling", False, "", cleared="камера снова охлаждает.")
+            self._climate_auto_alert("heating", False, "", cleared="камера снова греет.")
+            return
+        speed = self._climate_speed()
+        if samples and abs(samples[-1][2] - float(target)) > 0.5:
+            # Новая уставка (доводка, следующий шаг, возврат в конце): прежний ход к ней не относится.
+            samples.clear()
+        if not samples or now - samples[-1][0] >= 10.0 / speed:
+            samples.append((now, float(actual), float(target)))
+        window = self.AUTO_RATE_WINDOW_S / speed
+        while len(samples) > 2 and now - samples[1][0] >= window:
+            samples.popleft()
+        gap = float(target) - float(actual)
+        old = samples[0] if samples and now - samples[0][0] >= window else None
+        if old is None or abs(gap) <= self.AUTO_RATE_GAP_C:
+            if abs(gap) <= self.AUTO_RATE_GAP_C:
+                self._climate_auto_alert("cooling", False, "", cleared="камера снова охлаждает.")
+                self._climate_auto_alert("heating", False, "", cleared="камера снова греет.")
+            return
+        minutes = (now - old[0]) * speed / 60.0
+        rate = (float(actual) - old[1]) / minutes if minutes > 0 else 0.0
+        cooling = gap < 0
+        toward = -rate if cooling else rate
+        weak = toward < self.AUTO_RATE_MIN_C_MIN
+        rate_text = f"{rate:+.2f} °C/мин".replace(".", ",")
+        where = f" ({place})" if place else ""
+        if cooling:
+            text = (f"камера почти не охлаждает{where}: за {int(self.AUTO_RATE_WINDOW_S // 60)} мин {rate_text} "
+                    f"при уставке {_c(target)}, в камере {_c(actual)}; исправная идёт 1-3 °C/мин. Похоже, холодильник "
+                    f"камеры выключен или неисправен: проверьте холодильный агрегат, охлаждающую воду и ошибки на "
+                    f"пульте. {self._climate_auto_hardware_text()}").strip()
+        else:
+            text = (f"камера почти не греет{where}: за {int(self.AUTO_RATE_WINDOW_S // 60)} мин {rate_text} "
+                    f"при уставке {_c(target)}, в камере {_c(actual)}. Похоже, нагреватель выключен или сработала "
+                    f"защита по температуре: проверьте пульт. {self._climate_auto_hardware_text()}").strip()
+        self._climate_auto_alert("cooling" if cooling else "heating", weak, text, "bad",
+                                 cleared=f"камера снова {'охлаждает' if cooling else 'греет'}: {rate_text}.")
+        self._climate_auto_alert("heating" if cooling else "cooling", False, "")
+
     def _climate_auto_hardware_text(self) -> str:
         """Что делает камера сама: нагреватель и холодильник ESPEC - по ним видна неисправность."""
         if self._climate_settings["driver"] != DRIVER_ESPEC:
@@ -787,7 +854,7 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         parts = [", ".join(f"{_c(node)} - {duration_text(seconds)}" for node, seconds in self._climate_auto_durations)]
         skipped = getattr(self, "_climate_auto_skipped", None) or []
         if skipped:
-            parts.append("Без точки (оставлены вручную): " + ", ".join(
+            parts.append("Без точки (пропущены): " + ", ".join(
                 f"{_c(node)} - {duration_text(seconds)}" for node, seconds in skipped))
         return ". ".join(part for part in parts if part)
 
