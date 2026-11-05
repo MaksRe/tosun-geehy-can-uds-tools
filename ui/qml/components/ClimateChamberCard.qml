@@ -1397,10 +1397,11 @@ Card {
                         Item { Layout.fillWidth: true }
                     }
 
-                    // Строка камере Weiss как есть: проверка связи на месте. У ESPEC она в блоке «Команды камеры».
+                    // Строка камере как есть: проверка связи на месте (Weiss - «$00I», Zundar - «r 0001 60»).
+                    // У ESPEC она в блоке «Команды камеры».
                     RowLayout {
                         Layout.fillWidth: true
-                        visible: root.climate.driver === "simcon_ascii2"
+                        visible: root.climate.driver === "simcon_ascii2" || root.climate.driver === "zundar_az1000"
                         spacing: 8
                         Caption { text: "Команда камере" }
 
@@ -1408,7 +1409,8 @@ Card {
                             id: rawField
                             Layout.preferredWidth: 220
                             Layout.preferredHeight: 30
-                            placeholderText: root.climate.driver === "espec" ? "например TEMP? или MON?" : "например $00I"
+                            placeholderText: root.climate.driver === "espec" ? "например TEMP? или MON?"
+                                             : (root.climate.driver === "zundar_az1000" ? "например r 0001 60" : "например $00I")
                             textColor: root.textMain
                             bgColor: root.inputBg
                             borderColor: root.inputBorder
@@ -1424,7 +1426,9 @@ Card {
                             tone: "#64748b"; toneHover: "#475569"; tonePressed: "#334155"
                             toolTipText: root.climate.driver === "espec"
                                          ? "Адрес и конец строки добавляются сами"
-                                         : "Строка уходит как есть, <CR> добавляется сам"
+                                         : (root.climate.driver === "zundar_az1000"
+                                            ? "r АДРЕС ЧИСЛО - прочитать регистры (адрес HEX, до 120 за раз); w АДРЕС ЗНАЧЕНИЕ - записать"
+                                            : "Строка уходит как есть, <CR> добавляется сам")
                             enabled: root.climate.connected === true && rawField.text.length > 0
                             onClicked: if (root.appController) root.appController.sendClimateRaw(rawField.text)
                         }
@@ -1440,7 +1444,9 @@ Card {
                             color: (root.climate.rawLog || []).length > 0 && !(root.climate.rawLog[0].ok) ? "#dc2626" : root.textMain
                             font.pixelSize: 12
                             font.family: "Consolas"
-                            elide: Text.ElideRight
+                            // Ответ Zundar - десятки регистров: переносить, а не обрезать.
+                            wrapMode: root.climate.driver === "zundar_az1000" ? Text.WrapAnywhere : Text.NoWrap
+                            elide: root.climate.driver === "zundar_az1000" ? Text.ElideNone : Text.ElideRight
                         }
                     }
 

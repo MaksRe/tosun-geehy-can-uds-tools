@@ -826,6 +826,12 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 return False
             self._climate_link.command("raw", line)
             self._climate_command_status = f"Отправляю «{line}»..."
+        elif self._climate_settings["driver"] == DRIVER_ZUNDAR:
+            # Запись регистра - это ручное управление камерой: во время прогона - только на паузе.
+            if line.split()[0].lower() in ("w", "write", "з") and not self._climate_manual_allowed():
+                return False
+            self._climate_link.command("raw", line)
+            self._climate_command_status = f"Отправляю «{line}»..."
         else:
             self._climate_link.command("raw", line)
             self._climate_command_status = f"Отправляю «{line}»: ответ придёт не раньше чем через 5 с после прошлой строки."
