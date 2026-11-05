@@ -85,9 +85,32 @@ def test_netsh_commands_have_no_gateway():
     assert net_setup.netsh_dhcp("Ethernet")[-1] == "source=dhcp"
 
 
+def test_another_connection_in_the_camera_network_is_named(monkeypatch):
+    """05.11.2026: Wi-Fi 192.168.0.140/24 и кабель к камере 192.168.0.10/24 - одна сеть на двух подключениях."""
+    addresses = json.dumps([
+        {"InterfaceAlias": "Ethernet 2", "IPAddress": "192.168.0.10", "PrefixLength": 24},
+        {"InterfaceAlias": "Беспроводная сеть", "IPAddress": "192.168.0.140", "PrefixLength": 24},
+        {"InterfaceAlias": "Tailscale", "IPAddress": "100.74.18.95", "PrefixLength": 32},
+        {"InterfaceAlias": "Подключение по локальной сети* 2", "IPAddress": "169.254.121.72", "PrefixLength": 16},
+    ])
+    conflicts = net_setup.same_network_elsewhere(addresses, "192.168.0.100", "Ethernet 2")
+    assert conflicts == [("Беспроводная сеть", "192.168.0.140")]
+    text = net_setup.conflict_text(conflicts, "192.168.0.100")
+    assert "«Беспроводная сеть» 192.168.0.140 тоже в сети 192.168.0.0/24" in text and "192.168.10.100" in text
+    assert net_setup.same_network_elsewhere(addresses, "192.168.10.100", "Ethernet 2") == []
+    assert "192.168.20.100" in net_setup.conflict_text([("Wi-Fi", "192.168.10.5")], "192.168.10.100")
+    # Сеть кабеля в порядке, но Wi-Fi в тех же адресах - итог настройки сети с ошибкой и подсказкой.
+    monkeypatch.setattr(net_setup, "list_wired_adapters",
+                        lambda: [Adapter("Ethernet 2", "", True, [("192.168.0.10", 24)])])
+    monkeypatch.setattr(net_setup, "network_conflicts", lambda host, adapter: conflicts)
+    ok, text = net_setup.apply("192.168.0.100")
+    assert not ok and text.startswith("Сеть уже настроена") and "Беспроводная сеть" in text
+
+
 def test_apply_and_restore(monkeypatch):
     state = {"adapters": net_setup.parse_adapters(ADAPTERS, ADDRESSES), "calls": []}
     monkeypatch.setattr(net_setup, "list_wired_adapters", lambda: state["adapters"])
+    monkeypatch.setattr(net_setup, "network_conflicts", lambda host, adapter: [])
 
     def elevated(arguments):
         state["calls"].append(arguments)

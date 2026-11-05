@@ -99,11 +99,64 @@ def list_wired_adapters() -> list[Adapter]:
     try:
         adapters = _powershell("Get-NetAdapter -Physical | Select-Object Name,InterfaceDescription,Status,MediaType "
                                "| ConvertTo-Json -Compress")
-        addresses = _powershell("Get-NetIPAddress -AddressFamily IPv4 | Select-Object InterfaceAlias,IPAddress,"
-                                "PrefixLength | ConvertTo-Json -Compress")
+        addresses = _powershell(_ADDRESSES_COMMAND)
     except (OSError, subprocess.SubprocessError):
         return []
     return parse_adapters(adapters.stdout, addresses.stdout)
+
+
+_ADDRESSES_COMMAND = ("Get-NetIPAddress -AddressFamily IPv4 | Select-Object InterfaceAlias,IPAddress,PrefixLength "
+                      "| ConvertTo-Json -Compress")
+
+
+def same_network_elsewhere(addresses_json: str, host: str, adapter: str) -> list[tuple[str, str]]:
+    """Другие подключения ноутбука (Wi-Fi, VPN) с адресом в сети камеры: [(имя, адрес)].
+
+    05.11.2026: Wi-Fi ноутбука был 192.168.0.140/24, а кабель к камере - 192.168.0.10/24. У ноутбука
+    две сети с одинаковыми адресами: пакеты к камере могут уйти не в кабель, а «Найти камеру» нашла
+    192.168.0.1 - устройство сети Wi-Fi, а не камеру.
+    """
+    network = camera_network(host)
+    if network is None:
+        return []
+    try:
+        rows = _as_list(json.loads(addresses_json or "null"))
+    except ValueError:
+        return []
+    found = []
+    for row in rows:
+        alias, address = str(row.get("InterfaceAlias") or ""), str(row.get("IPAddress") or "")
+        try:
+            inside = ipaddress.IPv4Address(address) in network
+        except ValueError:
+            continue
+        if inside and alias != adapter and address != str(host).strip():
+            found.append((alias, address))
+    return found
+
+
+def conflict_text(conflicts: list[tuple[str, str]], host: str) -> str:
+    """Словами: другая сеть ноутбука совпадает с сетью камеры, и что сделать."""
+    if not conflicts:
+        return ""
+    network = camera_network(host)
+    names = ", ".join(f"«{alias}» {address}" for alias, address in conflicts)
+    other = "192.168.20.100" if network is not None and ipaddress.IPv4Address("192.168.10.100") in network \
+        else "192.168.10.100"
+    return (f"Внимание: {names} тоже в сети {network}. У ноутбука две сети с одинаковыми адресами: пакеты к камере "
+            f"могут уйти не в кабель, а находки вроде x.x.x.1 - устройства той сети. Смените на пульте (73 «Связь», "
+            f"Local IP) сеть камеры, например на {other}, сохраните, выключите и включите камеру, впишите этот IP в "
+            "программе и нажмите «Настроить сеть ноутбука». Или на время работы с камерой отключите ту сеть.")
+
+
+def network_conflicts(host: str, adapter: str) -> list[tuple[str, str]]:
+    if sys.platform != "win32":
+        return []
+    try:
+        addresses = _powershell(_ADDRESSES_COMMAND)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return same_network_elsewhere(addresses.stdout, host, adapter)
 
 
 def camera_network(host: str) -> ipaddress.IPv4Network | None:
@@ -203,7 +256,7 @@ def apply(host: str, force: bool = False) -> tuple[bool, str]:
     adapters = list_wired_adapters()
     step = plan(host, adapters, force)
     if step["action"] == "ok":
-        return True, step["text"][:1].upper() + step["text"][1:] + "."
+        return _with_conflicts(True, step["text"][:1].upper() + step["text"][1:] + ".", host, step["adapter"])
     if step["action"] == "error":
         return False, step["text"][:1].upper() + step["text"][1:] + "."
     ok, text = run_elevated_netsh(netsh_static(step["adapter"], step["address"], step["mask"]))
@@ -213,7 +266,14 @@ def apply(host: str, force: bool = False) -> tuple[bool, str]:
     if again is None:
         return False, (f"Адрес {step['address']} задан «{step['adapter']}», но Windows его ещё не показывает: "
                        "подождите несколько секунд и нажмите «Подключить».")
-    return True, f"Сеть настроена: «{step['adapter']}» {step['address']}, маска {MASK}. Камера {host} в той же сети."
+    return _with_conflicts(True, f"Сеть настроена: «{step['adapter']}» {step['address']}, маска {MASK}. Камера {host} "
+                                 "в той же сети.", host, step["adapter"])
+
+
+def _with_conflicts(ok: bool, text: str, host: str, adapter: str) -> tuple[bool, str]:
+    """Сеть кабеля настроена, но другая сеть ноутбука в тех же адресах - это ошибка настройки."""
+    warning = conflict_text(network_conflicts(host, adapter), host)
+    return (False, f"{text} {warning}") if warning else (ok, text)
 
 
 def parse_connections(payload: str, own_pid: int | None = None) -> list[dict]:
