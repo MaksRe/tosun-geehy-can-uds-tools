@@ -871,7 +871,9 @@
         (climate.connected && simcon.visible ? simconHtml(simcon) : "") +
         (climate.connected && zundar.visible
           ? `<div class="${zundar.lanOk === false ? "bad" : "soft"}" style="margin-top:6px">${esc(zundar.modeText)} · нагрев ${esc(zundar.heaterText)} · охлаждение ${esc(zundar.coolingText)}<br>` +
-            `влажность ${esc(zundar.humidityText)} (в камере ${esc(zundar.humidityActualText)}) · управление по сети ${esc(zundar.lanText)} · пределы аварии ${esc(zundar.limitsText)}</div>` : "");
+            `влажность ${esc(zundar.humidityText)} (в камере ${esc(zundar.humidityActualText)}) · управление по сети ${esc(zundar.lanText)} · пределы аварии ${esc(zundar.limitsText)}</div>` : "") +
+        (climate.connected && (climate.dew || {}).visible
+          ? `<div class="${climate.dew.danger ? "bad" : "soft"}" style="margin-top:6px">${esc(climate.dew.text)}</div>` : "");
 
     const live = s.live || {};
     const board = live.boardTemp || {}, fuel = live.fuelTemp || {}, main = live.main || {}, media = live.media || {};

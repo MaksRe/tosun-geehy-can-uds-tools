@@ -69,6 +69,10 @@ def status_report(snapshot: dict) -> str:
                  ("Уставка", climate.get("setpointText")),
                  ("Режим", f"{climate.get('runningText', '—')}, {espec.get('modeText', '—')}"),
                  ("Авария", climate.get("alarmText"))]
+        dew = climate.get("dew") or {}
+        if dew.get("visible"):
+            rows.append(("Роса" if dew.get("danger") else "Точка росы",
+                         ("⚠ " if dew.get("danger") else "") + str(dew.get("text") or "")))
     else:
         rows.append(("Камера", "не подключена к программе"))
     board = live.get("boardTemp") or {}

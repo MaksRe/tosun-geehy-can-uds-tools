@@ -722,6 +722,20 @@ Popup {
                     }
 
                     FormRow {
+                        label: "Отогревать камеру не быстрее"
+                        hint: "Шаг теплее прежнего и возврат в конце: уставка камеры растёт с этой скоростью, а не сразу. Плата в корпусе "
+                              + "отстаёт от воздуха, и тёплый воздух на холодной плате даёт росу. Время выхода на узел считается "
+                              + "от конца отогрева. 0 - камера идёт к уставке как может."
+                        NumberField {
+                            text: dialog.draftRevision >= 0 ? dialog.show(dialog.draft.warm_ramp_c_min) : ""
+                            onTextEdited: dialog.draft.warm_ramp_c_min = dialog.num(text)
+                            onEditingFinished: dialog.push()
+                        }
+                        Text { text: "°C/мин (0 - как может)"; color: dialog.textSoft; font.pixelSize: 12; font.family: "Bahnschrift" }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    FormRow {
                         label: "Плата должна дойти до температуры шага с допуском"
                         hint: "Плата греется сама, и её тянет к комнате (тепло по кабелю, оснастка), поэтому она устаивается не там, "
                               + "где воздух. Программа по ходу прогона строит прямую «плата ≈ k × воздух + b»: следующие шаги сразу "

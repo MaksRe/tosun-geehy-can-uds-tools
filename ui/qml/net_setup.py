@@ -216,6 +216,73 @@ def apply(host: str, force: bool = False) -> tuple[bool, str]:
     return True, f"Сеть настроена: «{step['adapter']}» {step['address']}, маска {MASK}. Камера {host} в той же сети."
 
 
+def parse_connections(payload: str, own_pid: int | None = None) -> list[dict]:
+    """Разбор ответа PowerShell о соединениях TCP к камере: [{"state", "local_port", "pid", "name", "path"}].
+
+    Соединения этой программы (own_pid) не в счёт: ищем чужие.
+    """
+    try:
+        rows = _as_list(json.loads(payload or "null"))
+    except ValueError:
+        return []
+    result = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            pid = int(row.get("Pid") or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        if own_pid is not None and pid == int(own_pid):
+            continue
+        result.append({"state": str(row.get("State") or ""), "local_port": row.get("LocalPort"), "pid": pid,
+                       "name": str(row.get("Name") or ""), "path": str(row.get("Path") or "")})
+    return result
+
+
+def camera_connections(host: str, port: int, own_pid: int | None = None) -> list[dict] | None:
+    """Соединения TCP этого ноутбука с камерой host:port (кроме своих). None - узнать нельзя."""
+    if sys.platform != "win32":
+        return None
+    try:
+        address = str(ipaddress.IPv4Address(str(host).strip()))
+    except ValueError:
+        return None
+    command = (f"@(Get-NetTCPConnection -RemoteAddress '{address}' -RemotePort {int(port)} -ErrorAction SilentlyContinue) "
+               "| ForEach-Object { $p = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue; "
+               "[pscustomobject]@{State=[string]$_.State; LocalPort=$_.LocalPort; Pid=$_.OwningProcess; "
+               "Name=$p.ProcessName; Path=$p.Path} } | ConvertTo-Json -Compress")
+    try:
+        result = _powershell(command)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return parse_connections(result.stdout, own_pid)
+
+
+# Состояния соединения, в которых оно держит камеру (или вот-вот будет держать).
+HOLDING_STATES = ("established", "synsent", "synreceived", "closewait")
+
+
+def connections_text(connections: list[dict] | None, host: str, port: int) -> str:
+    """Словами: занимает ли камеру кто-то с этого ноутбука и что с этим делать."""
+    if connections is None:
+        return "Не удалось узнать, кто ещё подключён к камере с этого ноутбука."
+    holding = [item for item in connections if item["state"].replace(" ", "").lower() in HOLDING_STATES]
+    if not holding:
+        return (f"С этого ноутбука к камере {host}:{port} больше никто не подключён. Подключения с других компьютеров "
+                "отсюда не видно: если камера в общей сети, закройте на них программы связи с камерой - контроллер "
+                "может держать только одно подключение.")
+    names = []
+    for item in holding:
+        name = item["name"] or "неизвестная программа"
+        if name.lower().startswith(("python", "pythonw")) or "tosun" in item["path"].lower():
+            name = f"вторая копия этой программы ({name})"
+        names.append(f"{name}, PID {item['pid']}")
+    return (f"К камере {host}:{port} с этого ноутбука уже подключено: {'; '.join(dict.fromkeys(names))}. Контроллер "
+            "может держать только одно подключение: закройте эту программу (или завершите процесс в диспетчере "
+            "задач) и подключитесь снова.")
+
+
 def restore(host: str) -> tuple[bool, str]:
     """Вернуть автоматический адрес адаптеру, настроенному для камеры host."""
     adapter = adapter_in_network(list_wired_adapters(), host)

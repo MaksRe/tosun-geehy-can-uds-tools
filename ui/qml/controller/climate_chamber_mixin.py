@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import pathlib
 import sys
 import threading
@@ -56,6 +57,7 @@ from ui.qml.climate_chamber import (
     SimconAscii2Chamber,
     build_espec_command,
     describe_espec_answer,
+    dew_point_c,
     espec_is_setting,
     espec_mode_text,
     list_serial_ports,
@@ -157,6 +159,11 @@ def _c(value) -> str:
     return f"{float(value):+.1f} °C".replace(".", ",")
 
 
+def _rate(value) -> str:
+    """Скорость для показа: «1 °C/мин», «0,5 °C/мин»."""
+    return f"{float(value):g} °C/мин".replace(".", ",")
+
+
 def _pct(value) -> str:
     """Относительная влажность для показа: «45,0 %»."""
     if value is None:
@@ -206,6 +213,10 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         self._climate_net_busy = False
         # Для какого адреса камеры уже пробовали настроить сеть сами (окно разрешения - не чаще раза).
         self._climate_net_tried_host = ""
+        # Кто ещё с этого ноутбука подключён к камере (проверка при отказе связи): текст и когда проверяли.
+        self._climate_peers_text = ""
+        self._climate_peers_at = None
+        self._climate_peers_busy = False
         self._climate_settings = self._climate_default_settings()
         self._climate_settings.update(self._climate_load_settings())
         self._climate_limits_upgrade()
@@ -303,6 +314,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         # Пары «уставка камеры - где устоялась плата» за прогон: из них модель «воздух → плата».
         self._climate_run_board_pairs: list[dict] = []
         self._climate_run_reset_board()
+        # Отогрев ступенями (правило «отогрев не быстрее»): цель, скорость, текущая ступень. None - не идёт.
+        self._climate_ramp = None
         self._climate_run_status = "Автоматический прогон не идёт."
         self._climate_run_color = "#64748b"
 
@@ -575,6 +588,40 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         self.climateChanged.emit()
         return True
 
+    # Проверка «кто ещё подключён к камере» при отказах связи - не чаще раза в столько секунд.
+    PEERS_CHECK_EVERY_S = 120.0
+
+    def _climate_peers_check(self, now: float) -> bool:
+        """Связи с камерой Zundar нет: не держит ли её другая программа этого ноутбука (в своём потоке).
+
+        Контроллер может держать одно подключение: вторая копия нашей программы или другая
+        программа связи (Modbus Poll, панель производителя) не пустит нас. Подключения с других
+        компьютеров с ноутбука не видны - о них говорит текст.
+        """
+        if self._climate_settings.get("driver") != DRIVER_ZUNDAR or self._climate_peers_busy:
+            return False
+        if self._climate_peers_at is not None and now - self._climate_peers_at < self.PEERS_CHECK_EVERY_S:
+            return False
+        self._climate_peers_at = now
+        self._climate_peers_busy = True
+        link = self._climate_link
+        driver = link.driver if link is not None else None
+        host = str(getattr(driver, "host", None) or self._climate_settings.get("zundar_host", "")).strip()
+        port = int(getattr(driver, "port", None) or self._climate_settings.get("zundar_port", 502))
+
+        def work():
+            try:
+                connections = net_setup.camera_connections(host, port, own_pid=os.getpid())
+                text = net_setup.connections_text(connections, host, port)
+                busy = bool(connections) and any(item["state"].replace(" ", "").lower() in net_setup.HOLDING_STATES
+                                                 for item in connections)
+            except Exception as error:  # noqa: BLE001 - поток не должен падать
+                text, busy = f"Не удалось узнать, кто ещё подключён к камере: {error}", False
+            self._climate_queue_state({"kind": "peers", "text": text, "busy": busy})
+
+        threading.Thread(target=work, daemon=True, name="climate-peers").start()
+        return True
+
     def _climate_disconnect(self, quiet: bool = False):
         link = self._climate_link
         self._climate_link = None
@@ -619,6 +666,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 title = self._climate_link.driver.title if self._climate_link is not None else "камера"
                 self._climate_status = f"Связь есть: {title}."
                 self._climate_ok = True
+                self._climate_peers_text = ""
                 if self._climate_lost_reported:
                     self._climate_lost_reported = False
                     self._climate_event("связь с камерой восстановлена.", "ok")
@@ -647,9 +695,18 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 if not state.get("quiet"):
                     self._climate_event(f"сеть ноутбука для камеры: {self._climate_net_status}",
                                         "ok" if state.get("ok") else "warn")
+            elif state.get("kind") == "peers":
+                self._climate_peers_busy = False
+                text = str(state.get("text", ""))
+                if text != self._climate_peers_text:
+                    self._climate_diag_event("PEERS", text, "WARN" if state.get("busy") else "INFO")
+                    if state.get("busy"):
+                        self._climate_event(f"камера занята: {text}", "warn")
+                self._climate_peers_text = text
             elif state.get("kind") == "reading":
                 self._climate_status = f"Нет связи с камерой: {state.get('text')}. Повторяю..."
                 self._climate_ok = False
+                self._climate_peers_check(now)
             else:
                 self._climate_command_status = ("Камера: " if state.get("ok") else "Камера не выполнила: ") + \
                     str(state.get("text"))
@@ -1253,6 +1310,170 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         """Уставка камеры на этом шаге: температура шага плюс сдвиг доводки платы."""
         return self._climate_run_node() + self._climate_run_offset
 
+    # Отогрев ступенями: новая уставка камере, когда ступень выросла на столько °C.
+    RAMP_STEP_C = 0.5
+    # Цель теплее воздуха не больше чем на столько °C - сразу к цели: плате это не страшно.
+    RAMP_MIN_GAP_C = 3.0
+
+    def _climate_ramp_rate(self) -> float:
+        return max(0.0, self._climate_run_param("warm_ramp_c_min"))
+
+    def _climate_ramp_begin(self, target: float, now: float) -> float:
+        """Что задать камере сейчас: при правиле «отогрев не быстрее» - первую ступень отогрева, иначе target.
+
+        Плата в корпусе отстаёт от воздуха камеры: при скачке уставки с холода тёплый воздух
+        (с инеем испарителя он влажный) ложится росой на холодную плату. Поэтому к теплу
+        уставка камеры растёт с заданной скоростью, а не сразу. Охлаждение - как может
+        камера: плата при нём теплее воздуха, роса на ней не выпадает.
+        """
+        self._climate_ramp = None
+        rate = self._climate_ramp_rate()
+        actual = getattr(self._climate_reading, "actual_c", None) if self._climate_fresh(now) else None
+        if rate <= 0 or actual is None or float(target) - float(actual) <= self.RAMP_MIN_GAP_C:
+            return float(target)
+        # Первая ступень - на минуту отогрева выше воздуха: камера начинает греть сразу.
+        first = round(float(actual) + rate, 1)
+        if first >= float(target):
+            return float(target)
+        self._climate_ramp = {"to": float(target), "rate": rate, "value": first, "sent": first, "last": now}
+        minutes = (float(target) - float(actual)) / rate
+        self._climate_event(f"отогрев не быстрее {_rate(rate)}: уставка камеры пойдёт от {_c(actual)} к "
+                            f"{_c(target)} ступенями, около {minutes:.0f} мин.", "info")
+        return first
+
+    def _climate_ramp_tick(self, now: float) -> bool:
+        """Ведёт отогрев: следующая ступень уставки по времени. True - отогрев ещё идёт."""
+        ramp = getattr(self, "_climate_ramp", None)
+        if not ramp:
+            return False
+        minutes = max(0.0, now - ramp["last"]) * self._climate_speed() / 60.0
+        ramp["last"] = now
+        # Плата холоднее точки росы воздуха: отогрев стоит, пока она прогреется (воздух при той же
+        # температуре влагу больше не прибавляет, а плата идёт к нему). Не дольше RAMP_DEW_HOLD_MAX_MIN.
+        dew = self._climate_dew(now)
+        if dew is not None and dew["danger"] and ramp.get("held_min", 0.0) < self.RAMP_DEW_HOLD_MAX_MIN:
+            if not ramp.get("held"):
+                self._climate_event(f"отогрев приостановлен на {_c(ramp['sent'])}: {dew['text']} Жду, пока плата "
+                                    f"прогреется (не дольше {self.RAMP_DEW_HOLD_MAX_MIN:g} мин).", "warn")
+            ramp["held"] = True
+            ramp["held_min"] = ramp.get("held_min", 0.0) + minutes
+            return True
+        if ramp.get("held"):
+            ramp["held"] = False
+            self._climate_event(f"отогрев продолжен с {_c(ramp['sent'])}: "
+                                + ("плата теплее точки росы." if not (dew and dew["danger"]) else
+                                   f"ждал {self.RAMP_DEW_HOLD_MAX_MIN:g} мин, плата так и не прогрелась."), "info")
+        ramp["value"] = min(ramp["to"], ramp["value"] + ramp["rate"] * minutes)
+        done = ramp["value"] >= ramp["to"] - 0.05
+        if done or ramp["value"] - ramp["sent"] >= self.RAMP_STEP_C:
+            value = ramp["to"] if done else round(ramp["value"], 1)
+            if self._climate_send_setpoint(value):
+                ramp["sent"] = value
+                if done:
+                    self._climate_ramp = None
+                    self._climate_event(f"отогрев закончен: уставка камеры {_c(value)}.", "info")
+                    return False
+        return True
+
+    def _climate_ramp_hold(self, now: float):
+        """Пауза: отогрев стоит, после паузы ступени идут дальше с того же места, без скачка."""
+        ramp = getattr(self, "_climate_ramp", None)
+        if ramp:
+            ramp["last"] = now
+
+    def _climate_ramp_text(self) -> str:
+        ramp = getattr(self, "_climate_ramp", None)
+        if not ramp:
+            return ""
+        held = " (стоит: плата холоднее точки росы)" if ramp.get("held") else ""
+        return (f"отогрев не быстрее {_rate(ramp['rate'])}: уставка камеры {_c(ramp['sent'])} из "
+                f"{_c(ramp['to'])}{held}")
+
+    def _climate_run_commanded(self) -> float:
+        """Что сейчас задано камере: на отогреве - его ступень, иначе уставка шага."""
+        ramp = getattr(self, "_climate_ramp", None)
+        return float(ramp["sent"]) if ramp else self._climate_run_setpoint()
+
+    # ------------------------------------------------------------------ точка росы
+
+    # Плата холоднее точки росы плюс этот запас - опасно: влага садится на плату.
+    DEW_MARGIN_C = 1.0
+    # Воздух холоднее этого - точку росы не считать: датчик влажности камеры на холоде не точен,
+    # а влага из воздуха там - иней. Опасна вода при отогреве, а она выше нуля.
+    DEW_MIN_AIR_C = 0.0
+    # Отогрев стоит из-за росы на плате не дольше стольких минут за ступенчатый отогрев.
+    RAMP_DEW_HOLD_MAX_MIN = 30.0
+
+    @staticmethod
+    def _climate_humidity_pct(reading) -> float | None:
+        """Влажность воздуха в камере, %, если камера её меряет (Zundar, S!MCON/32). None - нет."""
+        details = getattr(reading, "details", None) or {}
+        value = details.get("humidity_c")
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return None
+        return value if 1.0 <= value <= 100.0 else None
+
+    def _climate_coldest_board(self, now: float):
+        """Самая холодная плата прогона: (°C, имя) или None. Одна плата - имя пустое."""
+        fresh = getattr(self, "_chamber_live_fresh", None)
+        if fresh is None:
+            return None
+        # Показания прибора помечены настоящим временем (как и у сторожа): свежесть - по нему.
+        real = time.monotonic()
+        if self._climate_multi():
+            coldest = None
+            for board in self._mb_working_boards(real):
+                with self._mb_context(board["sa"], notify=False):
+                    if not self._chamber_live_fresh("board_temp", real):
+                        continue
+                    value = int(self._chamber_live_last["board_temp"]) / 10.0
+                if coldest is None or value < coldest[0]:
+                    coldest = (value, f"«{board['name']}»")
+            return coldest
+        if not fresh("board_temp", real):
+            return None
+        return int(self._chamber_live_last["board_temp"]) / 10.0, ""
+
+    def _climate_dew(self, now: float) -> dict | None:
+        """Точка росы воздуха камеры и запас самой холодной платы до неё. None - посчитать нельзя.
+
+        {"air", "humidity", "dew", "board", "name", "margin", "danger", "text"}; board и margin - None,
+        если плата не присылает температуру.
+        """
+        reading = self._climate_reading if self._climate_fresh(now) else None
+        actual = getattr(reading, "actual_c", None)
+        humidity = self._climate_humidity_pct(reading)
+        if actual is None or humidity is None or float(actual) < self.DEW_MIN_AIR_C:
+            return None
+        dew = dew_point_c(actual, humidity)
+        if dew is None:
+            return None
+        coldest = self._climate_coldest_board(now)
+        board, name = coldest if coldest else (None, "")
+        margin = None if board is None else board - dew
+        danger = margin is not None and margin < self.DEW_MARGIN_C
+        air = f"(в камере {_c(actual)}, {_pct(humidity)})"
+        who = f"плата {name}".rstrip() if name else "плата"
+        if board is None:
+            text = f"точка росы воздуха камеры {_c(dew)} {air}."
+        elif danger:
+            text = (f"{who} {_c(board)} холоднее точки росы воздуха камеры {_c(dew)} {air} или почти у неё: "
+                    "на плате оседает влага.")
+        else:
+            text = (f"точка росы воздуха камеры {_c(dew)} {air}, {who} {_c(board)}: запас "
+                    + f"{margin:.1f} °C.".replace(".", ",", 1))
+        return {"air": float(actual), "humidity": humidity, "dew": dew, "board": board, "name": name,
+                "margin": margin, "danger": danger, "text": text}
+
+    def _climate_dew_view(self, now: float) -> dict:
+        dew = self._climate_dew(now)
+        if dew is None:
+            return {"visible": False, "danger": False, "text": ""}
+        return {"visible": True, "danger": bool(dew["danger"]), "text": dew["text"][:1].upper() + dew["text"][1:],
+                "dewText": _c(dew["dew"])}
+
     def _climate_run_board_note(self, details: str, ok: bool, result: str, title: str = "доводка платы"):
         """Доводка платы и упреждение - в журнал действий: их делает программа, но меняют уставку камеры."""
         log = getattr(self, "_control_log", None)
@@ -1531,6 +1752,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         if not self._climate_run_stage:
             return
         self._climate_run_stage = ""
+        self._climate_ramp = None
         if self._climate_multi():
             self._mb_quiet_release()
         self._climate_run_set(f"Автоматический прогон {reason}. Уставка камеры оставлена как есть.", "#d97706")
@@ -1570,6 +1792,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
     def _climate_run_tick(self, now: float):
         """Шаг прогона. Каждый этап ждёт своего условия и переходит к следующему."""
         if self._climate_run_paused:
+            self._climate_ramp_hold(now)
             self._climate_run_set("Прогон на паузе. Нажмите «Продолжить прогон».", "#d97706")
             return
         stage = self._climate_run_stage
@@ -1583,13 +1806,16 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         if stage == "setpoint":
             self._climate_run_board_preset()
             setpoint = self._climate_run_setpoint()
-            if self._climate_send_setpoint(setpoint):
+            if self._climate_send_setpoint(self._climate_ramp_begin(setpoint, now)):
                 if self._climate_link.driver.can_run and not getattr(self._climate_reading, "running", True):
                     self._climate_send_run(True)
                 self._climate_run_enter("reach", now)
                 shifted = f" (доводка платы: уставка {_c(setpoint)})" if self._climate_run_offset else ""
-                self._climate_run_set(f"Узел {where}: уставка задана, камера идёт к ней{shifted}.")
+                ramp = self._climate_ramp_text()
+                self._climate_run_set(f"Узел {where}: уставка задана, камера идёт к ней{shifted}"
+                                      + (f"; {ramp}." if ramp else "."))
             else:
+                self._climate_ramp = None
                 self._climate_run_stop(f"остановлен: {self._climate_command_status}")
             return
 
@@ -1597,6 +1823,11 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             actual = getattr(self._climate_reading, "actual_c", None) if self._climate_fresh(now) else None
             tolerance = self._climate_run_param("reach_tolerance_c")
             setpoint = self._climate_run_setpoint()
+            if self._climate_ramp_tick(now):
+                # Время выхода на узел и пропуск узла считаются от конца отогрева: медленный он - по правилу.
+                self._climate_run_since = now
+                self._climate_run_set(f"Узел {where}: {self._climate_ramp_text()}, в камере {_c(actual)}.")
+                return
             if actual is not None and abs(actual - setpoint) <= tolerance:
                 self._climate_event(f"камера вышла на {_c(setpoint)}, жду, пока устоится плата.", "info")
                 self._climate_run_enter("settle", now)
@@ -1922,10 +2153,11 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         finish = scenario.get("finish_setpoint") if scenario else self._climate_settings["finish_setpoint"]
         finish_stop = bool(scenario.get("finish_stop")) if scenario else bool(self._climate_settings["finish_stop"])
         self._climate_run_finish_stop = finish_stop
+        now = time.monotonic() if now is None else now
         if finish is not None and self._climate_link is not None and self._climate_link.driver.can_set \
-                and self._climate_send_setpoint(float(finish)):
+                and self._climate_send_setpoint(self._climate_ramp_begin(float(finish), now)):
             self._climate_run_finish_target = float(finish)
-            self._climate_run_enter("finish", time.monotonic() if now is None else now)
+            self._climate_run_enter("finish", now)
             then = ", затем остановлю её" if finish_stop else ""
             self._climate_run_set(f"Все шаги пройдены. Возвращаю камеру к {_c(finish)}{then}.", "#16a34a")
             self._climate_event(f"все шаги пройдены ({len(self._climate_run_done)} температур): возвращаю камеру к "
@@ -1937,6 +2169,13 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         """Возврат камеры: воздух вышел на уставку «в конце» (или время вышло) - конец прогона."""
         target = self._climate_run_finish_target
         actual = getattr(self._climate_reading, "actual_c", None) if self._climate_fresh(now) else None
+        if self._climate_ramp_tick(now):
+            # Срок выхода на уставку «в конце» - от конца отогрева.
+            self._climate_run_since = now
+            then = ", затем остановлю её" if self._climate_run_finish_stop else ""
+            self._climate_run_set(f"Все шаги пройдены. Возвращаю камеру к {_c(target)}{then}: {self._climate_ramp_text()}, "
+                                  f"в камере {_c(actual)}.", "#16a34a")
+            return
         tolerance = max(1.0, self._climate_run_param("reach_tolerance_c"))
         limit_s = self._climate_run_param("reach_timeout_min") * 60.0 / self._climate_speed()
         if actual is not None and abs(float(actual) - target) <= tolerance:
@@ -1957,6 +2196,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
     def _climate_run_complete(self, tail: str, stop: bool = True):
         """Конец прогона: остановить камеру, если так задано в сценарии (и stop), итог - в события."""
         self._climate_run_stage = ""
+        self._climate_ramp = None
         if stop and getattr(self, "_climate_run_finish_stop", False):
             self._climate_send_run(False)
             tail += " Камера остановлена."
@@ -2025,7 +2265,9 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             "espec": self._climate_espec_view(reading),
             "simcon": self._climate_simcon_view(reading),
             "zundar": self._climate_zundar_view(reading),
+            "dew": self._climate_dew_view(now),
             "net": {"status": self._climate_net_status, "ok": self._climate_net_ok, "busy": self._climate_net_busy,
+                    "peers": self._climate_peers_text,
                     "laptop": net_setup.laptop_address(str(settings.get("zundar_host", ""))) or ""},
             "commands": ESPEC_COMMAND_LIST if settings["driver"] == DRIVER_ESPEC else [],
             "bridgeStatus": self._climate_bridge_status,

@@ -535,6 +535,18 @@ Card {
                     wrapMode: Text.WordWrap
                 }
 
+                // Точка росы воздуха камеры и самая холодная плата: плата холоднее - на ней оседает влага.
+                Text {
+                    Layout.fillWidth: true
+                    visible: root.climate.ok === true && root.climate.dew !== undefined && root.climate.dew.visible === true
+                    text: root.climate.dew ? root.climate.dew.text || "" : ""
+                    color: root.climate.dew && root.climate.dew.danger ? "#dc2626" : root.textSoft
+                    font.pixelSize: 12
+                    font.bold: root.climate.dew && root.climate.dew.danger === true
+                    font.family: "Bahnschrift"
+                    wrapMode: Text.WordWrap
+                }
+
                 // Камера с пультом S!MCON/32 (Vötsch VT 7100, Weiss WK1): влажность и все цифровые каналы пульта.
                 ColumnLayout {
                     Layout.fillWidth: true
@@ -1288,6 +1300,17 @@ Card {
                               || ("Ноутбуку нужен адрес в сети камеры: программа задаст проводному адаптеру " + ((root.climate.net || {}).laptop || "192.168.0.10")
                                   + ", маска 255.255.255.0, без шлюза (Wi-Fi и интернет не трогаются). Windows спросит разрешение администратора.")
                         color: (root.climate.net || {}).ok === false ? "#dc2626" : ((root.climate.net || {}).ok === true ? "#15803d" : root.textSoft)
+                        font.pixelSize: 12
+                        font.family: "Bahnschrift"
+                        wrapMode: Text.WordWrap
+                    }
+
+                    // Связи нет: кто ещё с этого ноутбука подключён к камере (контроллер держит одно подключение).
+                    Text {
+                        Layout.fillWidth: true
+                        visible: root.climate.driver === "zundar_az1000" && ((root.climate.net || {}).peers || "") !== ""
+                        text: (root.climate.net || {}).peers || ""
+                        color: ((root.climate.net || {}).peers || "").indexOf("уже подключено") >= 0 ? "#dc2626" : root.textSoft
                         font.pixelSize: 12
                         font.family: "Bahnschrift"
                         wrapMode: Text.WordWrap

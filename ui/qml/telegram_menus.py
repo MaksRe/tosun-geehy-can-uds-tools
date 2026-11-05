@@ -66,6 +66,7 @@ RULE_SHORT = {
     "reach_timeout_min": "Ждать камеру до",
     "settle_timeout_min": "Ждать плату до",
     "skip_unreached_min": "Пропуск узла через",
+    "warm_ramp_c_min": "Отогрев не быстрее",
     "board_tolerance_c": "Допуск платы",
     "board_max_shift_c": "Сдвиг уставки до",
     "board_attempts": "Попыток доводки",

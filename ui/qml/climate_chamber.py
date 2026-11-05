@@ -454,6 +454,25 @@ class ModbusRtuClient(ModbusClient):
         self._serial = None
 
 
+# ====================================================================== точка росы
+
+def dew_point_c(temp_c: float, humidity_pct: float) -> float | None:
+    """Точка росы воздуха, °C, по температуре и относительной влажности (формула Магнуса).
+
+    Коэффициенты над водой (Sonntag, 1990), точность ±0,4 °C от -45 до +60 °C. Поверхность
+    холоднее точки росы собирает влагу из воздуха. None - влажность вне 0...100 %.
+    """
+    try:
+        temp, humidity = float(temp_c), float(humidity_pct)
+    except (TypeError, ValueError):
+        return None
+    if not (0.0 < humidity <= 100.0) or not math.isfinite(temp):
+        return None
+    a, b = 17.62, 243.12
+    gamma = math.log(humidity / 100.0) + a * temp / (b + temp)
+    return b * gamma / (a - gamma)
+
+
 # ====================================================================== драйверы
 
 class ChamberDriver:
@@ -877,6 +896,8 @@ class SimulatedChamber(ChamberDriver):
         # cool_ramp_c_per_min и не ниже cooling_floor_c. None - холодильник исправен.
         self.cool_ramp_c_per_min: float | None = None
         self.cooling_floor_c: float | None = None
+        # Влажность воздуха, %: как у камеры с датчиком влажности (Zundar). None - камера её не меряет.
+        self.humidity_pct: float | None = None
         self._last = clock()
 
     def advance(self, minutes: float):
@@ -905,8 +926,9 @@ class SimulatedChamber(ChamberDriver):
     def read(self) -> ChamberReading:
         self._sync()
         noise = self._random.uniform(-self.NOISE_C, self.NOISE_C)
+        details = None if self.humidity_pct is None else {"humidity_c": float(self.humidity_pct), "humidity_on": False}
         return ChamberReading(actual_c=round(self.air_c + noise, 2), setpoint_c=self.setpoint_c,
-                              running=self.running, alarm=0, product_c=round(self.product_c, 3))
+                              running=self.running, alarm=0, product_c=round(self.product_c, 3), details=details)
 
     def set_setpoint(self, value_c: float):
         self._sync()

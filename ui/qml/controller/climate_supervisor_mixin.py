@@ -89,6 +89,8 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
     AUTO_RATE_WINDOW_S = 900.0
     AUTO_RATE_MIN_C_MIN = 0.3
     AUTO_RATE_GAP_C = 5.0
+    # Плата холоднее точки росы воздуха камеры дольше чем столько, с - предупреждение.
+    AUTO_DEW_HOLD_S = 60.0
     # Температура ушла с уставки дольше чем на столько, с.
     AUTO_DRIFT_HOLD_S = 300.0
     # Плата не догоняет воздух дольше чем столько после выхода на уставку, с.
@@ -580,6 +582,8 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             self._climate_auto_follow_finish(now)
         if not self._climate_run_stage:
             return
+        # Роса на плате: и на шагах, и при возврате камеры в конце - там отогрев с холода самый большой.
+        self._climate_auto_dew_watch(now)
         # Возврат камеры после последнего шага: шагов больше нет - сторожить и сохранять нечего,
         # кроме одного: идёт ли камера к уставке «в конце» (02.11.2026 она 2 часа остывала сама).
         if self._climate_run_stage == "finish":
@@ -690,16 +694,21 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             self._climate_auto_alert("stopped", False, "", cleared="камера снова работает.")
             self._climate_auto_alert("stopped_hard", False, "")
 
-        # Уставку сменили на пульте: вернуть узел, не вышло - проблема. Сдвиг доводкой платы - не ошибка.
+        # Уставку сменили на пульте: вернуть узел, не вышло - проблема. Сдвиг доводкой платы - не ошибка,
+        # ступень отогрева - тоже: с камерой сверяется то, что ей задано сейчас.
         target = self._climate_run_setpoint() if hasattr(self, "_climate_run_setpoint") else node
+        commanded = self._climate_run_commanded() if hasattr(self, "_climate_run_commanded") else target
         setpoint = getattr(reading, "setpoint_c", None)
-        wrong = setpoint is not None and abs(float(setpoint) - target) > self.AUTO_SETPOINT_TOLERANCE_C
+        # На отогреве показание камеры может отставать на одну ступень: её только что задали.
+        behind = float(getattr(self, "RAMP_STEP_C", 0.0)) if getattr(self, "_climate_ramp", None) else 0.0
+        wrong = setpoint is not None and not (commanded - behind - self.AUTO_SETPOINT_TOLERANCE_C <= float(setpoint)
+                                              <= commanded + self.AUTO_SETPOINT_TOLERANCE_C)
         wrong_s = self._climate_auto_since("setpoint_since", wrong, now)
         if wrong_s >= self.AUTO_SETPOINT_RESEND_S and not self._climate_auto_watch.get("setpoint_resent"):
             self._climate_auto_watch["setpoint_resent"] = True
-            self._climate_event(f"уставка камеры {_c(setpoint)} не совпадает с узлом {_c(target)}: задаю узел снова.",
+            self._climate_event(f"уставка камеры {_c(setpoint)} не совпадает с заданной {_c(commanded)}: задаю её снова.",
                                 "warn")
-            self._climate_send_setpoint(target)
+            self._climate_send_setpoint(commanded)
         self._climate_auto_alert(
             "setpoint", wrong_s >= self.AUTO_SETPOINT_ALERT_S,
             f"уставка камеры {_c(setpoint)} так и не стала {_c(node)}: её меняют с пульта или камера отказывает.",
@@ -803,6 +812,9 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         проверить. actual=None - камера на уставке или этап не тот: предупреждения снимаются.
         """
         samples = self._climate_auto_air
+        # На отогреве камера идёт к теплу не быстрее правила: «почти не греет» - вдвое медленнее него.
+        ramp = getattr(self, "_climate_ramp", None)
+        min_rate = min(self.AUTO_RATE_MIN_C_MIN, 0.5 * float(ramp["rate"])) if ramp else self.AUTO_RATE_MIN_C_MIN
         if actual is None:
             samples.clear()
             self._climate_auto_alert("cooling", False, "", cleared="камера снова охлаждает.")
@@ -828,7 +840,7 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         rate = (float(actual) - old[1]) / minutes if minutes > 0 else 0.0
         cooling = gap < 0
         toward = -rate if cooling else rate
-        weak = toward < self.AUTO_RATE_MIN_C_MIN
+        weak = toward < min_rate
         rate_text = f"{rate:+.2f} °C/мин".replace(".", ",")
         where = f" ({place})" if place else ""
         if cooling:
@@ -843,6 +855,25 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         self._climate_auto_alert("cooling" if cooling else "heating", weak, text, "bad",
                                  cleared=f"камера снова {'охлаждает' if cooling else 'греет'}: {rate_text}.")
         self._climate_auto_alert("heating" if cooling else "cooling", False, "")
+
+    def _climate_auto_dew_watch(self, now: float):
+        """Плата холоднее точки росы воздуха камеры дольше минуты: на ней оседает влага.
+
+        Так бывает при отогреве: воздух камеры теплеет быстрее платы в корпусе, а влаги в нём
+        прибавляет иней испарителя. Камеры без датчика влажности (ESPEC MC-811P) молчат.
+        """
+        dew_fn = getattr(self, "_climate_dew", None)
+        dew = dew_fn(now) if dew_fn is not None and not self._climate_run_paused else None
+        danger = bool(dew and dew["danger"])
+        held = self._climate_auto_since("dew_since", danger, now)
+        if not danger:
+            self._climate_auto_alert("dew", False, "", cleared="плата теплее точки росы воздуха камеры.")
+            return
+        ramp = getattr(self, "_climate_ramp", None)
+        advice = ("Отогрев камеры стоит, пока плата не прогреется." if ramp else
+                  "Отогревайте медленнее: правило сценария «отогревать камеру не быстрее», например 1 °C/мин.")
+        self._climate_auto_alert("dew", held >= self.AUTO_DEW_HOLD_S / self._climate_speed(),
+                                 f"роса на плате: {dew['text']} {advice}", "warn")
 
     def _climate_auto_hardware_text(self) -> str:
         """Что делает камера сама: нагреватель и холодильник ESPEC - по ним видна неисправность."""
@@ -901,6 +932,10 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             f"прошло {duration_text(self._climate_auto_elapsed(now))}"
             + (f", осталось ≈ {duration_text(eta)}" if eta is not None else ""),
         ]
+        dew_fn = getattr(self, "_climate_dew", None)
+        dew = dew_fn(now) if dew_fn is not None else None
+        if dew is not None:
+            parts.insert(3, dew["text"].rstrip("."))
         if self._climate_auto_alerts:
             parts.append("проблемы: " + "; ".join(item["text"] for item in self._climate_auto_alerts.values()))
         return ". ".join(parts) + "."
