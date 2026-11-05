@@ -1190,10 +1190,10 @@ Card {
                         Item { Layout.fillWidth: true }
                     }
 
-                    // Поиск камеры: адрес, скорость и конец строки находятся сами.
+                    // Поиск камеры: ESPEC - адрес, скорость и конец строки; Zundar - адрес, порт и станция в сети.
                     RowLayout {
                         Layout.fillWidth: true
-                        visible: root.espec
+                        visible: root.espec || root.climate.driver === "zundar_az1000"
                         spacing: 8
 
                         FancyButton {
@@ -1201,7 +1201,8 @@ Card {
                             Layout.preferredHeight: 30
                             fontPixelSize: 12
                             text: (root.climate.scan || {}).active ? "Ищу камеру..." : "Найти камеру"
-                            toolTipText: "Перебирает адреса 1...16 и скорости 9600, 19200, 4800 и узнаёт конец строки по ответу"
+                            toolTipText: root.espec ? "Перебирает адреса 1...16 и скорости 9600, 19200, 4800 и узнаёт конец строки по ответу"
+                                                    : "Проверяет порты на адресе камеры, затем ищет камеру во всей её сети и проверяет ответ Modbus"
                             tone: "#0e7490"; toneHover: "#155e75"; tonePressed: "#164e63"
                             enabled: !root.run.active && !((root.climate.scan || {}).active)
                             onClicked: if (root.appController) root.appController.scanClimateChamber()
@@ -1209,7 +1210,8 @@ Card {
 
                         Text {
                             Layout.fillWidth: true
-                            text: (root.climate.scan || {}).status || "Если адрес и скорость на пульте неизвестны, нажмите «Найти камеру»."
+                            text: (root.climate.scan || {}).status || (root.espec ? "Если адрес и скорость на пульте неизвестны, нажмите «Найти камеру»."
+                                                                                     : "Камера не отвечает - нажмите «Найти камеру»: программа проверит порты и сеть и скажет, что видно.")
                             color: (root.climate.scan || {}).active ? "#0e7490" : root.textSoft
                             font.pixelSize: 12
                             font.family: "Bahnschrift"

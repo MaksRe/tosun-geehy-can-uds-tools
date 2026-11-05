@@ -664,7 +664,18 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             return
         self._climate_scan_active = False
         found = state.get("found")
-        if state.get("ok") and found:
+        if state.get("ok") and found and "host" in found:
+            # Zundar: адрес, порт и станция, на которых камера ответила как Modbus TCP.
+            settings = self._climate_settings
+            settings["zundar_host"] = str(found["host"])
+            settings["zundar_port"] = int(found["port"])
+            settings["zundar_unit"] = int(found["unit"])
+            self._climate_save_settings()
+            self._climate_scan_status = (f"Камера найдена: {found['host']}, порт {found['port']}, станция "
+                                         f"{found['unit']}. Настройки сохранены.")
+            self._climate_event(f"камера Zundar найдена: {found['host']}:{found['port']}, станция {found['unit']}.",
+                                "ok")
+        elif state.get("ok") and found:
             settings = self._climate_settings
             settings["espec_baud"] = int(found["baud"])
             settings["espec_address"] = int(found["address"])
@@ -938,8 +949,9 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         return "" if path is None else str(path)
 
     def _climate_espec_scan(self) -> bool:
-        """Поиск адреса, скорости и конца строки камеры ESPEC: настройки пульта угадывать не нужно."""
-        if self._climate_settings["driver"] != DRIVER_ESPEC:
+        """Поиск камеры: ESPEC - адрес, скорость и конец строки; Zundar - адрес, порт и станция в сети."""
+        driver = self._climate_settings["driver"]
+        if driver not in (DRIVER_ESPEC, DRIVER_ZUNDAR):
             return False
         if self._climate_run_stage:
             self._climate_scan_status = "Во время автоматического прогона камеру не ищут."
@@ -949,7 +961,9 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             return False
         self._climate_link.command("scan")
         self._climate_scan_active = True
-        self._climate_scan_status = "Ищу камеру: адреса 1...16, скорости 9600, 19200 и 4800. Это до минуты."
+        self._climate_scan_status = ("Ищу камеру: порты на её адресе, затем вся её сеть /24. Это до полуминуты."
+                                     if driver == DRIVER_ZUNDAR else
+                                     "Ищу камеру: адреса 1...16, скорости 9600, 19200 и 4800. Это до минуты.")
         self.climateChanged.emit()
         return True
 

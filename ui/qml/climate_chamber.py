@@ -27,6 +27,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import math
 import queue
 import random
@@ -285,6 +286,43 @@ class ModbusClient:
         self._check(self.transact(struct.pack(">BHH", 5, address, 0xFF00 if on else 0x0000)), 5)
 
 
+# Коды ошибок соединения: Windows (WSA) и Linux.
+TCP_REFUSED = {10061, 111}
+TCP_TIMEOUT = {10060, 110}
+TCP_UNREACHABLE = {10065, 10051, 113, 101}
+
+
+def tcp_outcome(error: BaseException | None) -> str:
+    """Итог попытки соединения: open, refused (устройство есть, порт закрыт), timeout, unreachable, error."""
+    if error is None:
+        return "open"
+    if isinstance(error, socket.timeout) or getattr(error, "errno", None) in TCP_TIMEOUT \
+            or getattr(error, "winerror", None) in TCP_TIMEOUT:
+        return "timeout"
+    code = getattr(error, "winerror", None) or getattr(error, "errno", None)
+    if code in TCP_REFUSED or isinstance(error, ConnectionRefusedError):
+        return "refused"
+    if code in TCP_UNREACHABLE:
+        return "unreachable"
+    return "error"
+
+
+def tcp_error_text(error: BaseException, host: str, port: int) -> str:
+    """Что значит ошибка соединения - словами и что проверить (03.11.2026: «отверг запрос» на Zundar)."""
+    outcome = tcp_outcome(error)
+    if outcome == "refused":
+        return (f"устройство {host} ответило, но порт {port} закрыт: кабель и адрес в порядке, а сервер Modbus на этом "
+                "порту не запущен. Проверьте на пульте порт (как в программе) и режим «Сервер», перезапустите камеру "
+                "(питание), чтобы контроллер применил настройки сети, или нажмите «Найти камеру»")
+    if outcome == "timeout":
+        return (f"никто не ответил за отведённое время: по адресу {host} устройства нет или его не видно. Проверьте "
+                "кабель (индикатор LAN на камере и ноутбуке), что камера включена и её IP на пульте, или нажмите "
+                "«Найти камеру»")
+    if outcome == "unreachable":
+        return (f"сеть до {host} недоступна: у ноутбука нет адреса в сети камеры - нажмите «Настроить сеть ноутбука»")
+    return str(error)
+
+
 class ModbusTcpClient(ModbusClient):
     """Modbus TCP: заголовок MBAP и PDU поверх TCP-соединения."""
 
@@ -302,7 +340,8 @@ class ModbusTcpClient(ModbusClient):
         try:
             self._socket = socket.create_connection((self.host, self.port), timeout=self.timeout_s)
         except OSError as error:
-            raise ChamberError(f"нет соединения с {self.host}:{self.port}: {error}") from None
+            raise ChamberError(f"нет соединения с {self.host}:{self.port}: {tcp_error_text(error, self.host, self.port)}") \
+                from None
         self._socket.settimeout(self.timeout_s)
 
     def _receive(self, size: int) -> bytes:
@@ -686,6 +725,103 @@ class ZundarChamber(ChamberDriver):
             raise ChamberError(("камера не пустилась" if on else "камера не остановилась")
                                + f" (состояние {ZUNDAR_STATES.get(after['state'], after['state'])}): проверьте "
                                  "аварии и способ управления на пульте")
+
+    # ------------------------------------------------------------------ поиск камеры в сети
+
+    # Порты, на которых встречаются серверы Modbus TCP панелей и шлюзов (первым - 502 по инструкции).
+    SCAN_PORTS = (502, 503, 1502, 5020, 5000, 6000, 8000, 8080, 8899, 9000, 10000, 4001, 4196, 20000)
+    # Порты на адресе камеры: Windows сообщает «отверг» не сразу, а после повторов (~1 с; 03.11.2026 - 1,3 с),
+    # поэтому ждать дольше, чтобы отличить «устройство есть, порт закрыт» от «никого нет».
+    HOST_PROBE_TIMEOUT_S = 2.5
+    # Обход сети: нужны только открытые порты - короткое ожидание.
+    SCAN_TIMEOUT_S = 0.6
+
+    @staticmethod
+    def _probe(host: str, port: int, timeout_s: float) -> str:
+        """Одна попытка соединения: open, refused, timeout, unreachable или error."""
+        try:
+            with socket.create_connection((host, int(port)), timeout=timeout_s):
+                return "open"
+        except OSError as error:
+            return tcp_outcome(error)
+
+    def _speaks_modbus(self, host: str, port: int) -> int | None:
+        """Станция, по которой порт отвечает как Modbus TCP (ответ-ошибка Modbus - тоже Modbus). None - нет."""
+        for unit in dict.fromkeys((self.unit, 0, 1, 255)):
+            client = ModbusTcpClient(host, port, unit, timeout_s=1.5)
+            try:
+                client.read_registers("holding", 0x0001, 3)
+                return unit
+            except ChamberError as error:
+                if "ошибкой Modbus" in str(error):
+                    return unit
+            finally:
+                client.close()
+        return None
+
+    def scan(self, should_stop=lambda: False, progress=lambda text: None) -> dict | None:
+        """Найти камеру: порты на её адресе, а если адрес молчит - камеры в её сети /24 на тех же портах.
+
+        Найденное (адрес, порт, станция) драйвер берёт себе сразу, а окно сохраняет в настройки.
+        Если не нашлось - scan_hint говорит словами, что видно в сети и что проверить.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        self.scan_hint = ""
+        host = self.host
+        progress(f"Проверяю {host}: порты {', '.join(map(str, self.SCAN_PORTS))}...")
+        with ThreadPoolExecutor(max_workers=len(self.SCAN_PORTS)) as pool:
+            outcomes = dict(zip(self.SCAN_PORTS, pool.map(
+                lambda port: self._probe(host, port, self.HOST_PROBE_TIMEOUT_S), self.SCAN_PORTS)))
+        self._trace_event("SCAN", f"{host}: " + ", ".join(f"{port} {result}" for port, result in outcomes.items()))
+        for port in [port for port, result in outcomes.items() if result == "open"]:
+            unit = self._speaks_modbus(host, port)
+            if unit is not None:
+                return self._take_found(host, port, unit)
+        alive = any(result in ("open", "refused") for result in outcomes.values())
+        if should_stop():
+            return None
+        try:
+            network = ipaddress.IPv4Network(f"{host}/24", strict=False)
+        except ValueError:
+            network = None
+        found_hosts: list[tuple[str, int]] = []
+        if network is not None:
+            progress(f"Ищу камеру в сети {network}: порт 502 и порт из настроек ({self.port})...")
+            ports = tuple(dict.fromkeys((502, self.port)))
+            candidates = [(str(address), port) for address in network.hosts() for port in ports]
+            with ThreadPoolExecutor(max_workers=64) as pool:
+                results = pool.map(lambda item: (item, self._probe(item[0], item[1], self.SCAN_TIMEOUT_S)), candidates)
+                found_hosts = [item for item, result in results if result == "open"]
+            self._trace_event("SCAN", f"в сети {network} открыт порт Modbus: {found_hosts or 'нигде'}")
+            for other, port in found_hosts:
+                if should_stop():
+                    return None
+                unit = self._speaks_modbus(other, port)
+                if unit is not None:
+                    return self._take_found(other, port, unit)
+        if alive:
+            closed = [str(port) for port, result in outcomes.items() if result == "refused"]
+            self.scan_hint = (f"устройство {host} на связи, но ни один порт Modbus у него не открыт (закрыты: "
+                              f"{', '.join(closed)}). Значит, сервер Modbus на контроллере не запущен: на пульте «Связь» - "
+                              "режим «Сервер», способ управления «Оба» или «Только LAN»; после смены настроек сети "
+                              "выключите и включите камеру, чтобы контроллер их применил")
+        else:
+            self.scan_hint = (f"по адресу {host} никто не отвечает, и в сети {network} камеры не нашлось. Проверьте "
+                              "кабель (горят ли индикаторы LAN на камере и ноутбуке), что камера включена, и IP камеры "
+                              "на пульте; адрес ноутбука должен быть в той же сети («Настроить сеть ноутбука»)")
+        return None
+
+    def _take_found(self, host: str, port: int, unit: int) -> dict:
+        """Камера найдена: драйвер работает с ней сразу."""
+        self.client.close()
+        self.host, self.port, self.unit = str(host), int(port), int(unit)
+        self.client = ModbusTcpClient(self.host, self.port, self.unit, timeout_s=3.0)
+        self.title = f"Zundar AZ1000 на {self.host}:{self.port}"
+        self._slow_left = 0
+        self._trace_event("SCAN", f"камера найдена: {self.host}:{self.port}, станция {self.unit}")
+        return {"host": self.host, "port": self.port, "unit": self.unit,
+                "text": f"камера найдена: {self.host}, порт {self.port}, станция {self.unit}"}
 
     def raw(self, text: str) -> str:
         """Для проверки на месте: «r 0001 28» - прочитать регистры, «w 002E 800» - записать один регистр (HEX)."""
@@ -2158,9 +2294,9 @@ class ChamberLink:
                         raise ChamberError(getattr(self.driver, "scan_hint", "") or
                                            "камера не ответила ни на одном адресе и скорости: проверьте кабель, "
                                            "режим порта Moxa (RS-422 или RS-485 4W) и что на пульте включён RS-485")
-                    self._on_state({"kind": "scan", "ok": True, "done": True, "found": found,
-                                    "text": f"камера найдена: адрес {found['address']}, {found['baud']} бод, "
-                                            f"конец строки {found['delimiter']}"})
+                    text = found.get("text") or (f"камера найдена: адрес {found['address']}, {found['baud']} бод, "
+                                                 f"конец строки {found['delimiter']}")
+                    self._on_state({"kind": "scan", "ok": True, "done": True, "found": found, "text": text})
                 elif name == "selftest":
                     results = self._selftest()
                     passed = sum(1 for item in results if item["ok"])

@@ -222,3 +222,58 @@ def test_pre_run_checks_for_zundar(tmp_path):
     assert checks["lan_control"]["ok"] and checks["espec_limits"]["ok"]
     card = stub._climate_chamber_card()
     assert card["name"] == "Zundar EEXTH1000U" and "192.168.0.100:502" in card["summary"]
+
+
+def test_connection_errors_are_explained():
+    """03.11.2026: «отверг запрос» на 192.168.0.100:502 - устройство есть, порт закрыт; это надо сказать прямо."""
+    import socket as socket_module
+
+    from ui.qml.climate_chamber import tcp_error_text, tcp_outcome
+
+    refused = ConnectionRefusedError(10061, "отверг")
+    assert tcp_outcome(refused) == "refused"
+    assert "ответило, но порт 502 закрыт" in tcp_error_text(refused, "192.168.0.100", 502)
+    assert tcp_outcome(socket_module.timeout("timed out")) == "timeout"
+    assert "никто не ответил" in tcp_error_text(socket_module.timeout(), "192.168.0.100", 502)
+    unreachable = OSError(10065, "недоступный узел")
+    unreachable.winerror = 10065
+    assert "Настроить сеть ноутбука" in tcp_error_text(unreachable, "192.168.0.100", 502)
+
+
+def test_scan_finds_the_controller_on_another_port(controller):
+    """На пульте порт не 502: поиск находит порт, на котором камера отвечает как Modbus, и берёт его себе."""
+    driver = ZundarChamber("127.0.0.1", 502, 0)
+    driver.SCAN_PORTS = (502, controller.port)
+    found = driver.scan()
+    assert found == {"host": "127.0.0.1", "port": controller.port, "unit": 0,
+                     "text": f"камера найдена: 127.0.0.1, порт {controller.port}, станция 0"}
+    assert driver.read().actual_c == 23.0, "драйвер сразу работает с найденным портом"
+    driver.close()
+
+
+def test_scan_says_the_device_is_there_but_modbus_is_not():
+    """Устройство отвечает, но все порты Modbus закрыты: так и сказать, и что сделать на пульте."""
+    import socket as socket_module
+
+    probe = socket_module.socket()
+    probe.bind(("127.0.0.1", 0))
+    free = probe.getsockname()[1]
+    probe.close()
+    driver = ZundarChamber("127.0.0.1", free, 0)
+    driver.SCAN_PORTS = (free,)
+    assert driver.scan() is None
+    assert "на связи, но ни один порт Modbus у него не открыт" in driver.scan_hint
+    assert "выключите и включите камеру" in driver.scan_hint
+
+
+def test_scan_result_is_saved_in_settings(tmp_path):
+    from tests.test_climate_supervisor import _SupStub
+
+    stub = _SupStub(tmp_path)
+    stub._climate_link = None
+    assert stub._climate_set("driver", "zundar_az1000")
+    stub._climate_take_scan({"kind": "scan", "ok": True, "done": True, "text": "найдена",
+                             "found": {"host": "192.168.0.123", "port": 503, "unit": 1, "text": "найдена"}})
+    settings = stub._climate_settings
+    assert (settings["zundar_host"], settings["zundar_port"], settings["zundar_unit"]) == ("192.168.0.123", 503, 1)
+    assert "Настройки сохранены" in stub._climate_scan_status
