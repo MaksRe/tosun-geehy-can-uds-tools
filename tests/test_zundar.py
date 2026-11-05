@@ -251,6 +251,18 @@ def test_scan_finds_the_controller_on_another_port(controller):
     driver.close()
 
 
+def test_scan_releases_its_own_connection_first(controller):
+    """Контроллер держит одно подключение: 05.11.2026 при «связь есть» поиск получал отказ на всех портах."""
+    driver = _driver(controller)
+    driver.RELEASE_WAIT_S = 0.05
+    assert driver.read().actual_c == 23.0  # подключение занято опросом
+    driver.SCAN_PORTS = (controller.port,)
+    found = driver.scan()
+    assert found is not None and found["port"] == controller.port, driver.scan_hint
+    assert driver.read().actual_c == 23.0, "после поиска опрос идёт снова"
+    driver.close()
+
+
 def test_scan_says_the_device_is_there_but_modbus_is_not():
     """Устройство отвечает, но все порты Modbus закрыты: так и сказать, и что сделать на пульте."""
     import socket as socket_module
