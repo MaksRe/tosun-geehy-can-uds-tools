@@ -682,6 +682,33 @@ class ZundarChamber(ChamberDriver):
         except ChamberError as error:
             self._trace_event("SLOW", f"признак управления и пределы аварии не прочитаны: {error}", "WARN")
 
+    @staticmethod
+    def az1000_problems(state: dict, limits: tuple | None) -> str:
+        """Чем ответы не похожи на контроллер AZ1000 по его карте регистров. Пусто - похожи.
+
+        05.11.2026 «Найти камеру» нашла по 192.168.0.1 (станция 255) другое устройство камеры:
+        температура 22,7 °C лежала у него в 000D, а в 0004 - ноль, пределы аварии 0 и 0, в 001C - 35.
+        Программа показала +0,0 °C и «аварию 35». Пределы аварии у настоящей камеры - разные числа
+        (на пульте -75 и +185), состояние - 1...4, тип - 0...4: по ним чужая карта и видна.
+        """
+        problems = []
+        if state.get("state") not in ZUNDAR_STATES:
+            problems.append(f"состояние {state.get('state')} (должно быть 1...4)")
+        if state.get("type") not in ZUNDAR_TYPES:
+            problems.append(f"тип {state.get('type')} (должен быть 0...4)")
+        if state.get("mode") not in (0, 1):
+            problems.append(f"режим {state.get('mode')} (должен быть 0 или 1)")
+        if not -100.0 <= float(state.get("temp", 0.0)) <= 250.0:
+            problems.append(f"температура {state.get('temp')}")
+        if limits is not None and not limits[0] > limits[1]:
+            problems.append(f"пределы аварии {limits[1]:g} и {limits[0]:g} (на пульте нижний меньше верхнего)")
+        return ", ".join(problems)
+
+    def suspect_text(self, problems: str) -> str:
+        return (f"по {self.host}:{self.port}, станция {self.unit}, отвечает не контроллер AZ1000 по своей карте "
+                f"регистров ({problems}). Похоже, это другое устройство камеры (сенсорная панель) или другой адрес: "
+                "впишите IP со страницы пульта 73 «Связь» (Local IP) и станцию 0 или 1, затем «Подключить»")
+
     def read(self) -> ChamberReading:
         state = self._read_block()
         if self._slow_left <= 0:
@@ -689,6 +716,15 @@ class ZundarChamber(ChamberDriver):
             self._slow_left = self.SLOW_EVERY
         self._slow_left -= 1
         self.last = state
+        problems = self.az1000_problems(state, self.alarm_limits)
+        if problems:
+            # Чужая карта: её числа - не температура и не авария. Не показывать их как показания камеры.
+            if problems != getattr(self, "_suspect", ""):
+                self._trace_event("MAP", self.suspect_text(problems), "WARN")
+            self._suspect = problems
+            return ChamberReading(details={"suspect": self.suspect_text(problems), "lan_control": None,
+                                           "mode": ZUNDAR_STATES.get(state["state"], f"состояние {state['state']}")})
+        self._suspect = ""
         alarm = None if state["alarm"] in (ZUNDAR_NO_ALARM, 0) else int(state["alarm"])
         high, low = (self.alarm_limits[0], self.alarm_limits[1]) if self.alarm_limits else (None, None)
         return ChamberReading(
@@ -709,6 +745,11 @@ class ZundarChamber(ChamberDriver):
             raise ChamberError(f"{error}. Проверьте на пульте способ управления «Оба» или «Только LAN» "
                                "(Внутренняя настройка → 7 → 73 «Связь»)") from None
 
+    def _check_map(self):
+        """Писать уставку и пуск можно только в контроллер AZ1000: в чужую память - нельзя."""
+        if getattr(self, "_suspect", ""):
+            raise ChamberError(self.suspect_text(self._suspect) + ". Уставка и пуск не отправлены")
+
     def _fixed_mode(self):
         if self.last.get("mode") != 1:
             self._write(ZUNDAR_MODE, 1)
@@ -720,6 +761,7 @@ class ZundarChamber(ChamberDriver):
             raise ChamberError(f"уставка {value_c} не помещается в регистр")
         if not self.last:
             self._read_block()
+        self._check_map()
         self._fixed_mode()
         self._write(ZUNDAR_FIXED_TEMP, raw)
         after = self._read_block()
@@ -731,6 +773,7 @@ class ZundarChamber(ChamberDriver):
     def set_running(self, on: bool):
         if not self.last:
             self._read_block()
+        self._check_map()
         if on:
             self._fixed_mode()
             # Влажность программа держит выключенной: изделие испытывается только по температуре.
@@ -764,6 +807,22 @@ class ZundarChamber(ChamberDriver):
         except OSError as error:
             return tcp_outcome(error)
 
+    def _az1000_check(self, host: str, port: int, unit: int) -> str:
+        """Ответ по Modbus есть: похож ли он на AZ1000. Пусто - похож, иначе - чем не похож."""
+        client = ModbusTcpClient(host, port, unit, timeout_s=1.5)
+        probe = ZundarChamber(host, port, unit, client=client)
+        try:
+            state = probe._read_block()
+            try:
+                limits = tuple(_s16(value) / 10.0 for value in client.read_registers("holding", ZUNDAR_ALARM_LIMITS, 4))
+            except ChamberError:
+                limits = None
+            return self.az1000_problems(state, limits)
+        except ChamberError as error:
+            return f"блок 0001...001C не читается: {error}"
+        finally:
+            client.close()
+
     def _speaks_modbus(self, host: str, port: int) -> int | None:
         """Станция, по которой порт отвечает как Modbus TCP (ответ-ошибка Modbus - тоже Modbus). None - нет."""
         for unit in dict.fromkeys((self.unit, 0, 1, 255)):
@@ -787,6 +846,21 @@ class ZundarChamber(ChamberDriver):
         from concurrent.futures import ThreadPoolExecutor
 
         self.scan_hint = ""
+        # Устройства, что отвечают по Modbus, но не как AZ1000: (адрес, порт, станция, чем не похожи).
+        others: list[tuple[str, int, int, str]] = []
+
+        def accept(found_host: str, found_port: int) -> dict | None:
+            unit = self._speaks_modbus(found_host, found_port)
+            if unit is None:
+                return None
+            problems = self._az1000_check(found_host, found_port, unit)
+            if problems:
+                self._trace_event("SCAN", f"{found_host}:{found_port} станция {unit} отвечает по Modbus, но не как "
+                                          f"AZ1000: {problems}", "WARN")
+                others.append((found_host, found_port, unit, problems))
+                return None
+            return self._take_found(found_host, found_port, unit)
+
         host = self.host
         progress(f"Проверяю {host}: порты {', '.join(map(str, self.SCAN_PORTS))}...")
         with ThreadPoolExecutor(max_workers=len(self.SCAN_PORTS)) as pool:
@@ -794,9 +868,9 @@ class ZundarChamber(ChamberDriver):
                 lambda port: self._probe(host, port, self.HOST_PROBE_TIMEOUT_S), self.SCAN_PORTS)))
         self._trace_event("SCAN", f"{host}: " + ", ".join(f"{port} {result}" for port, result in outcomes.items()))
         for port in [port for port, result in outcomes.items() if result == "open"]:
-            unit = self._speaks_modbus(host, port)
-            if unit is not None:
-                return self._take_found(host, port, unit)
+            found = accept(host, port)
+            if found is not None:
+                return found
         alive = any(result in ("open", "refused") for result in outcomes.values())
         if should_stop():
             return None
@@ -816,9 +890,15 @@ class ZundarChamber(ChamberDriver):
             for other, port in found_hosts:
                 if should_stop():
                     return None
-                unit = self._speaks_modbus(other, port)
-                if unit is not None:
-                    return self._take_found(other, port, unit)
+                found = accept(other, port)
+                if found is not None:
+                    return found
+        foreign = ""
+        if others:
+            foreign = ("; по Modbus отвечает " + ", ".join(
+                f"{item[0]}:{item[1]} (станция {item[2]})" for item in others)
+                + ", но не как контроллер AZ1000 (" + others[0][3] + "): это другое устройство камеры, например "
+                  "сенсорная панель, с ним программа не работает")
         if alive:
             closed = [str(port) for port, result in outcomes.items() if result == "refused"]
             self.scan_hint = (f"устройство {host} на связи, но ни один порт Modbus у него не открыт (закрыты: "
@@ -829,6 +909,7 @@ class ZundarChamber(ChamberDriver):
             self.scan_hint = (f"по адресу {host} никто не отвечает, и в сети {network} камеры не нашлось. Проверьте "
                               "кабель (горят ли индикаторы LAN на камере и ноутбуке), что камера включена, и IP камеры "
                               "на пульте; адрес ноутбука должен быть в той же сети («Настроить сеть ноутбука»)")
+        self.scan_hint += foreign
         return None
 
     def _take_found(self, host: str, port: int, unit: int) -> dict:

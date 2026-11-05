@@ -266,6 +266,59 @@ def test_scan_says_the_device_is_there_but_modbus_is_not():
     assert "выключите и включите камеру" in driver.scan_hint
 
 
+def _panel_memory(fake):
+    """05.11.2026: что ответило по 192.168.0.1, станция 255 - не AZ1000 по его карте (22,7 °C - в 000D)."""
+    for address in range(0x0000, 0x0200):
+        fake.regs[address] = 0
+    fake.regs.update({0x0001: 1, 0x000C: 10, 0x000D: 227, 0x000E: 1000, 0x000F: 230, 0x0011: 230, 0x001C: 35})
+
+
+def test_foreign_register_map_is_not_shown_as_the_chamber(controller):
+    """Не та карта: ни +0,0 °C, ни «авария 35», и ничего в неё не пишется."""
+    _panel_memory(controller)
+    driver = _driver(controller)
+    reading = driver.read()
+    assert reading.actual_c is None and reading.alarm is None and reading.setpoint_c is None
+    assert "не контроллер AZ1000" in reading.details["suspect"] and "пределы аварии 0 и 0" in reading.details["suspect"]
+    writes = len(controller.frames)
+    with pytest.raises(ChamberError, match="не отправлены"):
+        driver.set_setpoint(30.0)
+    with pytest.raises(ChamberError, match="не отправлены"):
+        driver.set_running(False)
+    assert all(frame[7] == 3 for frame in controller.frames[writes:]), "записей в чужую память нет"
+    assert driver.raw("r 000D 3") == "000D=227 000E=1000 000F=230", "строка для проверки на месте работает"
+    driver.close()
+
+
+def test_scan_does_not_take_a_foreign_device(controller):
+    _panel_memory(controller)
+    driver = ZundarChamber("127.0.0.1", 502, 0)
+    driver.SCAN_PORTS = (controller.port,)
+    assert driver.scan() is None
+    assert f"127.0.0.1:{controller.port} (станция 0)" in driver.scan_hint and "не как контроллер AZ1000" in driver.scan_hint
+    assert driver.port == 502, "чужое устройство в настройки не попало"
+
+
+def test_foreign_map_blocks_the_run(tmp_path):
+    import time
+
+    from tests.test_climate_supervisor import _SupStub
+    from ui.qml.climate_chamber import ChamberReading
+
+    stub = _SupStub(tmp_path)
+    stub._climate_link = None
+    assert stub._climate_set("driver", "zundar_az1000")
+    suspect = "по 192.168.0.1:502, станция 255, отвечает не контроллер AZ1000 по своей карте регистров (...)"
+    stub._climate_reading = ChamberReading(details={"suspect": suspect, "lan_control": None})
+    stub._climate_last_ok_s = time.monotonic()
+    checks = {item["key"]: item for item in stub._climate_auto_checks()}
+    assert not checks["zundar_map"]["ok"] and checks["zundar_map"]["level"] == "block"
+    assert "lan_control" not in checks, "«управление по сети запрещено» из чужой памяти не показывается"
+    stub._climate_queue_state({"kind": "reading", "ok": True, "reading": stub._climate_reading})
+    stub._climate_take_incoming(time.monotonic())
+    assert stub._climate_status.startswith("Связь есть, но по 192.168.0.1")
+
+
 def test_scan_result_is_saved_in_settings(tmp_path):
     from tests.test_climate_supervisor import _SupStub
 

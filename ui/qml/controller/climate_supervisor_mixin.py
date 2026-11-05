@@ -331,7 +331,10 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
                      + ("в «Ручном управлении ESPEC»" if settings["driver"] == DRIVER_ESPEC
                         else "на пульте камеры («Аварии» → пределы температуры)"))
 
-        if settings["driver"] == DRIVER_ZUNDAR and reading is not None:
+        if settings["driver"] == DRIVER_ZUNDAR and reading is not None and details.get("suspect"):
+            suspect = str(details["suspect"])
+            add("zundar_map", False, suspect[:1].upper() + suspect[1:], "block")
+        elif settings["driver"] == DRIVER_ZUNDAR and reading is not None:
             lan = details.get("lan_control")
             add("lan_control", lan is not False,
                 "Управление камерой по сети разрешено" if lan else

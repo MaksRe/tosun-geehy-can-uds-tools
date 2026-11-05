@@ -665,6 +665,13 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 self._climate_last_ok_s = now
                 title = self._climate_link.driver.title if self._climate_link is not None else "камера"
                 self._climate_status = f"Связь есть: {title}."
+                suspect = str((getattr(state["reading"], "details", None) or {}).get("suspect") or "")
+                if suspect:
+                    # Отвечает не контроллер камеры: показаний нет, а почему - словами.
+                    self._climate_status = f"Связь есть, но {suspect}."
+                    if suspect != getattr(self, "_climate_suspect_reported", ""):
+                        self._climate_event(f"камера: {suspect}.", "warn")
+                self._climate_suspect_reported = suspect
                 self._climate_ok = True
                 self._climate_peers_text = ""
                 if self._climate_lost_reported:
