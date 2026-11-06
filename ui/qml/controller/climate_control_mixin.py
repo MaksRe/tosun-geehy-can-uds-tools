@@ -818,6 +818,8 @@ class AppControllerClimateControlMixin(AppControllerContract):
 def is_setting_command(text: str) -> bool:
     """Команда ESPEC меняет что-то (а не спрашивает): такие пишутся в журнал действий."""
     line = str(text).strip()
+    if line.lower().startswith("w "):
+        return True  # запись регистра Zundar («w 002E 300») - тоже изменение камеры
     head, _, rest = line.partition(",")
     command = rest.strip() if rest and head.strip().isdigit() else line
     return bool(command) and espec_is_setting(command)

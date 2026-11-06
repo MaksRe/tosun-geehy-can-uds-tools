@@ -55,8 +55,11 @@ from ui.qml.climate_chamber import (
     ChamberLink,
     ModbusMap,
     SimconAscii2Chamber,
+    ZUNDAR_COMMANDS,
     build_espec_command,
+    build_zundar_command,
     describe_espec_answer,
+    describe_zundar_answer,
     dew_point_c,
     espec_is_setting,
     espec_mode_text,
@@ -149,6 +152,23 @@ ESPEC_COMMAND_LIST = [
         "newOnly": bool(item.get("new_only")),
     }
     for item in ESPEC_COMMANDS
+]
+
+# Список команд Zundar для окна: тот же вид, что у ESPEC; scale - во сколько раз значение в регистре больше.
+ZUNDAR_COMMAND_LIST = [
+    {
+        "key": item["key"],
+        "group": item["group"],
+        "title": item["title"],
+        "hint": item.get("hint", ""),
+        "command": item["command"],
+        "params": [{"name": param["name"], "label": param["label"], "default": str(param.get("default", "")),
+                    "scale": param.get("scale", 1)} for param in item.get("params", [])],
+        "setting": item["command"].lower().startswith("w"),
+        "danger": bool(item.get("danger")),
+        "newOnly": False,
+    }
+    for item in ZUNDAR_COMMANDS
 ]
 
 
@@ -686,6 +706,12 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 explain = ""
                 if state.get("ok") and self._climate_settings["driver"] == DRIVER_ESPEC:
                     explain = describe_espec_answer(sent, answer)
+                elif state.get("ok") and self._climate_settings["driver"] == DRIVER_ZUNDAR:
+                    driver = self._climate_link.driver if self._climate_link is not None else None
+                    read_only = bool(getattr(driver, "read_only", False))
+                    map_name = (getattr(self, "_climate_zundar_maps", {}) or {}).get(sent) or (
+                        "panel" if read_only else "az1000")
+                    explain = describe_zundar_answer(map_name, sent, answer, read_only)
                 self._climate_raw_log.appendleft({
                     "time": time.strftime("%H:%M:%S"),
                     "sent": sent,
@@ -841,6 +867,54 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         self.climateChanged.emit()
         return True
 
+    def _climate_send_zundar(self, key: str, values_json: str = "") -> bool:
+        """Команда камере Zundar из списка окна: строка собирается по каталогу, ответ в журнале - словами.
+
+        Запись регистра - ручное управление камерой: во время прогона только на паузе; уставка ещё и в
+        пределах уставки из настроек.
+        """
+        from ui.qml.climate_chamber import ZUNDAR_COMMANDS_BY_KEY
+
+        if self._climate_link is None:
+            self._climate_command_status = "Сначала подключите камеру Zundar."
+            self.climateChanged.emit()
+            return False
+        try:
+            values = json.loads(values_json) if str(values_json).strip() else {}
+        except ValueError:
+            values = {}
+        values = values if isinstance(values, dict) else {}
+        item = ZUNDAR_COMMANDS_BY_KEY.get(key)
+        try:
+            line = build_zundar_command(key, values)
+        except ChamberError as error:
+            self._climate_command_status = f"Команда не отправлена: {error}."
+            self.climateChanged.emit()
+            return False
+        if line.lower().startswith("w"):
+            if not self._climate_manual_allowed():
+                return False
+            low, high = float(self._climate_settings["min_c"]), float(self._climate_settings["max_c"])
+            for param in (item or {}).get("params", []):
+                if not param.get("limits"):
+                    continue
+                value = float(str(values.get(param["name"], param.get("default"))).replace(",", "."))
+                if not low <= value <= high:
+                    self._climate_command_status = (f"«{param['label']}» вне допустимых пределов {low:+.0f}...{high:+.0f} °C "
+                                                    "(пределы уставки в настройках).")
+                    self.climateChanged.emit()
+                    return False
+        # По какой карте расшифровать ответ: у панели и контроллера по одному адресу разное.
+        maps = getattr(self, "_climate_zundar_maps", None) or {}
+        maps[line] = (item or {}).get("map", "az1000")
+        self._climate_zundar_maps = maps
+        self._climate_link.command("raw", line)
+        # Строка статуса - как у ESPEC: из неё журнал действий берёт, что ушло камере.
+        self._climate_command_status = f"Отправляю «{line}»..."
+        self._climate_diag_event("CMD", f"{(item or {}).get('title', key)}: «{line}»")
+        self.climateChanged.emit()
+        return True
+
     def _climate_manual_allowed(self) -> bool:
         """Можно ли оператору менять настройки камеры: во время прогона камерой управляет программа."""
         if self._climate_run_stage and not self._climate_run_paused:
@@ -857,6 +931,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         Параметры приходят из окна строкой JSON. Строку команды собирает и
         проверяет драйвер, уставки дополнительно сверяются с пределами из настроек.
         """
+        if self._climate_settings["driver"] == DRIVER_ZUNDAR:
+            return self._climate_send_zundar(str(key), values_json)
         if self._climate_settings["driver"] != DRIVER_ESPEC or self._climate_link is None:
             self._climate_command_status = "Сначала подключите камеру ESPEC."
             self.climateChanged.emit()
@@ -2436,7 +2512,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             "net": {"status": self._climate_net_status, "ok": self._climate_net_ok, "busy": self._climate_net_busy,
                     "peers": self._climate_peers_text,
                     "laptop": net_setup.laptop_address(str(settings.get("zundar_host", ""))) or ""},
-            "commands": ESPEC_COMMAND_LIST if settings["driver"] == DRIVER_ESPEC else [],
+            "commands": (ESPEC_COMMAND_LIST if settings["driver"] == DRIVER_ESPEC
+                         else ZUNDAR_COMMAND_LIST if settings["driver"] == DRIVER_ZUNDAR else []),
             "bridgeStatus": self._climate_bridge_status,
             "settings": {key: (value if not isinstance(value, float) else f"{value:g}".replace(".", ","))
                          for key, value in settings.items() if key != "map"},

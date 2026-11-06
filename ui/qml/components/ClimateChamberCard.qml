@@ -38,6 +38,7 @@ Card {
     readonly property var auto: root.run.auto || ({})
     readonly property bool modbus: root.climate.driver === "modbus_tcp" || root.climate.driver === "modbus_rtu"
     readonly property bool espec: root.climate.driver === "espec"
+    readonly property bool zundar: root.climate.driver === "zundar_az1000"
     readonly property var especState: root.climate.espec || ({})
     readonly property var simconState: root.climate.simcon || ({})
     readonly property var zundarState: root.climate.zundar || ({})
@@ -57,9 +58,14 @@ Card {
         for (var i = 0; i < item.params.length; ++i) {
             var name = item.params[i].name
             var value = root.commandValues[name] !== undefined ? root.commandValues[name] : item.params[i].default
+            if (root.zundar) {
+                // Zundar: значение в регистре ×10 (25,0 °C -> 250).
+                var number = parseFloat(String(value).replace(",", "."))
+                value = isNaN(number) ? "?" : String(Math.round(number * (item.params[i].scale || 1)))
+            }
             line = line.replace("{" + name + "}", value)
         }
-        return (root.settings.espec_address || "1") + "," + line
+        return root.zundar ? line : (root.settings.espec_address || "1") + "," + line
     }
 
     // Выбор команды в списке: параметры заполняются значениями по умолчанию.
@@ -1412,11 +1418,11 @@ Card {
                         Item { Layout.fillWidth: true }
                     }
 
-                    // Строка камере как есть: проверка связи на месте (Weiss - «$00I», Zundar - «r 0001 60»).
-                    // У ESPEC она в блоке «Команды камеры».
+                    // Строка камере как есть: проверка связи на месте (Weiss - «$00I»).
+                    // У ESPEC и Zundar она в блоке «Команды камеры и журнал обмена» - со списком команд.
                     RowLayout {
                         Layout.fillWidth: true
-                        visible: root.climate.driver === "simcon_ascii2" || root.climate.driver === "zundar_az1000"
+                        visible: root.climate.driver === "simcon_ascii2"
                         spacing: 8
                         Caption { text: "Команда камере" }
 
@@ -1732,15 +1738,17 @@ Card {
 
             // --- Все команды руководства и журнал обмена: для наладки ---
             Spoiler {
-                visible: root.espec
+                visible: root.espec || root.zundar
                 title: "Команды камеры и журнал обмена (наладка)"
-                hintText: "все команды руководства ESPEC с параметрами, своя строка, ответы камеры словами"
+                hintText: root.zundar
+                          ? "чтение и запись регистров Zundar по списку: выберите команду, впишите значение, «Отправить»; ответ словами"
+                          : "все команды руководства ESPEC с параметрами, своя строка, ответы камеры словами"
 
 
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 8
-                visible: root.espec
+                visible: root.espec || root.zundar
 
 
                 RowLayout {
@@ -1808,8 +1816,12 @@ Card {
                                             elide: Text.ElideRight
                                         }
                                         Text {
-                                            text: commandRow.modelData.command.split(",")[0]
-                                            color: root.textSoft
+                                            // ESPEC - имя команды, Zundar - чтение или запись и адрес.
+                                            text: root.zundar
+                                                  ? (commandRow.modelData.setting ? "запись " : "чтение ")
+                                                    + commandRow.modelData.command.split(" ")[1]
+                                                  : commandRow.modelData.command.split(",")[0]
+                                            color: root.zundar && commandRow.modelData.setting ? "#b45309" : root.textSoft
                                             font.pixelSize: 11
                                             font.family: "Consolas"
                                         }
@@ -1848,6 +1860,17 @@ Card {
                             visible: root.selectedCommand !== null
                             text: root.selectedCommand ? root.selectedCommand.hint : ""
                             color: root.textSoft
+                            font.pixelSize: 12
+                            font.family: "Bahnschrift"
+                            wrapMode: Text.WordWrap
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            visible: root.zundar && root.selectedCommand !== null && root.selectedCommand.setting === true
+                                     && root.zundarState.panel === true
+                            text: "Сейчас отвечает сенсорная панель: запись она принимает без ошибки, но не выполняет. Команда - для проверки, когда Zundar пришлёт настройку сервера контроллера."
+                            color: "#b45309"
                             font.pixelSize: 12
                             font.family: "Bahnschrift"
                             wrapMode: Text.WordWrap
@@ -1930,7 +1953,9 @@ Card {
                                 id: especRawField
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 30
-                                placeholderText: "например TEMP? - адрес и конец строки добавятся сами"
+                                placeholderText: root.zundar
+                                                 ? "например r 0000 18 - прочитать 18 регистров с 0000 (адрес HEX)"
+                                                 : "например TEMP? - адрес и конец строки добавятся сами"
                                 textColor: root.textMain
                                 bgColor: root.inputBg
                                 borderColor: root.inputBorder
@@ -1990,11 +2015,13 @@ Card {
                         Text { text: "→ " + modelData.answer; color: modelData.ok ? "#0f766e" : "#dc2626"; font.pixelSize: 12; font.family: "Consolas"
                             Layout.preferredWidth: (modelData.explain || "").length > 0 ? 300 : -1
                             Layout.fillWidth: (modelData.explain || "").length === 0
-                            // Причину отказа видно целиком: в ней подсказка, что проверить.
-                            elide: modelData.ok ? Text.ElideRight : Text.ElideNone
-                            wrapMode: modelData.ok ? Text.NoWrap : Text.WordWrap }
+                            // Причину отказа видно целиком: в ней подсказка, что проверить. У Zundar ответ - десятки регистров.
+                            elide: modelData.ok && !root.zundar ? Text.ElideRight : Text.ElideNone
+                            wrapMode: modelData.ok && !root.zundar ? Text.NoWrap : Text.WrapAnywhere }
                         Text { Layout.fillWidth: true; visible: (modelData.explain || "").length > 0; text: modelData.explain || ""
-                            color: root.textSoft; font.pixelSize: 12; font.family: "Bahnschrift"; elide: Text.ElideRight }
+                            color: root.textSoft; font.pixelSize: 12; font.family: "Bahnschrift"
+                            elide: root.zundar ? Text.ElideNone : Text.ElideRight
+                            wrapMode: root.zundar ? Text.WordWrap : Text.NoWrap }
                     }
                 }
             }

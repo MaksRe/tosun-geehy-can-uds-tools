@@ -1014,7 +1014,13 @@ class ZundarChamber(ChamberDriver):
                 "text": f"камера найдена: {self.host}, порт {self.port}, станция {self.unit}"}
 
     def raw(self, text: str) -> str:
-        """Для проверки на месте: «r 0001 28» - прочитать регистры, «w 002E 800» - записать один регистр (HEX)."""
+        """Для проверки на месте: «r 0001 28» - прочитать регистры, «w 002E 800» - записать один регистр (HEX).
+
+        Несколько команд через «;» выполняются по очереди: «w 001D 1; w 001D 0» - импульс сброса аварии.
+        """
+        parts = [part.strip() for part in str(text).split(";") if part.strip()]
+        if len(parts) > 1:
+            return "; ".join(self.raw(part) for part in parts)
         words = str(text).split()
         try:
             if len(words) == 3 and words[0].lower() in ("r", "read", "ч"):
@@ -1031,6 +1037,172 @@ class ZundarChamber(ChamberDriver):
 
     def close(self):
         self.client.close()
+
+
+# ---------------------------------------------------------------------- команды Zundar для окна
+
+# Что лежит в регистре и как это показать: (название, вид). Две карты: сенсорная панель (проверена у камеры
+# 05.11.2026) и контроллер AZ1000 (по инструкции и по программе Zundar AZ1000 PC Suite 2.08).
+ZUNDAR_LABELS = {
+    "panel": {
+        PANEL_STATE: ("состояние", "panel_state"), PANEL_OUTPUT: ("выход", "pct"),
+        PANEL_TEMP: ("температура в камере", "c"), PANEL_HUMIDITY: ("влажность (на пульте «----», не в работе)", "pct"),
+        PANEL_SETPOINT: ("уставка, введённая на пульте", "c"), PANEL_ACTIVE_SETPOINT: ("рабочая уставка", "c"),
+    },
+    "az1000": {
+        0x0001: ("состояние", "az_state"), 0x0002: ("тип контроллера", "az_type"), 0x0003: ("режим", "az_mode"),
+        0x0004: ("температура в камере", "c"), 0x0005: ("влажность в камере", "pct"),
+        0x0006: ("уставка температуры", "c"), 0x0007: ("уставка влажности", "pct"),
+        0x0008: ("уставка температуры (программа)", "c"), 0x0009: ("уставка влажности (программа)", "pct"),
+        0x000A: ("нагрев", "pct"), 0x000C: ("охлаждение", "pct"), 0x000E: ("увлажнение", "pct"),
+        0x0010: ("осушение", "pct"), 0x001C: ("авария", "alarm"),
+        0x0025: ("TR - скорость изменения температуры", "onoff"), 0x0026: ("TR, скорость", "rate"),
+        0x0027: ("HR - скорость изменения влажности", "onoff"), 0x0028: ("HR, скорость", "rate_rh"),
+        0x0029: ("ограничение по времени", "onoff"), 0x002A: ("ограничение по времени, часы", "int"),
+        0x002B: ("ограничение по времени, минуты", "int"),
+        0x002E: ("уставка температуры постоянного режима", "c"), 0x002F: ("уставка влажности постоянного режима", "pct"),
+        0x00E0: ("управление по сети", "lan"),
+        0x00EB: ("предел аварии верхний", "c"), 0x00EC: ("предел аварии нижний", "c"),
+        0x00ED: ("перерегулирование выше уставки", "c"), 0x00EE: ("перерегулирование ниже уставки", "c"),
+    },
+}
+
+PANEL_GROUP = "Сенсорная панель (192.168.0.1:502) - только чтение, проверено у камеры"
+AZ_READ_GROUP = "Контроллер AZ1000 по инструкции - чтение"
+AZ_WRITE_GROUP = "Контроллер AZ1000 по инструкции - управление"
+_TEMP_PARAM = {"name": "temp", "label": "Температура, °C", "default": "25", "scale": 10, "min": -100, "max": 200,
+               "limits": True}
+
+# Каталог для окна. command - шаблон строки драйвера, {имя} - параметр, переводится в единицы регистра (scale).
+ZUNDAR_COMMANDS = [
+    {"key": "p_block", "group": PANEL_GROUP, "map": "panel", "title": "Всё состояние панели", "command": "r 0000 18",
+     "hint": "Состояние, температура, введённая и рабочая уставка, выход - одним чтением."},
+    {"key": "p_state", "group": PANEL_GROUP, "map": "panel", "title": "Состояние (работа / ожидание)",
+     "command": "r 0000 1", "hint": "2 - ожидание, 3 - работа."},
+    {"key": "p_temp", "group": PANEL_GROUP, "map": "panel", "title": "Температура в камере", "command": "r 000D 1",
+     "hint": "Должна совпадать с большим числом на главном экране пульта."},
+    {"key": "p_setpoints", "group": PANEL_GROUP, "map": "panel", "title": "Уставки: введённая и рабочая",
+     "command": "r 000F 3", "hint": "Введённая меняется сразу при вводе на пульте, рабочая - на пуске и на каждом шаге "
+                                   "программы. По рабочей прогон узнаёт, на каком шаге камера."},
+    {"key": "p_output", "group": PANEL_GROUP, "map": "panel", "title": "Выход нагрева или охлаждения",
+     "command": "r 000C 1", "hint": "В процентах."},
+    {"key": "p_low", "group": PANEL_GROUP, "map": "panel", "title": "Регистры 0000…003B подряд",
+     "command": "r 0000 60", "hint": "Все числа как есть - для поиска, что где лежит (сравните до и после действия на "
+                                    "пульте)."},
+    {"key": "p_high", "group": PANEL_GROUP, "map": "panel", "title": "Регистры 00C0…00FF подряд",
+     "command": "r 00C0 64", "hint": "Все числа как есть. Выше 011F панель отвечает ошибкой 2 (нет адреса)."},
+
+    {"key": "a_block", "group": AZ_READ_GROUP, "map": "az1000", "title": "Всё состояние контроллера",
+     "command": "r 0001 28", "hint": "Состояние, тип, режим, температура, уставки, нагрев и охлаждение, авария."},
+    {"key": "a_temp", "group": AZ_READ_GROUP, "map": "az1000", "title": "Температура и уставка",
+     "command": "r 0004 4", "hint": "Температура и влажность в камере, уставки температуры и влажности."},
+    {"key": "a_fixed", "group": AZ_READ_GROUP, "map": "az1000", "title": "Постоянный режим: TR, HR, время, уставки",
+     "command": "r 0025 11", "hint": "Скорость изменения температуры TR и влажности HR, ограничение по времени, "
+                                    "уставки постоянного режима."},
+    {"key": "a_lan", "group": AZ_READ_GROUP, "map": "az1000", "title": "Управление по сети разрешено?",
+     "command": "r 00E0 1", "hint": "1 - разрешено. Программа Zundar при 0 пишет «Lan control is closed» и команды "
+                                   "не шлёт."},
+    {"key": "a_limits", "group": AZ_READ_GROUP, "map": "az1000", "title": "Пределы аварии", "command": "r 00EB 4",
+     "hint": "Верхний и нижний предел, перерегулирование выше и ниже уставки (на пульте -75 и +185 °C)."},
+
+    {"key": "a_fixed_mode", "group": AZ_WRITE_GROUP, "map": "az1000", "title": "Режим: постоянный",
+     "command": "w 0003 1", "hint": "Перед уставкой постоянного режима. Сейчас отвечает панель - она запись не "
+                                   "выполнит."},
+    {"key": "a_program_mode", "group": AZ_WRITE_GROUP, "map": "az1000", "title": "Режим: программа",
+     "command": "w 0003 0", "hint": "Камера пойдёт по программе шагов с пульта."},
+    {"key": "a_setpoint", "group": AZ_WRITE_GROUP, "map": "az1000", "title": "Уставка постоянного режима",
+     "command": "w 002E {temp}", "params": [_TEMP_PARAM],
+     "hint": "Записывает 002E (×10). Проверьте чтением «Температура и уставка»: уставка должна стать заданной."},
+    {"key": "a_humidity", "group": AZ_WRITE_GROUP, "map": "az1000", "title": "Уставка влажности (0 - выключить)",
+     "command": "w 002F {humidity}",
+     "params": [{"name": "humidity", "label": "Влажность, %", "default": "0", "scale": 10, "min": 0, "max": 100}],
+     "hint": "0 выключает влажность: изделие испытывается только по температуре."},
+    {"key": "a_start", "group": AZ_WRITE_GROUP, "map": "az1000", "title": "Пуск", "command": "w 0001 2",
+     "hint": "Камера пустится и пойдёт к уставке.", "danger": True},
+    {"key": "a_stop", "group": AZ_WRITE_GROUP, "map": "az1000", "title": "Стоп (ожидание)", "command": "w 0001 1",
+     "hint": "Камера остановится и перестанет держать температуру.", "danger": True},
+    {"key": "a_skip", "group": AZ_WRITE_GROUP, "map": "az1000", "title": "Пропустить шаг программы",
+     "command": "w 0001 4", "hint": "Как «пропуск» на пульте: камера перейдёт к следующему шагу своей программы.",
+     "danger": True},
+    {"key": "a_tr_on", "group": AZ_WRITE_GROUP, "map": "az1000", "title": "TR (плавное изменение) - включить",
+     "command": "w 0025 1", "hint": "Температура будет меняться не быстрее заданной скорости TR."},
+    {"key": "a_tr_off", "group": AZ_WRITE_GROUP, "map": "az1000", "title": "TR - выключить", "command": "w 0025 0",
+     "hint": "Камера пойдёт к уставке как может."},
+    {"key": "a_tr_rate", "group": AZ_WRITE_GROUP, "map": "az1000", "title": "TR - скорость", "command": "w 0026 {rate}",
+     "params": [{"name": "rate", "label": "Скорость, °C/мин", "default": "1", "scale": 10, "min": 0.1, "max": 20}],
+     "hint": "Скорость изменения температуры в постоянном режиме."},
+    {"key": "a_alarm_reset", "group": AZ_WRITE_GROUP, "map": "az1000", "title": "Сбросить аварию",
+     "command": "w 001D 1; w 001D 0", "hint": "Импульс 1 → 0, как у программы Zundar. Сначала устраните причину."},
+]
+ZUNDAR_COMMANDS_BY_KEY = {item["key"]: item for item in ZUNDAR_COMMANDS}
+
+
+def _number_text(value: float, digits: int = 1) -> str:
+    return f"{value:.{digits}f}".replace(".", ",")
+
+
+def _zundar_value_text(kind: str, raw: int) -> str:
+    signed = _s16(raw)
+    if kind == "c":
+        return f"{signed / 10.0:+.1f} °C".replace(".", ",")
+    if kind == "pct":
+        return f"{_number_text(signed / 10.0)} %"
+    if kind == "rate":
+        return f"{_number_text(signed / 10.0)} °C/мин"
+    if kind == "rate_rh":
+        return f"{_number_text(signed / 10.0)} %/мин"
+    if kind == "panel_state":
+        return PANEL_STATES.get(raw, f"{raw} (неизвестно)")
+    if kind == "az_state":
+        return ZUNDAR_STATES.get(raw, f"{raw} (неизвестно)")
+    if kind == "az_type":
+        return ZUNDAR_TYPES.get(raw, f"{raw} (неизвестно)")
+    if kind == "az_mode":
+        return {0: "программа", 1: "постоянный"}.get(raw, f"{raw} (неизвестно)")
+    if kind == "onoff":
+        return {0: "выкл", 1: "вкл"}.get(raw, str(raw))
+    if kind == "alarm":
+        return "нет" if raw in (ZUNDAR_NO_ALARM, 0) else f"номер {raw}"
+    if kind == "lan":
+        return {0: "запрещено", 1: "разрешено"}.get(raw, str(raw))
+    return str(raw)
+
+
+def build_zundar_command(key: str, values: dict | None = None) -> str:
+    """Строка драйвера по команде из каталога: параметры - в единицах регистра (×10), в пределах."""
+    item = ZUNDAR_COMMANDS_BY_KEY.get(str(key))
+    if item is None:
+        raise ChamberError(f"нет такой команды «{key}»")
+    line = item["command"]
+    for param in item.get("params", []):
+        text = str((values or {}).get(param["name"], param.get("default", ""))).strip().replace(",", ".")
+        try:
+            number = float(text)
+        except ValueError:
+            raise ChamberError(f"«{param['label']}»: «{text}» - не число") from None
+        if not param["min"] <= number <= param["max"]:
+            raise ChamberError(f"«{param['label']}» должна быть от {param['min']:g} до {param['max']:g}")
+        line = line.replace("{" + param["name"] + "}", str(int(round(number * param.get("scale", 1)))))
+    return line
+
+
+def describe_zundar_answer(map_name: str, sent: str, answer: str, read_only: bool = False) -> str:
+    """Ответ камеры словами по карте команды: «температура в камере +24,7 °C; рабочая уставка +30,0 °C»."""
+    labels = ZUNDAR_LABELS.get(map_name, {})
+    parts = []
+    for address_text, value_text in re.findall(r"([0-9A-F]{4})=(\d+)", str(answer)):
+        address = int(address_text, 16)
+        if address in labels:
+            title, kind = labels[address]
+            parts.append(f"{title} {_zundar_value_text(kind, int(value_text))}")
+    for address_text, value_text in re.findall(r"([0-9A-F]{4}) <- (-?\d+)", str(answer)):
+        address = int(address_text, 16)
+        title, kind = labels.get(address, (f"регистр {address_text}", "int"))
+        parts.append(f"{title} = {_zundar_value_text(kind, int(value_text) & 0xFFFF)} записано")
+    text = "; ".join(parts)
+    if text and read_only and str(sent).strip().lower().startswith("w"):
+        text += ". Отвечает сенсорная панель: запись она принимает, но не выполняет - проверьте чтением"
+    return text
 
 
 class SimulatedChamber(ChamberDriver):
