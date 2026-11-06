@@ -3742,6 +3742,11 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         """Цель функции в открытии журнала из списка, затем новые точки допишутся к нему; действие в журнале."""
         self._control_gui("journal_open", {"path": str(path)})
 
+    @Slot()
+    def openStage1Journals(self):
+        """Цель функции в журнале первого этапа у каждой платы на шине одной кнопкой, затем второй этап допишет к ним."""
+        self._control_gui("journal_stage1")
+
     @Slot(int, str)
     def removeChamberPoint(self, index, stamp):
         """Цель функции в удалении любой точки журнала по номеру и времени; действие в журнале."""

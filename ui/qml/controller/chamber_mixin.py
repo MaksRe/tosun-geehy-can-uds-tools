@@ -32,6 +32,7 @@ import csv
 import hashlib
 import json
 import pathlib
+import re
 import time
 from datetime import datetime
 
@@ -44,6 +45,24 @@ from uds.services.read_data_by_id import ServiceReadDataById
 
 from .bus_guard import BACKGROUND_GUARD_S, background_request_recent
 from .contract import AppControllerContract
+
+
+# Адрес платы в имени журнала: chamber_<время>_<имя>_0x<адрес>.csv, у копии - ещё _копия_<время>.
+JOURNAL_SA = re.compile(r"_0x([0-9a-f]{2})(?:_копия_\d{8}_\d{6})?\.csv$", re.IGNORECASE)
+
+
+def journal_sa(name: str) -> int | None:
+    """Адрес платы (SA) из имени журнала или None, если журнал не платы из списка."""
+    match = JOURNAL_SA.search(str(name))
+    return int(match.group(1), 16) if match else None
+
+
+def stage1_nodes(points) -> list[int]:
+    """Узлы, в которых есть точка первого этапа: не репетиция и с пометкой того, что подключено."""
+    covered = {chamber_fit.nearest_node(point["board_temp_x10"]) for point in points or []
+               if not point.get("rehearsal")
+               and any(value is not None for value in chamber_fit.parse_references(point["note"]).values())}
+    return [node for node in chamber_fit.NODES_X10 if node in covered]
 
 
 class AppControllerChamberMixin(AppControllerContract):
@@ -545,8 +564,14 @@ class AppControllerChamberMixin(AppControllerContract):
         return "\\".join(folder.parts[-2:])
 
     def _chamber_journals(self, fresh: bool = False) -> list[dict]:
-        """Журналы точек (chamber_*.csv): своя папка, подпапки и прошлые версии, новые сверху.
+        """Журналы точек для списка в окне, на сайте и в боте: новые сверху, не больше 40."""
+        return self._chamber_journal_index(fresh)[:self.CHAMBER_JOURNALS_SHOWN]
 
+    def _chamber_journal_index(self, fresh: bool = False) -> list[dict]:
+        """Все журналы точек (chamber_*.csv): своя папка, подпапки и прошлые версии, новые сверху.
+
+        У каждого - адрес платы из имени файла (sa) и узлы первого этапа (nodes): по ним
+        каждой плате подбирается её журнал первого этапа, даже если он давно ушёл вниз списка.
         Перечитывается не чаще раза в 10 с (или по fresh): список нужен окну и сайту часто.
         """
         now = time.monotonic()
@@ -565,15 +590,18 @@ class AppControllerChamberMixin(AppControllerContract):
                 try:
                     resolved = path.resolve()
                     stat = path.stat()
-                    with path.open("r", encoding="utf-8-sig", errors="replace") as handle:
-                        points = max(0, sum(1 for line in handle if line.strip()) - 1)
+                    text = path.read_text(encoding="utf-8-sig", errors="replace")
                 except OSError:
                     continue
                 key = str(resolved)
                 if key in found:
                     continue
+                points = max(0, sum(1 for line in text.splitlines() if line.strip()) - 1)
+                parsed = self._chamber_parse_journal(text) or []
                 inside = own is not None and own.resolve() in resolved.parents
                 found[key] = {
+                    "sa": journal_sa(path.name), "nodes": len(stage1_nodes(parsed)),
+                    "profile_crc": self._chamber_journal_profile_crc(path),
                     # id - короткий ключ журнала для сайта и бота: полный путь на диске наружу не уходит.
                     "path": key, "id": hashlib.sha1(key.encode("utf-8")).hexdigest()[:12], "name": path.name,
                     "folder": (str(resolved.parent.relative_to(own.resolve())) if inside
@@ -581,12 +609,26 @@ class AppControllerChamberMixin(AppControllerContract):
                     "points": points, "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%d.%m.%Y %H:%M"),
                     "stamp": stat.st_mtime, "current": key == current, "external": not inside,
                 }
-        journals = sorted(found.values(), key=lambda item: item["stamp"], reverse=True)[:self.CHAMBER_JOURNALS_SHOWN]
+        journals = sorted(found.values(), key=lambda item: item["stamp"], reverse=True)
         for item in journals:
             if item["folder"] == ".":
                 item["folder"] = ""
         self._chamber_journals_cache = (now, journals)
         return journals
+
+    @staticmethod
+    def _chamber_journal_profile_crc(path: pathlib.Path) -> int | None:
+        """Сумма профиля, посчитанного по журналу (<журнал>_profile.json рядом), или None.
+
+        По ней узнаётся журнал платы без адреса в имени (снятый, когда плата была одна):
+        его профиль - тот, что сейчас записан в плате.
+        """
+        profile = path.with_name(f"{path.stem}_profile.json")
+        try:
+            value = json.loads(profile.read_text(encoding="utf-8")).get("контрольная_сумма")
+            return None if value is None else int(value) & 0xFFFF
+        except (OSError, ValueError, TypeError, AttributeError):
+            return None
 
     def _chamber_open_journal(self, path: str) -> tuple[bool, str]:
         """Открывает журнал из списка: новые точки допишутся к нему.
@@ -599,10 +641,19 @@ class AppControllerChamberMixin(AppControllerContract):
         if self._chamber_busy:
             return False, "сейчас снимается точка: повторите через несколько секунд"
         wanted = str(pathlib.Path(str(path)).resolve()) if path else ""
-        item = next((entry for entry in self._chamber_journals(fresh=True)
+        item = next((entry for entry in self._chamber_journal_index(fresh=True)
                      if path and (entry["path"] == wanted or entry["id"] == str(path))), None)
         if item is None:
             return False, "такого журнала нет в списке"
+        multi = getattr(self, "_mb_on", None)
+        shown = getattr(self, "_mb_active_sa", None)
+        owner = item.get("sa")
+        if multi is not None and multi() and shown is not None and owner is not None and owner != shown \
+                and self._mb_board(owner) is not None:
+            # Несколько плат: журнал другой платы из списка в поля показанной - её точки в чужой профиль.
+            return False, (f"это журнал платы «{self._mb_name(owner)}» (0x{owner:02X}), а показана "
+                           f"«{self._mb_name(shown)}» (0x{shown:02X}). Покажите «{self._mb_name(owner)}» в ленте плат "
+                           "или нажмите «Журналы первого этапа всем платам»")
         source = pathlib.Path(item["path"])
         target = source
         copied = ""
@@ -764,21 +815,13 @@ class AppControllerChamberMixin(AppControllerContract):
         self._chamber_set_status(f"Журнал прогона сохранён: {path}", "#16a34a")
         return True
 
-    def _chamber_load_file(self, path: str) -> bool:
-        """Читает журнал прогона обратно, чтобы продолжить прерванный прогон."""
-        try:
-            text = pathlib.Path(str(path)).read_text(encoding="utf-8-sig")
-        except OSError as error:
-            self._chamber_set_status(f"Не удалось прочитать файл: {error}", "#dc2626")
-            return False
-
+    def _chamber_parse_journal(self, text: str) -> list[dict] | None:
+        """Точки журнала из текста файла; None - файл не журнал прогона (не те колонки)."""
         rows = list(csv.reader(text.splitlines(), delimiter=";"))
         header = [cell.strip() for cell in rows[0]] if rows else []
         legacy = list(self.CHAMBER_COLUMNS[:self.CHAMBER_LEGACY_COLUMNS])
         if not rows or (header != list(self.CHAMBER_COLUMNS) and header != legacy):
-            self._chamber_set_status(
-                "Файл не похож на журнал прогона: не совпали названия колонок.", "#dc2626")
-            return False
+            return None
 
         def number(cell):
             cleaned = str(cell).strip().replace(",", ".")
@@ -812,6 +855,21 @@ class AppControllerChamberMixin(AppControllerContract):
             if chamber_temp is not None:
                 point["chamber_temp_x10"] = int(round(chamber_temp * 10))
             points.append(point)
+        return points
+
+    def _chamber_load_file(self, path: str) -> bool:
+        """Читает журнал прогона обратно, чтобы продолжить прерванный прогон."""
+        try:
+            text = pathlib.Path(str(path)).read_text(encoding="utf-8-sig")
+        except OSError as error:
+            self._chamber_set_status(f"Не удалось прочитать файл: {error}", "#dc2626")
+            return False
+
+        points = self._chamber_parse_journal(text)
+        if points is None:
+            self._chamber_set_status(
+                "Файл не похож на журнал прогона: не совпали названия колонок.", "#dc2626")
+            return False
 
         if not points:
             self._chamber_set_status("В файле нет ни одной пригодной точки.", "#dc2626")

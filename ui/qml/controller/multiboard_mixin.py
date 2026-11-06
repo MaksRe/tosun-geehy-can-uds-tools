@@ -35,6 +35,7 @@ import chamber_fit
 from uds.uds_identifiers import UdsIdentifiers
 
 from .bus_guard import note_background_request
+from .chamber_mixin import stage1_nodes
 from .contract import AppControllerContract
 
 # Поля одной платы: всё, что прогон в камере хранит о приборе. Подставляются целиком.
@@ -839,6 +840,72 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                 newest = max(candidates, key=lambda item: float(item.get("stamp", 0.0)))
                 found.append({"sa": sa, "journal": str(newest["path"])})
         return found
+
+    def _mb_open_stage1_journals(self) -> tuple[bool, str]:
+        """Каждой плате на шине - её журнал первого этапа одной кнопкой (перед вторым этапом).
+
+        Журнал платы - файл с её адресом в имени (…_0x82.csv) или журнал, по которому посчитан
+        профиль, записанный сейчас в плату (сумма в <журнал>_profile.json): так находится журнал
+        первой платы, снятый, когда она была одна и адреса в имени ещё не было. Ищется в любой папке
+        списка, в том числе прошлых версий. Из них берётся тот, где больше узлов первого этапа (при
+        равенстве - журнал профиля платы, потом свежий): копия «на 3 точки» не перебьёт полный журнал.
+        Плата, у которой уже открыт журнал со всеми узлами, не трогается.
+        """
+        if not self._mb_on():
+            return False, "кнопка - для нескольких плат в камере: у одной платы откройте журнал из списка"
+        if getattr(self, "_climate_run_stage", ""):
+            return False, "идёт прогон: журналы открываются до него"
+        if self._mb_busy():
+            return False, "дождитесь конца обмена с прибором"
+        journals = self._chamber_journal_index(fresh=True)
+        total = len(chamber_fit.NODES_X10)
+        working = self._mb_working_boards() or list(self._mb_boards)
+        parts, all_ok = [], True
+        for board in working:
+            sa, name = int(board["sa"]), board["name"]
+            with self._mb_context(sa, notify=False):
+                have = len(stage1_nodes(self._chamber_points))
+                crc = ((getattr(self, "_addr_info", {}) or {}).get(sa, {}) or {}).get("profileCrc")
+                crc = None if crc is None else int(crc) & 0xFFFF
+
+                def own_profile(item) -> bool:
+                    return crc not in (None, 0) and item.get("profile_crc") == crc
+
+                candidates = [item for item in journals if item.get("sa") == sa
+                              or (item.get("sa") is None and own_profile(item))]
+                best = max(candidates, key=lambda item: (int(item.get("nodes", 0)), own_profile(item),
+                                                         float(item.get("stamp", 0.0))), default=None)
+                if have == total:
+                    current = pathlib.Path(self._chamber_file_path).name if self._chamber_file_path else ""
+                    parts.append(f"«{name}»: уже открыт {current} - {total} из {total} узлов")
+                    continue
+                if best is None or int(best.get("nodes", 0)) == 0:
+                    all_ok = False
+                    why = ("" if crc is not None else
+                           ", а профиль в плате ещё не прочитан (по нему узнаётся журнал без адреса в имени)")
+                    parts.append(f"«{name}»: журнала первого этапа с адресом 0x{sa:02X} на диске нет{why} - первый этап "
+                                 "для этой платы не проходил или журнал лежит в другой папке (откройте его "
+                                 "кнопкой «Загрузить журнал», показав плату в ленте)")
+                    continue
+                if int(best["nodes"]) <= have:
+                    all_ok = False
+                    parts.append(f"«{name}»: лучшего журнала нет, открыт с {have} из {total} узлов")
+                    continue
+                ok, text = self._chamber_open_journal(best["path"])
+                nodes = len(stage1_nodes(self._chamber_points)) if ok else 0
+                if not ok or nodes < total:
+                    all_ok = False
+                why = " - по нему посчитан профиль в плате" if best.get("sa") is None else ""
+                parts.append(f"«{name}»: {text}" if not ok else
+                             f"«{name}»: открыт {pathlib.Path(self._chamber_file_path).name}{why} - {nodes} из {total} узлов"
+                             + ("" if nodes == total else " (журнал неполный)"))
+        self._chamber_journals_cache = None
+        self._mb_status = "Журналы первого этапа: " + "; ".join(parts) + "."
+        self._mb_changed()
+        signal = getattr(self, "chamberLiveChanged", None)
+        if signal is not None:
+            signal.emit()
+        return all_ok, "журналы первого этапа: " + "; ".join(parts)
 
     def _mb_restore_journals(self, boards) -> list[str]:
         """Цель функции в загрузке журнала каждой платы в её же поля, затем точки до перезапуска войдут в её таблицы."""

@@ -942,7 +942,17 @@ Card {
 
             // --- Журналы и таблицы: журнал и так сохраняется сам после каждой точки ---
             Spoiler {
+                id: journalsSpoiler
                 title: "Журналы и таблицы"
+                // Несколько плат: у каждого журнала - плата по адресу в имени файла; показанная плата.
+                readonly property var mb: root.appController ? root.appController.chamberBoards : ({})
+                readonly property bool multi: journalsSpoiler.mb.enabled === true
+                function boardOf(sa) {
+                    var boards = journalsSpoiler.mb.boards || []
+                    for (var i = 0; i < boards.length; ++i)
+                        if (boards[i].sa === sa) return boards[i]
+                    return null
+                }
                 hintText: {
                     if (!root.appController)
                         return ""
@@ -981,6 +991,39 @@ Card {
                     }
                 }
 
+                // Второй этап при нескольких платах: каждой плате - её журнал первого этапа одной кнопкой.
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: journalsSpoiler.multi
+                    spacing: 8
+
+                    SmallButton {
+                        Layout.preferredWidth: 270
+                        text: "Журналы первого этапа всем платам"
+                        tone: "#0284c7"; toneHover: "#0369a1"; tonePressed: "#075985"
+                        toolTipText: "Каждой плате на шине откроется её журнал (адрес платы в имени файла, …_0x82.csv) с наибольшим числом узлов первого этапа - из любой папки, в том числе прошлой версии программы. Новые точки второго этапа допишутся к нему"
+                        enabled: root.appController !== null && !root.busy
+                        onClicked: if (root.appController) root.appController.openStage1Journals()
+                    }
+                    Caption {
+                        Layout.fillWidth: true
+                        text: "Кнопка «Открыть» ниже открывает журнал только показанной плате"
+                              + (journalsSpoiler.mb.shownName ? " - «" + journalsSpoiler.mb.shownName + "»" : "")
+                              + ". Журнал другой платы не откроется: покажите её в ленте."
+                        wrapMode: Text.WordWrap
+                    }
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    visible: journalsSpoiler.multi && (journalsSpoiler.mb.status || "").indexOf("Журналы первого этапа") === 0
+                    text: journalsSpoiler.mb.status || ""
+                    color: root.textMain
+                    font.pixelSize: 12
+                    font.family: "Bahnschrift"
+                    wrapMode: Text.WordWrap
+                }
+
                 Repeater {
                     model: root.appController ? root.appController.chamberJournals : []
 
@@ -990,22 +1033,45 @@ Card {
                         Layout.fillWidth: true
                         spacing: 8
 
+                        readonly property var owner: journalsSpoiler.multi && journalRow.modelData.sa !== null
+                                                     && journalRow.modelData.sa !== undefined
+                                                     ? journalsSpoiler.boardOf(journalRow.modelData.sa) : null
+                        // Журнал другой платы списка: показанной плате его не открыть.
+                        readonly property bool foreign: journalRow.owner !== null
+                                                        && ("0x" + ("0" + journalRow.owner.sa.toString(16).toUpperCase()).slice(-2))
+                                                        !== journalsSpoiler.mb.shownSa
+
+                        Text {
+                            Layout.preferredWidth: 46
+                            visible: journalsSpoiler.multi
+                            text: journalRow.owner ? journalRow.owner.name : ""
+                            color: journalRow.foreign ? "#94a3b8" : "#0f6ab4"
+                            font.pixelSize: 12
+                            font.bold: !journalRow.foreign
+                            font.family: "Bahnschrift"
+                            elide: Text.ElideRight
+                        }
                         Text {
                             Layout.fillWidth: true
                             text: (journalRow.modelData.current ? "● " : "") + journalRow.modelData.name
                                   + (journalRow.modelData.folder ? "   ·   " + journalRow.modelData.folder : "")
-                            color: journalRow.modelData.current ? "#0f6ab4" : root.textMain
+                            color: journalRow.modelData.current ? "#0f6ab4" : (journalRow.foreign ? "#94a3b8" : root.textMain)
                             font.pixelSize: 12
                             font.bold: journalRow.modelData.current === true
                             font.family: "Bahnschrift"
                             elide: Text.ElideMiddle
                         }
-                        Caption { text: journalRow.modelData.points + " точ.  ·  " + journalRow.modelData.modified }
+                        Caption {
+                            text: journalRow.modelData.points + " точ."
+                                  + (journalRow.modelData.nodes ? "  ·  узлов " + journalRow.modelData.nodes + " из 7" : "")
+                                  + "  ·  " + journalRow.modelData.modified
+                        }
                         SmallButton {
                             Layout.preferredWidth: 100
                             text: journalRow.modelData.current ? "Открыт" : "Открыть"
                             toolTipText: "Новые точки допишутся к этому журналу. Журнал прошлой версии откроется копией в своей папке"
                             enabled: root.appController !== null && !root.busy && journalRow.modelData.current !== true
+                                     && !journalRow.foreign
                             onClicked: if (root.appController) root.appController.openChamberJournal(journalRow.modelData.path)
                         }
                     }

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import os
 import pathlib
 import sys
@@ -1579,6 +1580,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
     FOLLOW_SAME_C = 0.3
     # Выдержка шага на пульте по умолчанию в программе для пульта: устаивание платы в корпусе - часы, мин.
     FOLLOW_HOLD_MIN = 150.0
+    # Шаг подхода на пульте, мин: охлаждение и первый шаг (камера идёт так быстро, как может).
+    FOLLOW_APPROACH_MIN = 5.0
 
     def _climate_follow_sv(self, now: float):
         """Уставка, по которой камера идёт сейчас (её программа). None - камера стоит или нет связи."""
@@ -1669,7 +1672,13 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         return True
 
     def _climate_follow_plan(self) -> list[str]:
-        """Программа для пульта камеры: шаги сценария с выдержкой с запасом и скоростью изменения TR."""
+        """Программа для пульта камеры: на каждый узел два шага - подход и выдержка с запасом.
+
+        Шаг программы Zundar ведёт уставку линейно от прежней температуры к своей за время шага
+        (так устроена программа на пульте: «23 °C 5 мин, 25 °C 5 мин, 25 °C 2:30»). Поэтому
+        выдержка - отдельный шаг с той же температурой, а отогрев не быстрее правила сценария -
+        временем шага подхода (Δ°C / °C/мин), без TR: так скорость не зависит от его смысла на пульте.
+        """
         try:
             plan = self._climate_run_plan()
         except ValueError:
@@ -1677,17 +1686,31 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         steps = plan["steps"]
         if not steps:
             return []
-        rows = []
-        for index, step in enumerate(steps, start=1):
-            hold = self.FOLLOW_HOLD_MIN + float(step.get("hold_min") or 0.0)
-            point = "" if step.get("capture", True) else " (без точки)"
-            rows.append(f"Шаг {index}: {_c(step['temp'])}, выдержка {hold:.0f} мин{point}")
         scenario = getattr(self, "_climate_scenario", None) or {}
         ramp = float(scenario.get("warm_ramp_c_min") or self._climate_settings.get("warm_ramp_c_min", 0.0) or 0.0)
-        rows.append(f"TR: Вкл, {ramp:g} °C/мин (отогрев изделия без росы)".replace(".", ",") if ramp > 0
-                    else "TR: по желанию (плавное изменение температуры)")
-        rows.append(f"Выдержка с запасом: прогон снимет точку, как только устоится плата, и пришлёт «узел снят» - тогда "
-                    f"шаг можно пропустить на пульте. Шаги пульта без узла сценария прогон пропускает.")
+
+        def hhmm(minutes: float) -> str:
+            minutes = int(math.ceil(minutes))
+            return f"{minutes // 60} ч {minutes % 60:02d} мин"
+
+        rows, number, previous = [], 0, None
+        for step in steps:
+            temp = float(step["temp"])
+            approach = float(self.FOLLOW_APPROACH_MIN)
+            warm = previous is not None and ramp > 0 and temp > previous
+            if warm:
+                approach = max(approach, (temp - previous) / ramp)
+            hold = self.FOLLOW_HOLD_MIN + float(step.get("hold_min") or 0.0)
+            point = "" if step.get("capture", True) else " (без точки)"
+            number += 1
+            rows.append(f"Шаг {number}: {_c(temp)}, {hhmm(approach)} - подход"
+                        + (f" (отогрев {ramp:g} °C/мин)".replace(".", ",") if warm else ""))
+            number += 1
+            rows.append(f"Шаг {number}: {_c(temp)}, {hhmm(hold)} - выдержка{point}")
+            previous = temp
+        rows.append("Влажность 0,0; TR, HR, TW, HW - 0; TS - 000000; цикл 1, связь - пусто.")
+        rows.append("Выдержка с запасом: прогон снимет точку, как только устоится плата, и пришлёт «узел снят» - тогда "
+                    "шаг выдержки можно пропустить на пульте. Шаги пульта без узла сценария прогон пропускает.")
         return rows
 
     def _climate_run_board_note(self, details: str, ok: bool, result: str, title: str = "доводка платы"):

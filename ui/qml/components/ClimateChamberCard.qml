@@ -1011,8 +1011,8 @@ Card {
                             tone: root.run.active ? "#ef4444" : "#16a34a"
                             toneHover: root.run.active ? "#dc2626" : "#15803d"
                             tonePressed: root.run.active ? "#b91c1c" : "#166534"
-                            enabled: root.run.active || (root.climate.ok === true && root.climate.canSet === true
-                                                         && root.auto.canStart !== false)
+                            // Камера только на чтение (Zundar через панель) - не помеха: прогон пойдёт за её программой.
+                            enabled: root.run.active || (root.climate.ok === true && root.auto.canStart !== false)
                             toolTipText: root.run.active || root.auto.canStart !== false ? ""
                                          : "Сначала устраните то, что отмечено ✗ в проверке выше"
                             onClicked: {

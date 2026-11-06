@@ -41,6 +41,7 @@ from ui.qml import climate_scenario
 from ui.qml.climate_chamber import (DRIVER_ESPEC, DRIVER_SIMCON, DRIVER_SIMULATOR, DRIVER_ZUNDAR,
                                     parse_simcon_channels, simcon_channel_name)
 
+from .chamber_mixin import stage1_nodes
 from .contract import AppControllerContract
 from .stability import rate_and_spread
 
@@ -467,9 +468,7 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             return
 
         def lacking(points) -> list[int]:
-            covered = {chamber_fit.nearest_node(point["board_temp_x10"]) for point in points or []
-                       if not point.get("rehearsal")
-                       and any(value is not None for value in chamber_fit.parse_references(point["note"]).values())}
+            covered = stage1_nodes(points)
             return [node for node in chamber_fit.NODES_X10 if node not in covered]
 
         multi = getattr(self, "_mb_on", None)
@@ -488,8 +487,8 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             add("stage2", not problems,
                 f"Второй этап: у всех {len(working)} плат на шине открыт журнал первого этапа по всем узлам - "
                 "строки трубки посчитаются после поправки каждой платы" if not problems else
-                "Второй этап: " + "; ".join(problems) + ". Покажите плату в ленте и откройте её журнал "
-                "первого этапа («Прогон в камере» -> «Журналы»)")
+                "Второй этап: " + "; ".join(problems) + ". Нажмите «Журналы первого этапа всем платам» "
+                "(«Прогон в камере» -> «Журналы и таблицы»): программа сама откроет каждой плате её журнал")
         else:
             missing = lacking(getattr(self, "_chamber_points", []))
             add("stage2", not missing,

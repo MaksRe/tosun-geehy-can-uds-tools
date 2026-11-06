@@ -622,13 +622,19 @@ ZUNDAR_TYPES = {0: "AZ1000-T", 1: "AZ1000-TH", 2: "AZ1000-TS", 3: "ZD800-T", 4: 
 # Сенсорная панель камеры (192.168.0.1:502, 05.11.2026): свой сервер Modbus, только чтение - запись она
 # принимает без ошибки, но ничего не меняет. Раскладка снята опытом у камеры (уставка и пуск с пульта):
 PANEL_BLOCK = (0x0000, 0x12)   # одним чтением: состояние ... рабочая уставка
-PANEL_STATE = 0x0000           # 2 - ожидание, 3 - работа (на пуске 2 -> 3, на стопе 3 -> 2)
+PANEL_STATE = 0x0000           # 2/3 - постоянный режим, ожидание/работа; 4/5 - программа, ожидание/работа
 PANEL_OUTPUT = 0x000C          # выход нагрева или охлаждения, % ×10 (меняется всё время)
 PANEL_TEMP = 0x000D            # температура в камере ×10, со знаком (227 = 22,7 °C, как на пульте)
 PANEL_HUMIDITY = 0x000E        # влажность ×10; на пульте «----» - датчик не в работе, значение не берём
 PANEL_SETPOINT = 0x000F        # уставка, введённая на пульте ×10 (сразу при вводе)
 PANEL_ACTIVE_SETPOINT = 0x0011  # рабочая уставка ×10: по ней камера идёт сейчас (меняется на пуске и шаге)
-PANEL_STATES = {2: "ожидание", 3: "работа"}
+# 06.11.2026 у камеры: программа на пульте написана и выбрана - 4, запущена - 5 (рабочая уставка 0011 -
+# температура шага программы). Постоянный режим: 2 - ожидание, 3 - работа (на пуске 2 -> 3).
+PANEL_STATES = {2: "ожидание", 3: "работа", 4: "программа, ожидание", 5: "программа идёт"}
+PANEL_RUNNING = (3, 5)
+# Другие состояния панели (в режиме программы, на других экранах пульта) ещё не изучены: они не обрывают
+# чтение - температура и рабочая уставка читаются, а «работает ли камера» неизвестно.
+PANEL_STATE_MAX = 15
 
 
 def _s16(value: int) -> int:
@@ -680,7 +686,8 @@ class ZundarChamber(ChamberDriver):
         def reg(address):
             return regs[address - start]
 
-        return {"state": reg(PANEL_STATE), "output_pct": _s16(reg(PANEL_OUTPUT)) / 10.0,
+        return {"state": reg(PANEL_STATE), "raw": " ".join(f"{start + index:04X}={value}" for index, value in enumerate(regs)),
+                "output_pct": _s16(reg(PANEL_OUTPUT)) / 10.0,
                 "temp": _s16(reg(PANEL_TEMP)) / 10.0, "humidity_raw": _s16(reg(PANEL_HUMIDITY)) / 10.0,
                 "entered_c": _s16(reg(PANEL_SETPOINT)) / 10.0, "active_c": _s16(reg(PANEL_ACTIVE_SETPOINT)) / 10.0}
 
@@ -688,8 +695,8 @@ class ZundarChamber(ChamberDriver):
     def panel_problems(panel: dict) -> str:
         """Чем ответ не похож на сенсорную панель Zundar. Пусто - похож."""
         problems = []
-        if panel.get("state") not in PANEL_STATES:
-            problems.append(f"состояние {panel.get('state')} (у панели 2 или 3)")
+        if not 0 <= int(panel.get("state", -1)) <= PANEL_STATE_MAX:
+            problems.append(f"состояние {panel.get('state')} (у панели 0...{PANEL_STATE_MAX})")
         for key, title in (("temp", "температура"), ("active_c", "уставка")):
             if not -100.0 <= float(panel.get(key, 0.0)) <= 250.0:
                 problems.append(f"{title} {panel.get(key)}")
@@ -768,10 +775,12 @@ class ZundarChamber(ChamberDriver):
                 panel = self._read_panel()
             except ChamberError:
                 panel = None
-            if panel is not None and not self.panel_problems(panel):
+            panel_problems = "нет ответа" if panel is None else self.panel_problems(panel)
+            if not panel_problems:
                 self._suspect = ""
                 self._set_read_only(True)
                 return self._panel_reading(panel)
+            problems += f"; по карте панели тоже не похоже: {panel_problems}"
             # Чужая карта: её числа - не температура и не авария. Не показывать их как показания камеры.
             if problems != getattr(self, "_suspect", ""):
                 self._trace_event("MAP", self.suspect_text(problems), "WARN")
@@ -797,9 +806,18 @@ class ZundarChamber(ChamberDriver):
     def _panel_reading(self, panel: dict) -> ChamberReading:
         """Показание по карте панели: уставка - рабочая (по ней камера идёт сейчас), аварий панель не отдаёт."""
         self.last = {"state": None, "mode": None}
+        state = int(panel["state"])
+        known = state in PANEL_STATES
+        if not known and state != getattr(self, "_panel_unknown", None):
+            # Новое состояние панели - в журнал обмена целиком: по нему карта панели дополнится.
+            self._trace_event("MAP", f"панель: состояние {state} ещё не изучено - температура и рабочая уставка "
+                                     f"читаются, «работает ли камера» неизвестно. Блок: {panel.get('raw', '')}", "WARN")
+        self._panel_unknown = None if known else state
         return ChamberReading(
-            actual_c=panel["temp"], setpoint_c=panel["active_c"], running=panel["state"] == 3, alarm=None,
-            details={"panel": True, "read_only": True, "mode": PANEL_STATES.get(panel["state"]),
+            actual_c=panel["temp"], setpoint_c=panel["active_c"],
+            running=None if not known else state in PANEL_RUNNING, alarm=None,
+            details={"panel": True, "read_only": True,
+                     "mode": PANEL_STATES.get(state, f"состояние {state} (не изучено)"),
                      "entered_c": panel["entered_c"], "output_pct": panel["output_pct"],
                      "humidity_raw": panel["humidity_raw"], "lan_control": None})
 
@@ -1078,7 +1096,7 @@ ZUNDAR_COMMANDS = [
     {"key": "p_block", "group": PANEL_GROUP, "map": "panel", "title": "Всё состояние панели", "command": "r 0000 18",
      "hint": "Состояние, температура, введённая и рабочая уставка, выход - одним чтением."},
     {"key": "p_state", "group": PANEL_GROUP, "map": "panel", "title": "Состояние (работа / ожидание)",
-     "command": "r 0000 1", "hint": "2 - ожидание, 3 - работа."},
+     "command": "r 0000 1", "hint": "2 - ожидание, 3 - работа; программа: 4 - ожидание, 5 - идёт."},
     {"key": "p_temp", "group": PANEL_GROUP, "map": "panel", "title": "Температура в камере", "command": "r 000D 1",
      "hint": "Должна совпадать с большим числом на главном экране пульта."},
     {"key": "p_setpoints", "group": PANEL_GROUP, "map": "panel", "title": "Уставки: введённая и рабочая",

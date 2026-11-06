@@ -85,6 +85,7 @@ ACTION_TITLES = {
     "role": "права управления",
     "notify_scope": "рассылка бота",
     "journal_open": "открытие журнала точек",
+    "journal_stage1": "журналы первого этапа всем платам",
     "journal_remove_point": "удаление точки журнала",
     "journal_new": "новый журнал точек",
     "board_show": "показ платы в программе",
@@ -92,7 +93,7 @@ ACTION_TITLES = {
 # Кого будить сообщением: важность события для подписчиков бота.
 NOTIFY_LEVEL = {"estop": "bad", "mode": "warn", "setpoint": "warn", "run_start": "ok", "run_pause": "warn",
                 "run_resume": "ok", "run_stop": "warn", "run_operator": "info", "notify_scope": "warn",
-                "journal_open": "info", "journal_remove_point": "warn", "journal_new": "info", "capture": "ok", "step_next": "warn",
+                "journal_open": "info", "journal_stage1": "info", "journal_remove_point": "warn", "journal_new": "info", "capture": "ok", "step_next": "warn",
                 "step_goto": "warn", "scenario": "warn", "scenario_steps": "warn", "role": "info",
                 "scenario_rules": "warn", "scenario_load": "info", "scenario_new": "info", "limits": "warn",
                 "espec_command": "warn", "resume_saved": "ok", "discard_saved": "warn", "label": "info"}
@@ -453,6 +454,12 @@ class AppControllerClimateControlMixin(AppControllerContract):
         ok, text = self._chamber_open_journal(path)
         self.chamberChanged.emit()
         return ok, text, pathlib.Path(path).name
+
+    def _control_do_journal_stage1(self, actor: dict, params: dict):
+        """Несколько плат: каждой плате - её журнал первого этапа (по адресу в имени файла, с большим числом узлов)."""
+        ok, text = self._mb_open_stage1_journals()
+        self.chamberChanged.emit()
+        return ok, text, f"плат {len(self._mb_working_boards() or self._mb_boards)}"
 
     def _control_do_journal_remove_point(self, actor: dict, params: dict):
         """Убрать любую точку журнала: номер (с нуля) и время точки - защита от удаления не той."""

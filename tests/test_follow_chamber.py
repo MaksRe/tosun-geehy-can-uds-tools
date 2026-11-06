@@ -72,6 +72,45 @@ def test_panel_map_is_read_and_is_read_only(panel):
     driver.close()
 
 
+def test_unknown_panel_state_keeps_the_reading(panel):
+    """06.11.2026: на пульте выбрана программа - состояние панели уже не 2/3, а AZ1000-карта не сходится.
+
+    Чтение не обрывается: температура и рабочая уставка читаются, «работает ли» - неизвестно, а весь
+    блок панели - в журнал обмена (по нему карта дополнится).
+    """
+    panel.regs.update({0x0000: 7, 0x0003: 1})
+    driver = ZundarChamber("127.0.0.1", panel.port, 0)
+    events = []
+    driver._trace_event = lambda kind, text, level="INFO": events.append(text)
+    reading = driver.read()
+    assert reading.actual_c == 22.7 and reading.setpoint_c == 23.0 and reading.running is None
+    assert reading.details["mode"] == "состояние 7 (не изучено)" and driver.read_only
+    assert any("состояние 7 ещё не изучено" in text and "000D=227" in text for text in events), events
+    driver.read()
+    assert sum("ещё не изучено" in text for text in events) == 1, "одно и то же состояние - одна запись"
+    driver.close()
+
+
+def test_program_states_of_the_panel(panel):
+    """06.11.2026: программа выбрана - 4 (ожидание), запущена - 5 (идёт); рабочая уставка - шаг программы."""
+    panel.regs.update({0x0000: 4, 0x000C: 98, 0x000D: 230, 0x000F: 250, 0x0010: 0, 0x0011: 250})
+    driver = ZundarChamber("127.0.0.1", panel.port, 0)
+    reading = driver.read()
+    assert reading.running is False and reading.details["mode"] == "программа, ожидание" and reading.setpoint_c == 25.0
+    panel.regs[0x0000] = 5
+    reading = driver.read()
+    assert reading.running is True and reading.details["mode"] == "программа идёт"
+    driver.close()
+
+
+def test_foreign_device_names_why_it_is_not_the_panel(panel):
+    panel.regs.update({0x0000: 999, 0x0003: 7})
+    driver = ZundarChamber("127.0.0.1", panel.port, 0)
+    reading = driver.read()
+    assert "по карте панели тоже не похоже: состояние 999" in reading.details["suspect"]
+    driver.close()
+
+
 def test_scan_takes_the_panel_as_read_only(panel):
     driver = ZundarChamber("127.0.0.1", 502, 0)
     driver.RELEASE_WAIT_S = 0.05
@@ -130,8 +169,13 @@ def test_checks_and_plan_for_the_panel(tmp_path: Path):
     assert not checks["can_set"]["ok"] and checks["can_set"]["level"] == "warn"
     assert "программе для пульта" in checks["can_set"]["text"]
     view = stub._climate_view()["run"]
-    assert view["follow"] and view["followPlan"][0] == "Шаг 1: +25,0 °C, выдержка 150 мин"
-    assert any("TR: Вкл, 1 °C/мин" in row for row in view["followPlan"])
+    plan = view["followPlan"]
+    # Каждый узел - подход и выдержка; отогрев -40 -> +85 не быстрее 1 °C/мин - временем шага, без TR.
+    assert view["follow"] and plan[:6] == [
+        "Шаг 1: +25,0 °C, 0 ч 05 мин - подход", "Шаг 2: +25,0 °C, 2 ч 30 мин - выдержка",
+        "Шаг 3: -40,0 °C, 0 ч 05 мин - подход", "Шаг 4: -40,0 °C, 2 ч 30 мин - выдержка",
+        "Шаг 5: +85,0 °C, 2 ч 05 мин - подход (отогрев 1 °C/мин)", "Шаг 6: +85,0 °C, 2 ч 30 мин - выдержка"], plan
+    assert any("TR, HR, TW, HW - 0" in row for row in plan)
     assert any("пропустить на пульте" in row for row in view["followPlan"])
 
 
@@ -149,3 +193,12 @@ def test_resumed_run_still_follows(tmp_path: Path):
     assert again._climate_run_follow
     again._climate_run_tick(now + 1)
     assert again._climate_run_stage == "follow" and not again._climate_link.commands
+
+
+def test_start_button_is_not_blocked_by_a_read_only_chamber():
+    """Кнопка «Начать прогон» в окне: камера только на чтение её не гасит - прогон идёт за программой пульта."""
+    text = (Path(__file__).resolve().parents[1] / "ui" / "qml" / "components" / "ClimateChamberCard.qml").read_text(
+        encoding="utf-8")
+    block = text[text.index('"Остановить прогон" : "Начать прогон"'):]
+    enabled = block[block.index("enabled:"):block.index("toolTipText:")]
+    assert "canSet" not in enabled and "canStart" in enabled
