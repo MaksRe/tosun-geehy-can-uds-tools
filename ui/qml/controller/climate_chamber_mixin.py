@@ -316,6 +316,9 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         self._climate_run_reset_board()
         # Отогрев ступенями (правило «отогрев не быстрее»): цель, скорость, текущая ступень. None - не идёт.
         self._climate_ramp = None
+        # Слежение за камерой со своей программой (уставку и пуск задают на пульте): прогон идёт за её уставкой.
+        self._climate_run_follow = False
+        self._climate_follow = {}
         self._climate_run_status = "Автоматический прогон не идёт."
         self._climate_run_color = "#64748b"
 
@@ -1203,6 +1206,9 @@ class AppControllerClimateChamberMixin(AppControllerContract):
 
     def _climate_run_param(self, key: str) -> float:
         """Параметр текущего шага: свой у шага, иначе общий сценария, иначе из настроек прогона."""
+        if key == "board_max_shift_c" and getattr(self, "_climate_run_follow", False):
+            # Камеру ведёт программа пульта: сдвигать уставку нечем - доводка и упреждение выключены.
+            return 0.0
         value = self._climate_run_step().get(key)
         if value is None:
             scenario = getattr(self, "_climate_scenario", None)
@@ -1487,6 +1493,127 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         return {"visible": True, "danger": bool(dew["danger"]), "text": dew["text"][:1].upper() + dew["text"][1:],
                 "dewText": _c(dew["dew"])}
 
+    # ------------------------------------------------------------------ слежение за камерой
+
+    # Ровная уставка камеры ближе этого к температуре шага - камера на этом шаге.
+    FOLLOW_MATCH_C = 5.0
+    # Уставка должна простоять столько, чтобы считаться шагом программы, а не проходом линейного изменения, с.
+    FOLLOW_STABLE_S = 60.0
+    # Изменение уставки меньше этого - та же уставка, °C.
+    FOLLOW_SAME_C = 0.3
+    # Выдержка шага на пульте по умолчанию в программе для пульта: устаивание платы в корпусе - часы, мин.
+    FOLLOW_HOLD_MIN = 150.0
+
+    def _climate_follow_sv(self, now: float):
+        """Уставка, по которой камера идёт сейчас (её программа). None - камера стоит или нет связи."""
+        reading = self._climate_reading if self._climate_fresh(now) else None
+        if reading is None or getattr(reading, "running", None) is False:
+            return None
+        value = getattr(reading, "setpoint_c", None)
+        return None if value is None else float(value)
+
+    def _climate_follow_plateau(self, now: float):
+        """Ровная уставка камеры и сколько она стоит (с модели) или None."""
+        value = self._climate_follow_sv(now)
+        state = self._climate_follow
+        if value is None:
+            state["plateau"] = None
+            return None
+        plateau = state.get("plateau")
+        if plateau is None or abs(value - plateau[0]) > self.FOLLOW_SAME_C:
+            state["plateau"] = (value, now)
+            return value, 0.0
+        return plateau[0], (now - plateau[1]) * self._climate_speed()
+
+    def _climate_follow_tick(self, now: float, where: str, entering: bool):
+        """Ждём, когда камера по своей программе выйдет на уставку узла (или следующего узла сценария)."""
+        if entering:
+            self._climate_run_enter("follow", now)
+        node = self._climate_run_node()
+        state = self._climate_follow
+        plateau = self._climate_follow_plateau(now)
+        if plateau is None:
+            self._climate_run_set(f"Узел {where}: камера стоит или нет связи - пустите её программу на пульте; "
+                                  f"жду уставку ≈ {_c(node)}.", "#d97706")
+            return
+        value, held = plateau
+        if held < self.FOLLOW_STABLE_S:
+            self._climate_run_set(f"Узел {where}: камера ведёт свою программу, уставка {_c(value)}; жду узел {_c(node)}.")
+            return
+        nodes = self._climate_run_nodes
+        match = next((index for index in range(self._climate_run_index, len(nodes))
+                      if abs(value - nodes[index]) <= self.FOLLOW_MATCH_C), None)
+        if match is None:
+            done = state.get("done_sv")
+            if done is not None and abs(value - done) <= self.FOLLOW_SAME_C:
+                self._climate_run_set(f"Узел снят. Жду, когда камера перейдёт к следующему шагу ({_c(node)}): "
+                                      f"сейчас держит {_c(value)}.")
+                return
+            if state.get("ignored") is None or abs(state["ignored"] - value) > self.FOLLOW_SAME_C:
+                state["ignored"] = value
+                self._climate_event(f"камера держит {_c(value)}: такого узла среди оставшихся нет "
+                                    f"({', '.join(_c(item) for item in nodes[self._climate_run_index:])}) - жду "
+                                    "следующий шаг её программы.", "info")
+            self._climate_run_set(f"Узел {where}: камера держит {_c(value)} - это не узел сценария; жду {_c(node)}.")
+            return
+        if match > self._climate_run_index:
+            skipped = nodes[self._climate_run_index:match]
+            self._climate_event(f"камера перешла к {_c(value)}: узлы {', '.join(_c(item) for item in skipped)} "
+                                "пропущены без точек - в программе камеры их нет или выдержка закончилась раньше.",
+                                "warn")
+            for item in skipped:
+                self._climate_hook("_climate_auto_on_node_left", item, now, "камера их пропустила")
+            self._climate_run_index = match
+            self._climate_run_reset_board()
+            node = self._climate_run_node()
+        state.update({"sv": value, "away_since": None, "ignored": None, "done_sv": None})
+        self._climate_event(f"камера по своей программе на уставке {_c(value)}: узел {_c(node)} "
+                            f"(шаг {self._climate_run_index + 1} из {len(nodes)}).", "info")
+        self._climate_run_enter("reach", now)
+
+    def _climate_follow_left(self, now: float) -> bool:
+        """Камера ушла с узла раньше, чем сняты точки: узел без точки, прогон ждёт следующий. True - ушла."""
+        state = self._climate_follow
+        held = state.get("sv")
+        if held is None:
+            return False
+        value = self._climate_follow_sv(now)
+        away = value is None or abs(value - held) > self.FOLLOW_SAME_C
+        if not away:
+            state["away_since"] = None
+            return False
+        if state.get("away_since") is None:
+            state["away_since"] = now
+        if (now - state["away_since"]) * self._climate_speed() < self.FOLLOW_STABLE_S:
+            return False
+        state["sv"] = None
+        what = "камера остановилась" if value is None else f"камера ушла с узла к уставке {_c(value)}"
+        self._climate_run_skip_node(now, f"{what} раньше, чем сняты точки: увеличьте выдержку этого шага на пульте",
+                                    "камера ушла с узла раньше точки")
+        return True
+
+    def _climate_follow_plan(self) -> list[str]:
+        """Программа для пульта камеры: шаги сценария с выдержкой с запасом и скоростью изменения TR."""
+        try:
+            plan = self._climate_run_plan()
+        except ValueError:
+            return []
+        steps = plan["steps"]
+        if not steps:
+            return []
+        rows = []
+        for index, step in enumerate(steps, start=1):
+            hold = self.FOLLOW_HOLD_MIN + float(step.get("hold_min") or 0.0)
+            point = "" if step.get("capture", True) else " (без точки)"
+            rows.append(f"Шаг {index}: {_c(step['temp'])}, выдержка {hold:.0f} мин{point}")
+        scenario = getattr(self, "_climate_scenario", None) or {}
+        ramp = float(scenario.get("warm_ramp_c_min") or self._climate_settings.get("warm_ramp_c_min", 0.0) or 0.0)
+        rows.append(f"TR: Вкл, {ramp:g} °C/мин (отогрев изделия без росы)".replace(".", ",") if ramp > 0
+                    else "TR: по желанию (плавное изменение температуры)")
+        rows.append(f"Выдержка с запасом: прогон снимет точку, как только устоится плата, и пришлёт «узел снят» - тогда "
+                    f"шаг можно пропустить на пульте. Шаги пульта без узла сценария прогон пропускает.")
+        return rows
+
     def _climate_run_board_note(self, details: str, ok: bool, result: str, title: str = "доводка платы"):
         """Доводка платы и упреждение - в журнал действий: их делает программа, но меняют уставку камеры."""
         log = getattr(self, "_control_log", None)
@@ -1625,6 +1752,11 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         max_shift = self._climate_run_param("board_max_shift_c")
         low, high = float(self._climate_settings["min_c"]), float(self._climate_settings["max_c"])
         reason = f"попыток доводки было {self._climate_run_board_attempts} из {attempts}"
+        if self._climate_run_follow and not clamped:
+            reason = (f"камеру ведёт программа пульта, уставку программа не двигает: чтобы плата пришла к "
+                      f"{_c(target)}, поставьте этот шаг на пульте ≈ {_c(node + wanted)}")
+        elif self._climate_run_follow:
+            reason = "камеру ведёт программа пульта, уставку программа не двигает: сдвиньте этот шаг на пульте внутрь шкалы"
         if self._climate_run_board_attempts < attempts and max_shift > 0:
             if self._climate_run_board_shift(now, node, target, wanted, measured):
                 return False
@@ -1706,10 +1838,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             self._climate_run_set("Прогон не запущен: нет связи с камерой.", "#dc2626")
             self.climateChanged.emit()
             return False
-        if not self._climate_link.driver.can_set:
-            self._climate_run_set("Прогон не запущен: камера не даёт задавать уставку.", "#dc2626")
-            self.climateChanged.emit()
-            return False
+        # Камера не принимает уставку (Zundar через сенсорную панель): прогон следует за её программой.
+        follow = not self._climate_link.driver.can_set
         try:
             plan = self._climate_run_plan()
         except ValueError:
@@ -1731,6 +1861,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             return False
 
         self._climate_run_reset()
+        self._climate_run_follow = follow
         try:
             folder = self._climate_logs_directory()
             folder.mkdir(parents=True, exist_ok=True)
@@ -1754,7 +1885,9 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             f"автоматический прогон начат: {len(nodes)} температур ({', '.join(_c(node) for node in nodes)}), "
             f"пометки {', '.join(labels)}."
             + (f" Плат в прогоне {len(joined)}: {', '.join(joined)}." if joined else "")
-            + (f" Без связи, в прогон не вошли: {', '.join(left)}." if left else ""), "info")
+            + (f" Без связи, в прогон не вошли: {', '.join(left)}." if left else "")
+            + (" Камера только читается: прогон следует за её программой на пульте - узел узнаётся по уставке "
+               "камеры." if follow else ""), "info")
         started = time.monotonic()
         self._climate_hook("_climate_auto_on_start", started)
         self._climate_run_tick(started)
@@ -1816,6 +1949,13 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         node = self._climate_run_node()
         where = f"{self._climate_run_index + 1} из {len(self._climate_run_nodes)}, {_c(node)}"
 
+        if self._climate_run_follow:
+            if stage in ("setpoint", "follow"):
+                self._climate_follow_tick(now, where, stage == "setpoint")
+                return
+            if self._climate_follow_left(now):
+                return
+
         if stage == "setpoint":
             self._climate_run_board_preset()
             setpoint = self._climate_run_setpoint()
@@ -1836,6 +1976,9 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             actual = getattr(self._climate_reading, "actual_c", None) if self._climate_fresh(now) else None
             tolerance = self._climate_run_param("reach_tolerance_c")
             setpoint = self._climate_run_setpoint()
+            if self._climate_run_follow and self._climate_follow.get("sv") is not None:
+                # Камера идёт к уставке своей программы: её и ждём.
+                setpoint = float(self._climate_follow["sv"])
             if self._climate_ramp_tick(now):
                 # Время выхода на узел и пропуск узла считаются от конца отогрева: медленный он - по правилу.
                 self._climate_run_since = now
@@ -2089,6 +2232,13 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         node = self._climate_run_node()
         self._climate_run_done.append(node)
         self._climate_hook("_climate_auto_on_node_done", node, now)
+        if self._climate_run_follow:
+            self._climate_follow["done_sv"] = self._climate_follow.get("sv")
+            self._climate_follow["sv"] = None
+            following = self._climate_run_nodes[self._climate_run_index + 1:]
+            self._climate_event(f"узел {_c(node)} снят: точки записаны. Камеру можно переводить "
+                                + (f"к следующему шагу ({_c(following[0])}) - пропуск шага на пульте."
+                                   if following else "дальше: это был последний узел."), "ok")
         self._climate_run_index += 1
         self._climate_run_reset_board()
         # Недоведённая плата - беда этого шага; на следующем шаге её больше нет.
@@ -2098,7 +2248,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         else:
             self._climate_run_enter("setpoint", now)
 
-    def _climate_run_skip_node(self, now: float, why: str):
+    def _climate_run_skip_node(self, now: float, why: str, who: str = "сам: камера не вышла на уставку"):
         """Узел недостижим (правило «пропустить узел»): без точки, прогон идёт к следующему или к концу.
 
         В итоге прогона узел - в списке «без точки», как пропущенный человеком.
@@ -2110,7 +2260,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                             + ("Это был последний шаг." if last else
                                f"Перехожу к шагу {self._climate_run_index + 2} ({_c(nodes[self._climate_run_index + 1])})."),
                             "warn")
-        self._climate_hook("_climate_auto_on_node_left", node, now, "сам: камера не вышла на уставку")
+        self._climate_hook("_climate_auto_on_node_left", node, now, who)
         self._climate_run_index += 1
         self._climate_run_reset_board()
         self._climate_run_label_index = 0
@@ -2167,6 +2317,9 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         finish_stop = bool(scenario.get("finish_stop")) if scenario else bool(self._climate_settings["finish_stop"])
         self._climate_run_finish_stop = finish_stop
         now = time.monotonic() if now is None else now
+        if self._climate_run_follow:
+            self._climate_run_complete(" Все узлы пройдены: программу камеры на пульте можно остановить.", stop=False)
+            return
         if finish is not None and self._climate_link is not None and self._climate_link.driver.can_set \
                 and self._climate_send_setpoint(self._climate_ramp_begin(float(finish), now)):
             self._climate_run_finish_target = float(finish)
@@ -2249,6 +2402,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             "setpoint": "уставка", "reach": "выход на уставку", "settle": "плата устаивается", "hold": "выдержка",
             "points": "точки", "operator": "ждёт оператора", "window": "среднее набирается",
             "capture": "запись точки", "capturing": "запись точки", "finish": "возврат камеры",
+            "follow": "жду камеру",
         }
         return {
             "driver": settings["driver"],
@@ -2296,6 +2450,12 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 "color": self._climate_run_color,
                 "nodes": nodes,
                 "auto": self._climate_hook("_climate_auto_view") or {},
+                # Камера только читается: прогон следует за её программой, а её задают на пульте по этому плану.
+                "follow": bool(self._climate_run_follow) if self._climate_run_stage else bool(
+                    link is not None and not link.driver.can_set),
+                "followPlan": (self._climate_follow_plan() if (self._climate_run_follow if self._climate_run_stage
+                                                              else link is not None and not link.driver.can_set)
+                               else []),
             },
             "scenario": self._climate_hook("_climate_scenario_view") or {},
             # Режимы камеры для кнопок и журнал действий управления.
@@ -2356,6 +2516,17 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             value = details.get(key)
             return "—" if value is None else f"{float(value):.0f} %"
 
+        if details.get("panel"):
+            # Сенсорная панель: только чтение - уставку и пуск задают на пульте, прогон следует за камерой.
+            return {
+                "visible": True, "panel": True,
+                "modeText": f"{details.get('mode') or '—'}; рабочая уставка {_c(getattr(reading, 'setpoint_c', None))}, "
+                            f"введённая на пульте {_c(details.get('entered_c'))}",
+                "heaterText": pct("output_pct"), "coolingText": "—",
+                "humidityOn": False, "humidityText": "не читается", "humidityActualText": "—",
+                "lanText": "только чтение (отвечает сенсорная панель): уставку и пуск задают на пульте",
+                "lanOk": True, "limitsText": "панель не отдаёт",
+            }
         lan = details.get("lan_control")
         high, low = details.get("high_c"), details.get("low_c")
         return {

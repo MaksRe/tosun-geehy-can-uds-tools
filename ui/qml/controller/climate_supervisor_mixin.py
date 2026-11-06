@@ -272,8 +272,11 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             alarm = getattr(reading, "alarm", None)
             add("alarm", not alarm, "Аварий камеры нет" if not alarm else f"Авария камеры, код {alarm}")
         if link is not None:
-            add("can_set", bool(link.driver.can_set),
-                "Камера принимает уставку" if link.driver.can_set else "Камера не даёт задавать уставку")
+            if link.driver.can_set:
+                add("can_set", True, "Камера принимает уставку")
+            else:
+                add("can_set", False, "Камера только читается: прогон пойдёт за её программой - задайте на пульте шаги "
+                                      "по «программе для пульта» (выдержка с запасом) и пустите её", "warn")
 
         try:
             plan = self._climate_run_plan()
@@ -334,6 +337,8 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         if settings["driver"] == DRIVER_ZUNDAR and reading is not None and details.get("suspect"):
             suspect = str(details["suspect"])
             add("zundar_map", False, suspect[:1].upper() + suspect[1:], "block")
+        elif settings["driver"] == DRIVER_ZUNDAR and reading is not None and details.get("read_only"):
+            pass  # сенсорная панель: управления по сети нет, проверять нечего - прогон следует за камерой
         elif settings["driver"] == DRIVER_ZUNDAR and reading is not None:
             lan = details.get("lan_control")
             add("lan_control", lan is not False,
@@ -689,7 +694,13 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             self._climate_auto_alert("stopped", True, f"камера остановилась во время прогона (узел {_c(node)}): "
                                                       f"пускаю её снова.", "warn",)
             self._climate_send_run(True)
-        if stopped >= self.AUTO_STOPPED_PAUSE_S:
+        # Камера со своей программой (только чтение): пускает и останавливает её пульт - не пауза, а сообщение.
+        follow = bool(getattr(self, "_climate_run_follow", False))
+        if stopped >= self.AUTO_STOPPED_PAUSE_S and follow:
+            self._climate_auto_alert("stopped_hard", True, f"камера остановлена (узел {_c(node)}): её программа "
+                                                           "закончилась или её остановили на пульте. Прогон ждёт, пока "
+                                                           "она снова пойдёт.", "warn")
+        elif stopped >= self.AUTO_STOPPED_PAUSE_S:
             if self._climate_auto_alert("stopped_hard", True, "камера не пускается: прогон поставлен на паузу. "
                                                               "Проверьте пульт камеры.", "bad"):
                 self._climate_auto_pause("stopped", "камера не пускается.")
@@ -702,10 +713,15 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         target = self._climate_run_setpoint() if hasattr(self, "_climate_run_setpoint") else node
         commanded = self._climate_run_commanded() if hasattr(self, "_climate_run_commanded") else target
         setpoint = getattr(reading, "setpoint_c", None)
+        followed = (getattr(self, "_climate_follow", None) or {}).get("sv")
+        if follow and followed is not None:
+            # Камеру ведёт её программа: идёт она к своей уставке, а не к температуре узла.
+            target = commanded = float(followed)
         # На отогреве показание камеры может отставать на одну ступень: её только что задали.
         behind = float(getattr(self, "RAMP_STEP_C", 0.0)) if getattr(self, "_climate_ramp", None) else 0.0
-        wrong = setpoint is not None and not (commanded - behind - self.AUTO_SETPOINT_TOLERANCE_C <= float(setpoint)
-                                              <= commanded + self.AUTO_SETPOINT_TOLERANCE_C)
+        wrong = not follow and setpoint is not None and not (
+            commanded - behind - self.AUTO_SETPOINT_TOLERANCE_C <= float(setpoint)
+            <= commanded + self.AUTO_SETPOINT_TOLERANCE_C)
         wrong_s = self._climate_auto_since("setpoint_since", wrong, now)
         if wrong_s >= self.AUTO_SETPOINT_RESEND_S and not self._climate_auto_watch.get("setpoint_resent"):
             self._climate_auto_watch["setpoint_resent"] = True
@@ -1030,6 +1046,8 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         self._climate_auto_restore_chamber(saved.get("chamber") or {}, self._climate_auto_run_since(saved))
         self._climate_run_reset()
         self._climate_auto_reset()
+        # Камера только читается: прогон снова следует за её программой (узел - по её уставке).
+        self._climate_run_follow = not self._climate_link.driver.can_set
         self._climate_run_nodes = list(saved["nodes"])
         steps = saved.get("steps") or []
         self._climate_run_steps = ([dict(step) for step in steps] if len(steps) == len(self._climate_run_nodes)

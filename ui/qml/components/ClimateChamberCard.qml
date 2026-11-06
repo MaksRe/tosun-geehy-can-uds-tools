@@ -523,7 +523,11 @@ Card {
                 Text {
                     Layout.fillWidth: true
                     visible: root.zundarState.visible === true && root.climate.ok === true
-                    text: "Камера: " + (root.zundarState.modeText || "—")
+                    text: root.zundarState.panel === true
+                          ? "Камера: " + (root.zundarState.modeText || "—")
+                            + "   ·   выход " + (root.zundarState.heaterText || "—")
+                            + "   ·   " + (root.zundarState.lanText || "")
+                          : "Камера: " + (root.zundarState.modeText || "—")
                           + "   ·   нагрев " + (root.zundarState.heaterText || "—")
                           + "   ·   охлаждение " + (root.zundarState.coolingText || "—")
                           + "   ·   влажность " + (root.zundarState.humidityText || "—") + " (в камере " + (root.zundarState.humidityActualText || "—") + ")"
@@ -1040,6 +1044,17 @@ Card {
                             font.family: "Bahnschrift"
                             wrapMode: Text.WordWrap
                         }
+                    }
+
+                    // Камера только читается: прогон следует за её программой - вот что задать на пульте.
+                    Text {
+                        Layout.fillWidth: true
+                        visible: (root.run.followPlan || []).length > 0
+                        text: "Программа для пульта камеры (Программа редактор):\n" + (root.run.followPlan || []).join("\n")
+                        color: "#7c3aed"
+                        font.pixelSize: 12
+                        font.family: "Bahnschrift"
+                        wrapMode: Text.WordWrap
                     }
                 }
             }

@@ -619,6 +619,17 @@ ZUNDAR_BLOCK = (0x0001, 0x1C)  # одним чтением: состояние .
 ZUNDAR_STATES = {1: "ожидание", 2: "работа", 3: "удержание", 4: "пропуск"}
 ZUNDAR_TYPES = {0: "AZ1000-T", 1: "AZ1000-TH", 2: "AZ1000-TS", 3: "ZD800-T", 4: "ZD800-TH"}
 
+# Сенсорная панель камеры (192.168.0.1:502, 05.11.2026): свой сервер Modbus, только чтение - запись она
+# принимает без ошибки, но ничего не меняет. Раскладка снята опытом у камеры (уставка и пуск с пульта):
+PANEL_BLOCK = (0x0000, 0x12)   # одним чтением: состояние ... рабочая уставка
+PANEL_STATE = 0x0000           # 2 - ожидание, 3 - работа (на пуске 2 -> 3, на стопе 3 -> 2)
+PANEL_OUTPUT = 0x000C          # выход нагрева или охлаждения, % ×10 (меняется всё время)
+PANEL_TEMP = 0x000D            # температура в камере ×10, со знаком (227 = 22,7 °C, как на пульте)
+PANEL_HUMIDITY = 0x000E        # влажность ×10; на пульте «----» - датчик не в работе, значение не берём
+PANEL_SETPOINT = 0x000F        # уставка, введённая на пульте ×10 (сразу при вводе)
+PANEL_ACTIVE_SETPOINT = 0x0011  # рабочая уставка ×10: по ней камера идёт сейчас (меняется на пуске и шаге)
+PANEL_STATES = {2: "ожидание", 3: "работа"}
+
 
 def _s16(value: int) -> int:
     value = int(value) & 0xFFFF
@@ -656,6 +667,40 @@ class ZundarChamber(ChamberDriver):
         self.lan_control: bool | None = None
         self.alarm_limits: tuple | None = None
         self.last: dict = {}
+        # Отвечает сенсорная панель (только чтение): уставку и пуск задают на пульте, прогон следует за камерой.
+        self.read_only = False
+        self.can_set = True
+        self.can_run = True
+
+    def _read_panel(self) -> dict:
+        """Блок сенсорной панели: состояние, температура, уставки. Значения - как в PANEL_*."""
+        start, count = PANEL_BLOCK
+        regs = self.client.read_registers("holding", start, count)
+
+        def reg(address):
+            return regs[address - start]
+
+        return {"state": reg(PANEL_STATE), "output_pct": _s16(reg(PANEL_OUTPUT)) / 10.0,
+                "temp": _s16(reg(PANEL_TEMP)) / 10.0, "humidity_raw": _s16(reg(PANEL_HUMIDITY)) / 10.0,
+                "entered_c": _s16(reg(PANEL_SETPOINT)) / 10.0, "active_c": _s16(reg(PANEL_ACTIVE_SETPOINT)) / 10.0}
+
+    @staticmethod
+    def panel_problems(panel: dict) -> str:
+        """Чем ответ не похож на сенсорную панель Zundar. Пусто - похож."""
+        problems = []
+        if panel.get("state") not in PANEL_STATES:
+            problems.append(f"состояние {panel.get('state')} (у панели 2 или 3)")
+        for key, title in (("temp", "температура"), ("active_c", "уставка")):
+            if not -100.0 <= float(panel.get(key, 0.0)) <= 250.0:
+                problems.append(f"{title} {panel.get(key)}")
+        return ", ".join(problems)
+
+    def _set_read_only(self, on: bool):
+        if bool(on) != self.read_only:
+            self._trace_event("MAP", "отвечает сенсорная панель камеры: только чтение, уставку и пуск задают на пульте"
+                              if on else "отвечает контроллер AZ1000: управление из программы", "WARN" if on else "INFO")
+        self.read_only = bool(on)
+        self.can_set = self.can_run = not on
 
     def _read_block(self) -> dict:
         start, count = ZUNDAR_BLOCK
@@ -718,13 +763,24 @@ class ZundarChamber(ChamberDriver):
         self.last = state
         problems = self.az1000_problems(state, self.alarm_limits)
         if problems:
+            # Не контроллер. Может быть сенсорная панель - её карта известна, читаем по ней (без управления).
+            try:
+                panel = self._read_panel()
+            except ChamberError:
+                panel = None
+            if panel is not None and not self.panel_problems(panel):
+                self._suspect = ""
+                self._set_read_only(True)
+                return self._panel_reading(panel)
             # Чужая карта: её числа - не температура и не авария. Не показывать их как показания камеры.
             if problems != getattr(self, "_suspect", ""):
                 self._trace_event("MAP", self.suspect_text(problems), "WARN")
             self._suspect = problems
+            self._set_read_only(False)
             return ChamberReading(details={"suspect": self.suspect_text(problems), "lan_control": None,
                                            "mode": ZUNDAR_STATES.get(state["state"], f"состояние {state['state']}")})
         self._suspect = ""
+        self._set_read_only(False)
         alarm = None if state["alarm"] in (ZUNDAR_NO_ALARM, 0) else int(state["alarm"])
         high, low = (self.alarm_limits[0], self.alarm_limits[1]) if self.alarm_limits else (None, None)
         return ChamberReading(
@@ -738,6 +794,15 @@ class ZundarChamber(ChamberDriver):
                 "lan_control": self.lan_control, "high_c": high, "low_c": low,
             })
 
+    def _panel_reading(self, panel: dict) -> ChamberReading:
+        """Показание по карте панели: уставка - рабочая (по ней камера идёт сейчас), аварий панель не отдаёт."""
+        self.last = {"state": None, "mode": None}
+        return ChamberReading(
+            actual_c=panel["temp"], setpoint_c=panel["active_c"], running=panel["state"] == 3, alarm=None,
+            details={"panel": True, "read_only": True, "mode": PANEL_STATES.get(panel["state"]),
+                     "entered_c": panel["entered_c"], "output_pct": panel["output_pct"],
+                     "humidity_raw": panel["humidity_raw"], "lan_control": None})
+
     def _write(self, address: int, value: int):
         try:
             self.client.write_registers(address, [int(value) & 0xFFFF])
@@ -747,6 +812,9 @@ class ZundarChamber(ChamberDriver):
 
     def _check_map(self):
         """Писать уставку и пуск можно только в контроллер AZ1000: в чужую память - нельзя."""
+        if self.read_only:
+            raise ChamberError("отвечает сенсорная панель камеры - она только читается: уставку и пуск задайте на "
+                               "пульте (программа шагов), прогон следует за камерой")
         if getattr(self, "_suspect", ""):
             raise ChamberError(self.suspect_text(self._suspect) + ". Уставка и пуск не отправлены")
 
@@ -825,6 +893,16 @@ class ZundarChamber(ChamberDriver):
         finally:
             client.close()
 
+    def _panel_check(self, host: str, port: int, unit: int) -> bool:
+        """Отвечает ли по адресу сенсорная панель Zundar (её карта, только чтение)."""
+        client = ModbusTcpClient(host, port, unit, timeout_s=1.5)
+        try:
+            return not self.panel_problems(ZundarChamber(host, port, unit, client=client)._read_panel())
+        except ChamberError:
+            return False
+        finally:
+            client.close()
+
     def _speaks_modbus(self, host: str, port: int) -> int | None:
         """Станция, по которой порт отвечает как Modbus TCP (ответ-ошибка Modbus - тоже Modbus). None - нет."""
         for unit in dict.fromkeys((self.unit, 0, 1, 255)):
@@ -860,6 +938,11 @@ class ZundarChamber(ChamberDriver):
             if unit is None:
                 return None
             problems = self._az1000_check(found_host, found_port, unit)
+            if problems and self._panel_check(found_host, found_port, unit):
+                found = self._take_found(found_host, found_port, unit)
+                found["text"] += (": отвечает сенсорная панель камеры - только чтение, уставку и пуск задают на "
+                                  "пульте, прогон следует за камерой")
+                return found
             if problems:
                 self._trace_event("SCAN", f"{found_host}:{found_port} станция {unit} отвечает по Modbus, но не как "
                                           f"AZ1000: {problems}", "WARN")
@@ -986,17 +1069,47 @@ class SimulatedChamber(ChamberDriver):
         self.cooling_floor_c: float | None = None
         # Влажность воздуха, %: как у камеры с датчиком влажности (Zundar). None - камера её не меряет.
         self.humidity_pct: float | None = None
+        # Камера со своей программой на пульте (как Zundar через сенсорную панель): шаги (°C, выдержка мин),
+        # выдержка идёт, когда воздух вышел на шаг. Уставку и пуск из программы камера тогда не принимает.
+        self.program: list[tuple[float, float]] = []
+        self.program_index = 0
+        self._hold_left_min = 0.0
+        self.can_set = True
+        self.can_run = True
         self._last = clock()
+
+    def use_program(self, steps):
+        """Своя программа камеры на пульте: сразу пуск с первого шага; уставку и пуск снаружи не принимает."""
+        self.program = [(float(temp), float(hold)) for temp, hold in steps]
+        self.program_index = 0
+        self.can_set = self.can_run = False
+        self.running = bool(self.program)
+        if self.program:
+            self.setpoint_c, self._hold_left_min = self.program[0]
+
+    def _program_step(self, dt: float):
+        """Ход своей программы камеры: выдержка шага на уставке, затем следующий шаг, после последнего - стоп."""
+        if not self.program or not self.running:
+            return
+        if abs(self.air_c - self.setpoint_c) <= 1.0:
+            self._hold_left_min -= dt
+            if self._hold_left_min <= 0:
+                self.program_index += 1
+                if self.program_index >= len(self.program):
+                    self.running = False
+                else:
+                    self.setpoint_c, self._hold_left_min = self.program[self.program_index]
 
     def advance(self, minutes: float):
         """Проводит модель вперёд на заданное число минут модельного времени."""
-        target = self.setpoint_c if self.running else self.AMBIENT_C
-        if self.cooling_floor_c is not None:
-            target = max(target, float(self.cooling_floor_c))
         remaining = float(minutes)
         step = 0.05
         while remaining > 1e-9:
             dt = min(step, remaining)
+            self._program_step(dt)
+            target = self.setpoint_c if self.running else self.AMBIENT_C
+            if self.cooling_floor_c is not None:
+                target = max(target, float(self.cooling_floor_c))
             # Мягкий подход к цели, но не быстрее предельной скорости камеры.
             wanted = (target - self.air_c) * (1.0 - math.exp(-dt / self.AIR_TAU_MIN))
             limit = self.RAMP_C_PER_MIN * dt
@@ -1019,10 +1132,14 @@ class SimulatedChamber(ChamberDriver):
                               running=self.running, alarm=0, product_c=round(self.product_c, 3), details=details)
 
     def set_setpoint(self, value_c: float):
+        if not self.can_set:
+            raise ChamberError("камера ведёт свою программу: уставку задают на пульте")
         self._sync()
         self.setpoint_c = float(value_c)
 
     def set_running(self, on: bool):
+        if not self.can_run:
+            raise ChamberError("камера ведёт свою программу: пуск и стоп - на пульте")
         self._sync()
         self.running = bool(on)
 
