@@ -54,7 +54,13 @@ class Adapter:
         return ""
 
 
+# Без этого powershell.exe выводит русские имена («Беспроводная сеть») в кодовой странице консоли,
+# а читаем мы UTF-8: 06.11.2026 в окне вышли «кракозябры».
+_UTF8_OUTPUT = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+
+
 def _powershell(command: str, timeout_s: float = 20.0) -> subprocess.CompletedProcess:
+    command = _UTF8_OUTPUT + command
     return subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
                           capture_output=True, text=True, encoding="utf-8", errors="replace",
                           timeout=timeout_s, creationflags=_NO_WINDOW)

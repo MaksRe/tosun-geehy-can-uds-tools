@@ -107,6 +107,14 @@ def test_another_connection_in_the_camera_network_is_named(monkeypatch):
     assert not ok and text.startswith("Сеть уже настроена") and "Беспроводная сеть" in text
 
 
+def test_russian_adapter_names_come_in_utf8():
+    """06.11.2026 «Беспроводная сеть» пришла в окно кракозябрами: вывод powershell.exe не был UTF-8."""
+    if sys.platform != "win32":
+        return
+    result = net_setup._powershell("Write-Output ([string][char]0x0411 + [char]0x0435 + [char]0x0441)")
+    assert result.stdout.strip() == "Бес"
+
+
 def test_apply_and_restore(monkeypatch):
     state = {"adapters": net_setup.parse_adapters(ADAPTERS, ADDRESSES), "calls": []}
     monkeypatch.setattr(net_setup, "list_wired_adapters", lambda: state["adapters"])
