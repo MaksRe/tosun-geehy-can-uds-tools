@@ -155,11 +155,20 @@ def conflict_text(conflicts: list[tuple[str, str]], host: str) -> str:
             "программе и нажмите «Настроить сеть ноутбука». Или на время работы с камерой отключите ту сеть.")
 
 
+# Адреса только подключённых подключений: выключенный Wi-Fi держит свой адрес в списке Windows
+# (06.11.2026 Wi-Fi выключили, а предупреждение о 192.168.0.140 осталось).
+_CONNECTED_ADDRESSES_COMMAND = (
+    "$up = @(Get-NetIPInterface -AddressFamily IPv4 -ConnectionState Connected).InterfaceIndex; "
+    "Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $up -contains $_.InterfaceIndex } | "
+    "Select-Object InterfaceAlias,IPAddress,PrefixLength | ConvertTo-Json -Compress")
+
+
 def network_conflicts(host: str, adapter: str) -> list[tuple[str, str]]:
+    """Другие подключённые подключения ноутбука в сети камеры (выключенные не в счёт)."""
     if sys.platform != "win32":
         return []
     try:
-        addresses = _powershell(_ADDRESSES_COMMAND)
+        addresses = _powershell(_CONNECTED_ADDRESSES_COMMAND)
     except (OSError, subprocess.SubprocessError):
         return []
     return same_network_elsewhere(addresses.stdout, host, adapter)
