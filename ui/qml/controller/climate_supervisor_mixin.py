@@ -480,9 +480,9 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
                 with self._mb_context(board["sa"], notify=False):
                     missing = lacking(self._chamber_points)
                     if len(missing) == len(chamber_fit.NODES_X10):
-                        problems.append(f"«{board['name']}» - журнал первого этапа не открыт")
+                        problems.append(f"{self._mb_label(board['sa'])} - журнал первого этапа не открыт")
                     elif missing:
-                        problems.append(f"«{board['name']}» - в журнале нет узлов "
+                        problems.append(f"{self._mb_label(board['sa'])} - в журнале нет узлов "
                                         + ", ".join(chamber_fit.node_text(node) for node in missing))
             add("stage2", not problems,
                 f"Второй этап: у всех {len(working)} плат на шине открыт журнал первого этапа по всем узлам - "
@@ -1113,7 +1113,7 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             if match and pathlib.Path(single).is_file():
                 sa = int(match.group(1), 16)
                 boards = [item for item in boards if int(item["sa"]) != sa] + [{"sa": sa, "journal": single}]
-            missing = [f"«{board['name']}»" for board in self._mb_boards
+            missing = [self._mb_label(board["sa"]) for board in self._mb_boards
                        if int(board["sa"]) not in {int(item["sa"]) for item in boards}]
             self._climate_event(
                 "в состоянии прогона не было журналов каждой платы: "

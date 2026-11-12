@@ -86,7 +86,7 @@ def test_open_refuses_a_journal_of_another_board(tmp_path: Path):
     other = _journal(stub, own / "chamber_20261028_114806_П2_0x81.csv", ALL, time.time())
     assert stub._mb_active_sa == 0x80
     ok, text = stub._chamber_open_journal(str(other))
-    assert not ok and "это журнал платы «П2» (0x81), а показана «П1» (0x80)" in text
+    assert not ok and "это журнал платы 0x81 (П2), а показана 0x80 (П1)" in text
     assert stub._chamber_points == []
     assert stub._mb_activate(0x81)
     ok, text = stub._chamber_open_journal(str(other))

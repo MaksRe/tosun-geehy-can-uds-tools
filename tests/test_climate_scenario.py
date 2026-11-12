@@ -120,6 +120,8 @@ def test_run_follows_scenario_steps(tmp_path: Path):
     transit = cs.new_step(35.0)
     transit["capture"] = False
     stub = _scenario_stub(tmp_path, [cs.new_step(25.0), hold, transit], finish_setpoint=20.0)
+    # Отогрев без ограничения (0): тест проверяет уставки шагов, а не ступени отогрева.
+    stub._climate_scenario["warm_ramp_c_min"] = 0.0
     assert stub._climate_run_start()
     _walk(stub)
 

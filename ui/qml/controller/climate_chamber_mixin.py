@@ -1526,7 +1526,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                         continue
                     value = int(self._chamber_live_last["board_temp"]) / 10.0
                 if coldest is None or value < coldest[0]:
-                    coldest = (value, f"«{board['name']}»")
+                    coldest = (value, self._mb_label(board["sa"]))
             return coldest
         if not fresh("board_temp", real):
             return None

@@ -38,6 +38,7 @@ import json
 import pathlib
 import threading
 import time
+import zipfile
 from datetime import date, datetime, timedelta
 
 import chamber_fit
@@ -45,6 +46,7 @@ import chamber_fit
 from PySide6.QtCore import QTimer
 
 from ui.qml import climate_scenario
+from ui.qml.chamber_results import results_text
 from ui.qml.climate_chamber import (DRIVER_ESPEC, ESPEC_COMMANDS, ESPEC_COMMANDS_BY_KEY, ChamberError,
                                    build_espec_command, espec_is_setting)
 from ui.qml.control_log import ControlLog
@@ -493,7 +495,7 @@ class AppControllerClimateControlMixin(AppControllerContract):
             return False, f"платы 0x{sa & 0xFF:02X} нет в списке", ""
         if not self._mb_activate(sa):
             return False, getattr(self, "_mb_switch_note", "") or "сейчас переключиться нельзя", board["name"]
-        return True, f"в программе показана «{board['name']}» (0x{sa:02X}).", board["name"]
+        return True, f"в программе показана плата {self._mb_label(sa)}.", self._mb_label(sa)
 
     def _control_do_journal_new(self, actor: dict, params: dict):
         """Новый журнал: точки из окна убираются, файл прежнего журнала остаётся на диске."""
@@ -582,9 +584,14 @@ class AppControllerClimateControlMixin(AppControllerContract):
             path = str(self._climate_logs_directory() / f"chamber_{day.isoformat()}.log")
             title = f"журнал камеры за {day.strftime('%d.%m.%Y')}"
             which = f"daylog {day.isoformat()}"
+        elif which == "bundle":
+            path, title = self._control_run_bundle(), "все файлы прогона одним архивом"
         else:
-            return False, "какой файл: report, journal, trace или daylog", which
+            return False, "какой файл: report, journal, trace, daylog или bundle", which
         telegram = getattr(self, "_remote_telegram", None)
+        if which == "bundle" and path and (telegram is None or not actor.get("id")):
+            # С сайта без Telegram: архив готов, страница скачает его по имени из списка файлов.
+            return True, f"{title} готов: {pathlib.Path(path).name}", pathlib.Path(path).name
         if not path or not pathlib.Path(path).is_file():
             if which.startswith("daylog"):
                 # Журнал пишется, пока программа связана с камерой; хранятся последние 30 дней.
@@ -595,6 +602,70 @@ class AppControllerClimateControlMixin(AppControllerContract):
             return False, "файл можно прислать только в чат Telegram", which
         telegram.send_document(path, title, [actor["id"]])
         return True, f"{title} - {pathlib.Path(path).name} - отправлен в чат.", pathlib.Path(path).name
+
+    # Сколько последних дней журналов камеры и хода прогона класть в архив.
+    BUNDLE_DAYS = 3
+
+    def _control_run_bundle(self) -> str:
+        """Все файлы, нужные для разбора прогона, одним zip-архивом в logs/chamber; путь или пусто.
+
+        09.11.2026: раньше файлы приходилось присылать по одному, и журналы плат, кроме показанной,
+        терялись. В архиве: журнал точек и профиль каждой платы, ход прогона и журнал камеры за
+        последние дни, свежий отчёт диагностики, настройки камеры, плат и состояние прогона, итоги
+        прогона текстом (те же таблицы, что в окне).
+        """
+        folder = self._climate_logs_directory()
+        files: list[tuple[pathlib.Path, str]] = []
+
+        def add(path, arc_folder):
+            path = pathlib.Path(str(path or ""))
+            if str(path) not in ("", ".") and path.is_file() and all(path != item[0] for item in files):
+                files.append((path, f"{arc_folder}/{path.name}"))
+
+        def journal_with_profile():
+            journal = getattr(self, "_chamber_file_path", "") or ""
+            add(journal, "журналы_плат")
+            if journal:
+                path = pathlib.Path(journal)
+                add(path.with_name(path.stem + "_profile.json"), "журналы_плат")
+
+        multi = getattr(self, "_mb_on", None)
+        if multi is not None and multi():
+            for board in self._mb_working_boards():
+                with self._mb_context(int(board["sa"]), notify=False):
+                    journal_with_profile()
+        else:
+            journal_with_profile()
+
+        since = time.time() - self.BUNDLE_DAYS * 86400
+        add(getattr(self, "_climate_trace_path", None), "ход_прогона")
+        try:
+            for path in sorted(folder.glob("run_*.csv")):
+                if path.stat().st_mtime >= since:
+                    add(path, "ход_прогона")
+        except OSError:
+            pass
+        today = date.today()
+        for back in range(self.BUNDLE_DAYS):
+            add(folder / f"chamber_{(today - timedelta(days=back)).isoformat()}.log", "журнал_камеры")
+        add(self._climate_save_report(), "отчёт_диагностики")
+        config = self._climate_settings_path().parent
+        for name in ("climate_chamber.json", "climate_run_state.json", "chamber_boards.json"):
+            add(config / name, "настройки")
+
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        target = folder / f"архив_прогона_{stamp}.zip"
+        try:
+            results = results_text(self._chamber_results_view())
+            folder.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("итоги_прогона.txt", results.encode("utf-8-sig"))
+                for path, name in files:
+                    archive.write(path, name)
+        except OSError as error:
+            self._climate_command_status = f"Архив прогона не собрался: {error}"
+            return ""
+        return str(target)
 
     @staticmethod
     def _control_log_day(text) -> date | None:

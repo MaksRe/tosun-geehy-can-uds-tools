@@ -17,6 +17,7 @@ from uds.options_catalog import get_option_by_did, get_option_by_index
 from uds.services.session import Session
 from uds.uds_identifiers import UdsIdentifiers
 from ui.qml.collector_csv_manager import CollectorCombinedCsvManager
+from ui.qml.notices import make_notice, notice_list
 
 from .contract import AppControllerContract
 from .workers import UdsOptionProxy
@@ -3741,6 +3742,16 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
     def openChamberJournal(self, path):
         """Цель функции в открытии журнала из списка, затем новые точки допишутся к нему; действие в журнале."""
         self._control_gui("journal_open", {"path": str(path)})
+
+    @Slot(str, str, str, str, result="QVariantMap")
+    def noticeFor(self, text, tone, kind, title):
+        """Сообщение карточкой для окна: уровень, заголовок, что произошло, почему, что сделать (notices.py)."""
+        return make_notice(str(text or ""), str(tone or ""), str(kind or ""), str(title or ""))
+
+    @Slot("QVariantList", str, str, str, bool, result="QVariantMap")
+    def noticeForList(self, items, tone, kind, title, remarks):
+        """Несколько сообщений одной строкой со счётом; одинаковые сливаются, в карточке - каждое отдельно."""
+        return notice_list(list(items or []), str(tone or ""), str(kind or ""), str(title or ""), bool(remarks))
 
     @Slot()
     def openStage1Journals(self):

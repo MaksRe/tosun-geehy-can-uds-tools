@@ -254,6 +254,11 @@ class AppControllerProfileMixin:
         active = getattr(self, "_mb_active_sa", None)
         if multi is not None and multi() and active is not None:
             return int(active) & 0xFF
+        # Одна плата, узел выбран в шапке калибровки: профиль пишется ему же. 11.11.2026 без этого запись
+        # шла узлу раздела «Параметры» (заводской адрес), прибор 0x82 молчал, и программа винила прошивку.
+        chosen = getattr(self, "_calibration_target_node_sa", None)
+        if chosen is not None:
+            return int(chosen) & 0xFF
         return None
 
     def _on_profile_step_timeout(self):
@@ -292,9 +297,14 @@ class AppControllerProfileMixin:
                 return
             hint = ""
             if name == self.PROFILE_TABLES[0][0]:
-                # Первая же таблица не читается: чаще всего в приборе прошивка,
-                # в которой температурного профиля ещё нет.
-                hint = " Похоже, в приборе старая прошивка без температурного профиля."
+                # Первая же таблица без ответа: либо запрос ушёл не тому узлу, либо в приборе прошивка,
+                # в которой температурного профиля ещё нет. Адрес назван, чтобы первое было видно сразу.
+                target = self._profile_target_override()
+                resolve = getattr(self, "_resolve_options_target_sa", None)
+                if target is None and resolve is not None:
+                    target = resolve()
+                where = "" if target is None else f" Запрос шёл узлу 0x{int(target) & 0xFF:02X}: проверьте, что это ваш прибор."
+                hint = where + " Если адрес верный - в приборе старая прошивка без температурного профиля."
             self._profile_finish_with_error(f"0x{did:04X} - {message}.{hint}")
             return
 

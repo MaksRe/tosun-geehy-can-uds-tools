@@ -381,7 +381,7 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         """Цель функции в имени платы для сообщений, затем человек видит «П1», а не только адрес."""
         board_of = getattr(self, "_mb_board", None)
         board = board_of(sa) if board_of is not None else None
-        return f"«{board['name']}» (0x{int(sa):02X})" if board else f"0x{int(sa):02X}"
+        return f"0x{int(sa):02X} ({board['name']})" if board else f"0x{int(sa):02X}"
 
     # ------------------------------------------------------------------ обмен
 

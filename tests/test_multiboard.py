@@ -136,7 +136,7 @@ def test_start_with_part_of_the_listed_boards(tmp_path: Path):
     with stub._mb_context(0x81):
         stub._chamber_live_reset()
     checks = {item["key"]: item for item in stub._climate_auto_checks()}
-    assert checks["device"]["ok"] and "2 из 3" in checks["device"]["text"] and "«П2» (0x81)" in checks["device"]["text"]
+    assert checks["device"]["ok"] and "2 из 3" in checks["device"]["text"] and "0x81 (П2)" in checks["device"]["text"]
     assert not any("П2" in text for text in stub._climate_auto_blockers())
     silent = BOARDS[1]
 
@@ -148,7 +148,7 @@ def test_start_with_part_of_the_listed_boards(tmp_path: Path):
     feed_two(time.monotonic())
     assert stub._climate_run_start(), stub._climate_run_status
     assert stub._mb_run_sas == [0x80, 0x82]
-    assert any("Плат в прогоне 2" in text and "в прогон не вошли: «П2» (0x81)" in text for text in stub.kinds())
+    assert any("Плат в прогоне 2" in text and "в прогон не вошли: 0x81 (П2)" in text for text in stub.kinds())
     # Плата П2 вернулась на шину посреди прогона: в этот прогон она всё равно не входит.
     _walk(stub)
     with stub._mb_context(silent[0]):
@@ -262,7 +262,7 @@ def test_profiles_are_written_one_board_after_another(tmp_path: Path):
     stub._mb_profile_tick(now)
     assert started == [0x80, 0x81, 0x82] and not stub._mb_profiles_busy()
     assert "записан в 0x82" in stub._mb_profile_results[0x82]
-    assert "«П2»: точек 0, профиль записан в 0x81" in stub._mb_summary_text()
+    assert "0x81 (П2): точек 0, профиль записан в 0x81" in stub._mb_summary_text()
 
 
 def test_board_list_is_kept_and_checked(tmp_path: Path):
@@ -310,7 +310,12 @@ def test_profile_requests_go_to_the_chamber_board(tmp_path: Path):
         assert AppControllerProfileMixin._profile_target_override(stub) == 0x82
     assert AppControllerProfileMixin._profile_target_override(stub) == 0x80
     assert stub._mb_set_enabled(False)[0]
-    assert AppControllerProfileMixin._profile_target_override(stub) is None, "одна плата - как раньше"
+    # Одна плата, узел в шапке калибровки не выбран («Авто») - как раньше, узлу раздела «Параметры».
+    stub._calibration_target_node_sa = None
+    assert AppControllerProfileMixin._profile_target_override(stub) is None, "одна плата, «Авто» - как раньше"
+    # 11.11.2026: одна плата, в шапке выбран узел 0x82 - профиль пишется ему, а не заводскому адресу.
+    stub._calibration_target_node_sa = 0x82
+    assert AppControllerProfileMixin._profile_target_override(stub) == 0x82
 
 
 def test_calibration_of_previous_board_is_closed_before_next_profile(tmp_path: Path):

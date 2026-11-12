@@ -102,7 +102,7 @@ SIMPLE_CONTROL = {"/pause": ("run_pause", None), "/resume": ("run_resume", None)
                   "/next": ("step_next", "Перейти к следующему шагу, не дожидаясь точек текущего?"),
                   "/capture": ("capture", "Записать точку сейчас по текущим средним прибора?"),
                   "/save": ("scenario_save", None), "/operator": ("run_operator", None)}
-FILE_COMMANDS = {"/report": "report", "/journal": "journal", "/trace": "trace"}
+FILE_COMMANDS = {"/report": "report", "/journal": "journal", "/trace": "trace", "/all": "bundle"}
 CONTROL_COMMANDS = set(SIMPLE_CONTROL) | set(FILE_COMMANDS) | {
     "/setpoint", "/mode", "/goto", "/label", "/limits", "/step", "/addstep", "/delstep", "/rule", "/load", "/new",
     "/cmd", "/quiet", "/daylog"}
@@ -1106,6 +1106,7 @@ class TelegramBot:
                       "/load 1, /save, /new цикл|добор|пустой - сценарии",
                       "/cmd ключ имя=значение - команда ESPEC",
                       "/report, /journal, /trace - файлы в этот чат",
+                      "/all - все файлы прогона одним архивом (журналы всех плат, ход, журнал камеры)",
             "/daylog [вчера | 02.11] - полный журнал камеры за день",
                       "/control - кнопки, /login - вход на сайт"]
         if (user or {}).get("role") == "admin":

@@ -40,6 +40,7 @@ from PySide6.QtCore import QTimer
 
 import chamber_fit
 from ui.qml.app_paths import previous_version_roots
+from ui.qml.chamber_results import board_results, overview_table
 from uds.data_identifiers import UdsData
 from uds.services.read_data_by_id import ServiceReadDataById
 
@@ -95,9 +96,16 @@ class AppControllerChamberMixin(AppControllerContract):
         "Температура платы (°C)",
         "Режим",
         "Температура камеры (°C)",
+        # 09.11.2026: для итогов прогона - дата точки и статистика окна усреднения.
+        "Дата",
+        "Показаний в среднем",
+        "Разброс основного (отсч.)",
+        "Разброс вида топлива (отсч.)",
     )
     # Журналы до связи с камерой: без последнего столбца. Читаются так же.
     CHAMBER_LEGACY_COLUMNS = 7
+    # Журналы до 09.11.2026: без даты и статистики - тоже читаются.
+    CHAMBER_BASE_COLUMNS = 8
 
     # Пометка пробной точки в журнале. По ней видно, что температуру задавала эмуляция.
     CHAMBER_REHEARSAL_MARK = "репетиция"
@@ -331,7 +339,12 @@ class AppControllerChamberMixin(AppControllerContract):
             "fuel_temp_x10": int(values["fuel_temp_x10"]),
             "board_temp_x10": int(values["board_temp_x10"]),
             "rehearsal": rehearsal,
+            "date": datetime.now().strftime("%Y-%m-%d"),
         }
+        # Статистика окна усреднения - для итогов прогона (сколько показаний и их разброс).
+        for key in ("samples", "main_spread", "media_spread"):
+            if values.get(key) is not None:
+                point[key] = int(round(float(values[key])))
         # Температура воздуха камеры рядом с температурой платы: видно, насколько плата отстала.
         chamber_temp = getattr(self, "_climate_point_temperature", None)
         chamber_x10 = chamber_temp() if chamber_temp is not None else None
@@ -474,12 +487,20 @@ class AppControllerChamberMixin(AppControllerContract):
         сопоставим с ним. Возвращает текст предупреждения или пустую строку.
         """
         self._chamber_repeat_last = None
-        node = chamber_fit.nearest_node(point["board_temp_x10"])
+
+        # Узел - по тому датчику, по которому точку разложит расчёт: трубка («воздух», «жидкость») -
+        # по датчику трубки, первый этап - по датчику платы. 09.11.2026: раньше сухая трубка сверялась по
+        # плате, а она в сборе на 3-5 °C теплее узла - сверка почти никогда не срабатывала.
+        def node_of(item):
+            tube = str(item.get("note", "")).strip().casefold() in (chamber_fit.AIR_NOTE, chamber_fit.LIQUID_NOTE)
+            return chamber_fit.nearest_node(item["fuel_temp_x10"] if tube else item["board_temp_x10"])
+
+        node = node_of(point)
         if node is None:
             return ""
         earlier = [item for item in self._chamber_points[:-1]
                    if not item.get("rehearsal") and item["note"] == point["note"]
-                   and chamber_fit.nearest_node(item["board_temp_x10"]) == node
+                   and node_of(item) == node
                    and not self._chamber_point_old_clamp(item)]
         if not earlier:
             return ""
@@ -508,7 +529,11 @@ class AppControllerChamberMixin(AppControllerContract):
             level = "warn"
         event = getattr(self, "_climate_event", None)
         if event is not None:
-            event(text, level)
+            # Несколько плат: без имени платы шесть одинаковых предупреждений не различить.
+            multi, label_of = getattr(self, "_mb_on", None), getattr(self, "_mb_label", None)
+            sa = getattr(self, "_mb_active_sa", None)
+            prefix = f"{label_of(sa)}: " if multi is not None and multi() and label_of and sa is not None else ""
+            event(prefix + text, level)
         return text if level == "warn" else ""
 
     # Края шкал датчиков в прошивке до 1.0.1: плата -40...+85, топливо -40...+80 °C (0,1 °C).
@@ -651,8 +676,8 @@ class AppControllerChamberMixin(AppControllerContract):
         if multi is not None and multi() and shown is not None and owner is not None and owner != shown \
                 and self._mb_board(owner) is not None:
             # Несколько плат: журнал другой платы из списка в поля показанной - её точки в чужой профиль.
-            return False, (f"это журнал платы «{self._mb_name(owner)}» (0x{owner:02X}), а показана "
-                           f"«{self._mb_name(shown)}» (0x{shown:02X}). Покажите «{self._mb_name(owner)}» в ленте плат "
+            return False, (f"это журнал платы {self._mb_label(owner)}, а показана "
+                           f"{self._mb_label(shown)}. Покажите {self._mb_label(owner)} в ленте плат "
                            "или нажмите «Журналы первого этапа всем платам»")
         source = pathlib.Path(item["path"])
         target = source
@@ -697,7 +722,7 @@ class AppControllerChamberMixin(AppControllerContract):
         self._chamber_points.pop(int(index))
         saved = self._chamber_after_change()
         node = chamber_fit.nearest_node(point["board_temp_x10"])
-        where = "вне сетки" if node is None else chamber_fit.node_text(node)
+        where = "вне допуска ±3 °C" if node is None else chamber_fit.node_text(node)
         text = (f"точка {point['time']} ({where}, плата {point['board_temp_x10'] / 10:+.1f} °C, основной "
                 f"{point['main']}) убрана. Осталось точек: {len(self._chamber_points)}.")
         self._chamber_set_status(text[:1].upper() + text[1:] + saved, "#0f6ab4")
@@ -796,6 +821,10 @@ class AppControllerChamberMixin(AppControllerContract):
                         self.CHAMBER_REHEARSAL_MARK if point.get("rehearsal") else "",
                         "" if point.get("chamber_temp_x10") is None
                         else f"{point['chamber_temp_x10'] / 10:.1f}".replace(".", ","),
+                        point.get("date", ""),
+                        "" if point.get("samples") is None else int(point["samples"]),
+                        "" if point.get("main_spread") is None else int(point["main_spread"]),
+                        "" if point.get("media_spread") is None else int(point["media_spread"]),
                     ))
         except OSError as error:
             return str(error)
@@ -819,8 +848,9 @@ class AppControllerChamberMixin(AppControllerContract):
         """Точки журнала из текста файла; None - файл не журнал прогона (не те колонки)."""
         rows = list(csv.reader(text.splitlines(), delimiter=";"))
         header = [cell.strip() for cell in rows[0]] if rows else []
-        legacy = list(self.CHAMBER_COLUMNS[:self.CHAMBER_LEGACY_COLUMNS])
-        if not rows or (header != list(self.CHAMBER_COLUMNS) and header != legacy):
+        # Старые журналы - начало того же набора столбцов: 7, 8 или все.
+        if (not rows or len(header) < self.CHAMBER_LEGACY_COLUMNS
+                or header != list(self.CHAMBER_COLUMNS[:len(header)])):
             return None
 
         def number(cell):
@@ -854,6 +884,13 @@ class AppControllerChamberMixin(AppControllerContract):
             chamber_temp = number(row[7]) if len(row) > 7 else None
             if chamber_temp is not None:
                 point["chamber_temp_x10"] = int(round(chamber_temp * 10))
+            base = self.CHAMBER_BASE_COLUMNS
+            if len(row) > base and str(row[base]).strip():
+                point["date"] = str(row[base]).strip()
+            for offset, key in enumerate(("samples", "main_spread", "media_spread"), start=base + 1):
+                value = number(row[offset]) if len(row) > offset else None
+                if value is not None:
+                    point[key] = int(round(value))
             points.append(point)
         return points
 
@@ -1099,16 +1136,50 @@ class AppControllerChamberMixin(AppControllerContract):
                 "boardTemp": f"{point['board_temp_x10'] / 10:+.1f}",
                 "chamberTemp": ("-" if point.get("chamber_temp_x10") is None
                                 else f"{point['chamber_temp_x10'] / 10:+.1f}"),
-                "node": ("вне сетки" if node is None else chamber_fit.node_text(node))
+                "node": ("вне допуска ±3 °C" if node is None else chamber_fit.node_text(node))
                         + (" (упор)" if self._chamber_point_old_clamp(point) else ""),
                 "nodeOk": node is not None and not self._chamber_point_old_clamp(point),
             })
         return rows
 
+    def _chamber_results_view(self) -> dict:
+        """Итоги прогона для окна, сайта и мини-приложения: по каждой плате - сводка и таблицы.
+
+        Несколько плат в камере - итоги каждой платы по её журналу и общая сводка по платам;
+        одна плата - итоги открытого журнала.
+        """
+        boards = []
+        multi = getattr(self, "_mb_on", None)
+        if multi is not None and multi():
+            shown = getattr(self, "_mb_active_sa", None)
+            for board in self._mb_working_boards():
+                sa = int(board["sa"])
+                with self._mb_context(sa, notify=False):
+                    result = board_results(self._chamber_points, str(board["name"]), f"0x{sa:02X}")
+                result["shown"] = sa == shown
+                boards.append(result)
+        else:
+            result = board_results(self._chamber_points, "Плата", "")
+            result["shown"] = True
+            boards.append(result)
+        file = pathlib.Path(self._chamber_file_path).name if self._chamber_file_path else ""
+        return {"boards": boards, "overview": overview_table(boards) if len(boards) > 1 else None,
+                "file": file, "time": datetime.now().strftime("%d.%m.%Y %H:%M")}
+
     def _chamber_coverage_rows(self) -> list:
         """Показывает, чего не хватает: по каждому узлу сетки что уже снято."""
-        counts: dict[int, dict[str, int]] = {}
+        counts = self._chamber_node_buckets()
+        return self._chamber_coverage_from(counts)
+
+    def _chamber_node_buckets(self, skip_rehearsal: bool = False) -> dict:
+        """Что снято в каждом узле сетки: эталоны обоих контуров (первый этап), «воздух» и «жидкость».
+
+        Трубка раскладывается по узлам по датчику топлива, ступень платы - по датчику платы (как в расчёте).
+        """
+        counts: dict[int, dict] = {}
         for point in self._chamber_points:
+            if skip_rehearsal and point.get("rehearsal"):
+                continue
             note = str(point["note"]).strip().casefold()
             # Трубка раскладывается по узлам по датчику топлива, ступень платы - по датчику платы (как в расчёте).
             tube = note in (chamber_fit.AIR_NOTE, chamber_fit.LIQUID_NOTE)
@@ -1125,7 +1196,9 @@ class AppControllerChamberMixin(AppControllerContract):
                 bucket["air"] += 1
             elif note == chamber_fit.LIQUID_NOTE:
                 bucket["liquid"] += 1
+        return counts
 
+    def _chamber_coverage_from(self, counts: dict) -> list:
         board_only = bool(getattr(self, "_chamber_board_only", False))
         # Второй этап после прогона одной платы: в журнале в каждом узле одна своя ёмкость,
         # таблица платы считается по ней - узлу хватает одной.

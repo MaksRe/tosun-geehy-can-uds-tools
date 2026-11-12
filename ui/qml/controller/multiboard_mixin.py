@@ -160,6 +160,19 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         board = self._mb_board(sa) if sa is not None else None
         return board["name"] if board else ("—" if sa is None else f"0x{int(sa) & 0xFF:02X}")
 
+    def _mb_label(self, sa: int | None) -> str:
+        """Цель функции в плате для сообщений: адрес узла - привязка, имя - пометка в скобках («0x82 (П2)»).
+
+        09.11.2026: имя платы - произвольная подпись (две платы были названы «П6»), а адрес узла на шине
+        однозначен; поэтому в событиях, предупреждениях и статусах плата называется по адресу.
+        """
+        if sa is None:
+            return "—"
+        sa = int(sa) & 0xFF
+        board = self._mb_board(sa)
+        address = f"0x{sa:02X}"
+        return f"{address} ({board['name']})" if board and board["name"] and board["name"] != address else address
+
     # ------------------------------------------------------------------ контекст платы
 
     def _mb_store(self, sa: int):
@@ -240,8 +253,8 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         if not force and (self._mb_busy() or bool(getattr(self, "_trial_busy", False))):
             # Причина - в ленте плат (она в том же окне), а не всплывающей подсказкой главного окна.
             what = "идёт пробная калибровка" if getattr(self, "_trial_busy", False) else "идёт обмен с прибором"
-            self._mb_switch_note = (f"Переключиться на «{self._mb_name(sa)}» сейчас нельзя: {what} с "
-                                    f"«{self._mb_name(self._mb_active_sa)}». Подождите конца.")
+            self._mb_switch_note = (f"Переключиться на {self._mb_label(sa)} сейчас нельзя: {what} с "
+                                    f"{self._mb_label(self._mb_active_sa)}. Подождите конца.")
             self._mb_switch_note_s = time.monotonic()
             self._mb_changed()
             return False
@@ -325,7 +338,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             self._mb_apply_period()
         self._mb_save()
         self._mb_changed()
-        return True, f"плата «{board['name']}» убрана из списка"
+        return True, f"плата {self._mb_label(board['sa'])} убрана из списка"
 
     def _mb_rename_board(self, sa: int, name: str) -> bool:
         board = self._mb_board(sa)
@@ -424,8 +437,8 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             (alive if fresh else silent).append(board)
         self._mb_run_sas = [int(board["sa"]) for board in alive]
         self._mb_changed()
-        return ([f"«{board['name']}» (0x{board['sa']:02X})" for board in alive],
-                [f"«{board['name']}» (0x{board['sa']:02X})" for board in silent])
+        return ([self._mb_label(board["sa"]) for board in alive],
+                [self._mb_label(board["sa"]) for board in silent])
 
     def _mb_set_run_boards(self, sas):
         """После перезапуска программы: участники прогона - те, чьи журналы сохранены в состоянии."""
@@ -514,7 +527,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         for board in self._mb_boards:
             with self._mb_context(board["sa"], notify=False):
                 if not self._chamber_live_fresh("board_temp", now):
-                    silent.append(f"«{board['name']}» (0x{board['sa']:02X})")
+                    silent.append(self._mb_label(board["sa"]))
         return silent
 
     # ------------------------------------------------------------------ тишина на шине
@@ -581,7 +594,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                 got = chamber_fit.nearest_node(point[field])
                 if wanted is not None and got != wanted:
                     what = "трубки" if field == "fuel_temp_x10" else "платы"
-                    self._climate_event(f"плата «{board['name']}»: точка при {point[field] / 10:+.1f} °C ({what}) - "
+                    self._climate_event(f"плата {self._mb_label(sa)}: точка при {point[field] / 10:+.1f} °C ({what}) - "
                                         f"не в узле {chamber_fit.node_text(wanted)} (±3 °C), в таблицу узла не "
                                         "попадёт.", "warn")
         self._mb_changed()
@@ -590,7 +603,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             self._mb_capture_stage_since = None
             return True
         if now - self._mb_capture_stage_since >= self.MB_CAPTURE_WAIT_S:
-            names = ", ".join(f"«{board['name']}»" for board in missing)
+            names = ", ".join(self._mb_label(board["sa"]) for board in missing)
             self._climate_event(f"нет среднего от плат {names} за {self.MB_CAPTURE_WAIT_S:g} с: точка шага у них не "
                                 "снята, прогон идёт дальше. Проверьте их связь.", "warn")
             self._mb_capture_stage_since = None
@@ -671,7 +684,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                     self._mb_profile_results[board["sa"]] = "таблицы неполные - профиль не записан"
         self._mb_profile_queue = queue
         self._mb_profile_current = None
-        names = ", ".join(f"«{self._mb_name(sa)}»" for sa in queue)
+        names = ", ".join(self._mb_label(sa) for sa in queue)
         text = (f"пишу профиль по очереди в платы с полными таблицами: {names}" if queue
                 else "ни у одной платы таблицы не полные - писать нечего")
         self._mb_status = text[:1].upper() + text[1:] + "."
@@ -757,7 +770,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         if not self._mb_activate(sa):
             self._mb_profile_queue.insert(0, sa)
             return
-        self._mb_status = f"Пишу профиль в плату «{self._mb_name(sa)}»..."
+        self._mb_status = f"Пишу профиль в плату {self._mb_label(sa)}..."
         if self._chamber_chain_start(automatic=True) is False:
             # Цепочка не запустилась: причина - в итог платы, очередь идёт дальше.
             problem_of = getattr(self, "_chamber_chain_problem", None)
@@ -923,9 +936,9 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                 if journal == str(self._chamber_file_path or ""):
                     continue
                 if loader is not None and pathlib.Path(journal).is_file() and loader(journal):
-                    events.append(f"«{self._mb_name(sa)}»: {len(self._chamber_points)} точек")
+                    events.append(f"{self._mb_label(sa)}: {len(self._chamber_points)} точек")
                 else:
-                    events.append(f"«{self._mb_name(sa)}»: журнал {journal} не загрузился")
+                    events.append(f"{self._mb_label(sa)}: журнал {journal} не загрузился")
         return events
 
     def _mb_summary_text(self) -> str:
@@ -937,7 +950,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             with self._mb_context(board["sa"], notify=False):
                 points = len(self._chamber_points)
             result = self._mb_profile_results.get(board["sa"], "")
-            parts.append(f"«{board['name']}»: точек {points}" + (f", {result}" if result else ""))
+            parts.append(f"{self._mb_label(board['sa'])}: точек {points}" + (f", {result}" if result else ""))
         return " По платам: " + "; ".join(parts) + "."
 
     # ------------------------------------------------------------------ показ
@@ -956,6 +969,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                 media = self._chamber_live_stats("media", now)
                 fresh = self._chamber_live_fresh("board_temp", now)
                 profile_state, profile_tone = self._mb_profile_state(board["sa"])
+                marks = self._mb_node_marks()
                 rows.append({
                     "sa": board["sa"], "saText": f"0x{board['sa']:02X}", "name": board["name"],
                     "active": board["sa"] == shown,
@@ -971,7 +985,8 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                     "tablesComplete": bool(self._chamber_tables_complete),
                     "profile": self._mb_profile_results.get(board["sa"], str(self._chamber_chain_status or "")),
                     "profileState": profile_state, "profileTone": profile_tone,
-                    "nodes": self._mb_node_marks(),
+                    "nodes": marks,
+                    "stages": self._mb_assembly_state(marks),
                 })
         shown_board = self._mb_board(shown) if shown is not None else None
         return {"enabled": self._mb_on(), "configured": bool(self._mb_enabled), "quietBus": bool(self._mb_quiet_bus),
@@ -1008,16 +1023,33 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         return "не записан", "normal"
 
     def _mb_node_marks(self) -> list[dict]:
-        """Цель функции в узлах температуры для плитки: у каких есть точки этой платы, а каких ещё нет."""
-        counts = {node: 0 for node in chamber_fit.NODES_X10}
-        for point in getattr(self, "_chamber_points", []) or []:
-            if point.get("rehearsal"):
-                continue
-            node = chamber_fit.nearest_node(point.get("board_temp_x10"))
-            if node in counts:
-                counts[node] += 1
-        return [{"node": chamber_fit.node_text(node), "short": str(int(node) // 10), "count": count}
-                for node, count in counts.items()]
+        """Цель функции в узлах температуры для плитки: что снято у платы в каждом узле - по двум этапам.
+
+        board - первый этап (плата с эталонами, узел по датчику платы); air - второй этап, изделие в сборе:
+        сухая трубка «воздух», узел по датчику трубки (±3 °C), как в расчёте строк трубки; liquid - «жидкость».
+        08.11.2026: раньше плитка красила узел по любой точке, и после второго этапа нельзя было понять,
+        где трубка снята, а где точка ушла мимо узла.
+        """
+        buckets = self._chamber_node_buckets(skip_rehearsal=True) if hasattr(self, "_chamber_node_buckets") else {}
+        marks = []
+        for node in chamber_fit.NODES_X10:
+            bucket = buckets.get(node) or {"main": set(), "media": set(), "air": 0, "liquid": 0}
+            board = bool(bucket["main"] or bucket["media"])
+            air, liquid = int(bucket["air"]), int(bucket["liquid"])
+            text = chamber_fit.node_text(node)
+            marks.append({
+                "node": text, "short": str(int(node) // 10),
+                "count": int(board) + air + liquid,
+                "board": board, "air": air, "liquid": liquid,
+                "tip": (f"{text}: плата - {'снята' if board else 'нет точки'}; в сборе - сухая трубка "
+                        f"{'есть' if air else 'нет'}" + (f", в жидкости {liquid}" if liquid else "")),
+            })
+        return marks
+
+    def _mb_assembly_state(self, marks: list[dict]) -> dict:
+        """Цель функции в сводке второго этапа для плитки: сколько узлов с сухой трубкой и снята ли «жидкость»."""
+        return {"air": sum(1 for mark in marks if mark["air"]), "liquid": any(mark["liquid"] for mark in marks),
+                "board": sum(1 for mark in marks if mark["board"]), "total": len(marks)}
 
     def _mb_keeps_live(self) -> bool:
         """Цель функции в признаке «лента плат видна», затем опрос всех плат идёт в любом разделе калибровки."""

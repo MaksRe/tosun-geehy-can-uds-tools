@@ -161,8 +161,7 @@
   nav button.on { color: var(--link); }
   .tab { display: none; } .tab.on { display: block; }
   .points { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
-  .points th { text-align: left; color: var(--soft); font-weight: 500; padding: 0 4px 4px 0; }
-  .points td { padding: 4px 4px 4px 0; border-top: 1px solid var(--line); }
+  .points td { white-space: nowrap; }
   .wrap { overflow-x: auto; }
   .empty { text-align: center; padding: 40px 20px; color: var(--soft); }
   .empty b { display: block; color: var(--text); font-size: 17px; margin-bottom: 6px; }
@@ -184,11 +183,11 @@
                                 background: var(--bg); color: var(--text); }
   .ctlrow input { width: 90px; }
   .steps { width: 100%; border-collapse: collapse; font-size: 13px; }
-  .steps td, .steps th { padding: 4px 3px; border-top: 1px solid var(--line); text-align: left; }
-  .steps th { color: var(--soft); font-weight: 500; border-top: 0; }
+
+  .steps td { text-align: center; }
   .steps input[type=text] { width: 64px; padding: 4px 6px; }
   .steps tr.done td { color: var(--soft); }
-  .steps tr.now td { background: rgba(36, 129, 204, .10); }
+  .steps tr.now td, .steps tr.now:nth-child(even) td { background: rgba(36, 129, 204, .16); }
   .steps button { padding: 4px 8px; font-size: 12px; }
   .log li b { font-weight: 600; }
   .form { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; align-items: center; font-size: 13px; }
@@ -210,6 +209,99 @@
       grid-auto-flow: row dense; }
     body.web #tab-now #alerts, body.web .tab .wide { grid-column: 1 / -1; }
   }
+  /* Сообщения карточкой: строка «значок + заголовок», по нажатию - разбор (notices.py). */
+  details.notice { border-radius: 10px; margin: 6px 0; border: 1px solid transparent; }
+  details.notice > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px;
+                             padding: 5px 8px; font-size: 14px; }
+  details.notice > summary::-webkit-details-marker { display: none; }
+  details.notice > summary .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  details.notice[open] > summary .t { white-space: normal; font-weight: 600; }
+  details.notice > summary .more { color: var(--soft); font-size: 12px; }
+  details.notice[open] > summary .more { display: none; }
+  details.notice .badge { flex: none; width: 18px; height: 18px; border-radius: 50%; color: #fff; font-size: 12px;
+                          font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+  details.notice .body { padding: 2px 10px 10px 34px; font-size: 13px; }
+  details.notice .body h4 { margin: 8px 0 2px; font-size: 11px; color: var(--soft); text-transform: uppercase; letter-spacing: .03em; }
+  details.notice .body ul, details.notice .body ol { margin: 0; padding-left: 18px; }
+  details.notice .body .full { color: var(--soft); font-size: 12px; margin-top: 8px; white-space: pre-wrap; }
+  details.notice details.notice { margin-left: -24px; }
+  /* Подсказка «i»: значок рядом с заголовком, по нажатию - пояснение под ним. */
+  .card { position: relative; }
+  details.hint { display: inline-block; vertical-align: middle; margin-left: 6px; text-transform: none;
+                 letter-spacing: 0; font-weight: 400; }
+  details.hint > summary { list-style: none; cursor: pointer; width: 17px; height: 17px; border-radius: 50%;
+                           background: #e0f2fe; color: #0369a1; border: 1px solid #7dd3fc; font-size: 11px;
+                           font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+  details.hint > summary::-webkit-details-marker { display: none; }
+  details.hint[open] > summary { background: #0284c7; color: #fff; }
+  details.hint .hintbody { position: absolute; left: 10px; right: 10px; z-index: 6; margin-top: 6px;
+                           background: var(--card); border: 1px solid #7dd3fc; border-radius: 10px; padding: 8px 10px;
+                           font-size: 13px; color: var(--text); box-shadow: 0 6px 20px rgba(0,0,0,.18); }
+  /* Список «параметр - значение» в раскрытии. */
+  .kvlist { margin-top: 4px; }
+  /* Итоги прогона: таблицы прокручиваются вбок, строки окрашены по итогу. */
+  .rtable { border-collapse: collapse; font-size: 12px; white-space: nowrap; }
+  .rtable th { white-space: normal; min-width: 64px; }
+  .rtable td { text-align: right; }
+  .rtable td.c { text-align: center; } .rtable td.l { text-align: left; }
+  .rtable tr.ok td { background: rgba(22, 163, 74, .08); }
+  .rtable tr.warn td { background: rgba(217, 119, 6, .10); }
+  .rtable tr.bad td { background: rgba(220, 38, 38, .10); }
+  .rtable tr.ok td.s { color: var(--ok); } .rtable tr.warn td.s { color: var(--warn); } .rtable tr.bad td.s { color: var(--bad); }
+  .rtitle { font-weight: 600; margin: 12px 0 4px; }
+  .rsum { font-size: 13px; margin: 6px 0; }
+  .rsum .ri { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 2px 10px;
+              padding: 5px 0; border-top: 1px solid var(--line); }
+  .rsum .ri:first-child { border-top: 0; }
+  .rsum .v { font-weight: 600; margin-left: auto; text-align: right; }
+  .legendlist { font-size: 12px; margin: 4px 0 0; padding-left: 16px; color: var(--soft); }
+  /* Классическая таблица: сетка по всем ячейкам, шапка на фоне, строки через одну с подложкой. */
+  :root { --grid: rgba(100, 116, 139, .38); --zebra: rgba(100, 116, 139, .07); --head: rgba(100, 116, 139, .14); }
+  .tbl, .points, .steps, .rtable { border-collapse: collapse; border: 1px solid var(--grid); }
+  .tbl th, .tbl td, .points th, .points td, .steps th, .steps td, .rtable th, .rtable td {
+    border: 1px solid var(--grid); padding: 6px 8px; vertical-align: middle; }
+  .tbl th, .points th, .steps th, .rtable th { background: var(--head); color: var(--text); font-weight: 600;
+                                               text-align: center; font-size: 12px; }
+  .tbl tr:nth-child(even) td, .points tr:nth-child(even) td, .steps tr:nth-child(even) td { background: var(--zebra); }
+  .tbl { width: 100%; font-size: 13px; }
+  .tbl td.v { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .tbl td.u { color: var(--soft); white-space: nowrap; width: 1%; }
+  .tbl td.k { color: var(--text); }
+  .tbl input[type=text] { font: inherit; border: 1px solid var(--line); border-radius: 8px; padding: 4px 7px;
+                         background: var(--bg); color: var(--text); width: 72px; text-align: right; }
+  /* Подвкладки раздела «Прогон»: что сейчас нужно - то и видно. */
+  .subtabs { display: flex; gap: 4px; overflow-x: auto; margin: 0 0 10px; padding: 3px; background: var(--card);
+             border-radius: 12px; position: sticky; top: 0; z-index: 4; }
+  .subtabs button { flex: 1 0 auto; background: transparent; color: var(--soft); padding: 8px 10px; font-size: 13px;
+                    border-radius: 9px; white-space: nowrap; }
+  .subtabs button.on { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+  .subhide { display: none !important; }
+  /* Сводка итогов: «показатель - значение» таблицей, длинное значение переносится в своей ячейке. */
+  .rsumt td.k { width: 58%; }
+  .rsumt td.val { text-align: right; font-weight: 600; }
+  .rsumt td.val.warn { color: var(--warn); } .rsumt td.val.ok { color: var(--ok); }
+  /* Широкая таблица листается вбок, первый столбец (узел, время) остаётся на месте. */
+  .wrap { -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
+  /* Подложка закреплённой ячейки непрозрачная: оттенок строки поверх цвета карточки, под ней ничего не видно. */
+  .rtable tr > td:first-child, .rtable tr > th:first-child { position: sticky; left: 0; z-index: 1;
+                                                             box-shadow: 1px 0 0 var(--grid); }
+  .rtable tr > th:first-child { background: linear-gradient(var(--head), var(--head)), var(--card); }
+  .rtable tr > td:first-child { background: var(--card); }
+  .rtable tr.ok > td:first-child { background: linear-gradient(rgba(22, 163, 74, .08), rgba(22, 163, 74, .08)), var(--card); }
+  .rtable tr.warn > td:first-child { background: linear-gradient(rgba(217, 119, 6, .10), rgba(217, 119, 6, .10)), var(--card); }
+  .rtable tr.bad > td:first-child { background: linear-gradient(rgba(220, 38, 38, .10), rgba(220, 38, 38, .10)), var(--card); }
+  nav { z-index: 15; }
+  /* Цвет строки - только подложкой; цветом текста выделен лишь столбец итога (зачёт, точка). */
+  .rtable td, .tbl td { color: var(--text); }
+  .swipehint { font-size: 11px; color: var(--soft); text-align: right; margin: 2px 2px 0; }
+  /* Смахивание: короткая подсказка, куда перешли. */
+  .swipeflash { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 20;
+                background: rgba(15, 23, 42, .82); color: #fff; padding: 10px 18px; border-radius: 12px;
+                font-size: 15px; font-weight: 600; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .swipeflash.on { opacity: 1; }
+  .stage { display: inline-block; width: 46px; font-size: 10px; color: var(--soft); }
+  .dots i.air { background: #0d9488; color: #fff; border-color: #0d9488; }
+  .dots i.liq { background: #2563eb; color: #fff; border-color: #2563eb; }
 </style>
 </head>
 <body>
@@ -261,7 +353,7 @@
     <!-- Управление и команды - после наблюдения: сначала видно, что происходит, потом - что сделать. -->
     <!-- Управление: только для админа и назначенных им людей. -->
     <div class="card wide" id="controlCard" hidden>
-      <h2>Управление <span id="controlWho"></span></h2>
+      <h2>Управление <span id="controlWho"></span><details class="hint"><summary>i</summary><div class="hintbody">Ручной режим или уставка во время прогона ставят его на паузу. Все действия записываются в журнал с вашим именем.</div></details></h2>
       <button class="estop" data-ctl="estop">⛔ ЭКСТРЕННАЯ ОСТАНОВКА КАМЕРЫ</button>
       <div class="ctlrow"><span class="soft">Режим</span><span class="buttons" style="margin:0" id="ctlModes"></span></div>
       <div class="ctlrow"><span class="soft">Уставка</span><input id="ctlSetpoint" type="text" inputmode="decimal" placeholder="°C">
@@ -274,7 +366,6 @@
       <div class="ctlrow"><span class="soft">Пределы</span><input id="ctlMin" type="text" inputmode="decimal" placeholder="мин">
         <input id="ctlMax" type="text" inputmode="decimal" placeholder="макс"><button class="light" data-ctl="limits">Задать</button>
         <span class="soft" id="ctlLimitsHint"></span></div>
-      <div class="soft" style="margin-top:8px">Ручной режим или уставка во время прогона ставят его на паузу. Все действия записываются в журнал с вашим именем.</div>
     </div>
     <div class="card wide" id="commandsCard" hidden>
       <h2>Команды камеры ESPEC <span>как в окне программы</span></h2>
@@ -291,60 +382,71 @@
     <div class="card wide">
       <h2>Платы в камере <span id="boardsSummary"></span></h2>
       <div id="boardsStability"></div>
-      <div class="soft" id="boardsStatus" style="margin-top:4px"></div>
+      <div id="boardsStatus" style="margin-top:4px"></div>
     </div>
     <div class="bcards wide" id="boardCards"></div>
   </section>
 
   <!-- Прогон: сценарий, ход по узлам, журнал, таблицы, запись профиля. -->
   <section class="tab" id="tab-run">
-    <div class="card">
+    <div class="subtabs" id="runTabs">
+      <button class="on" data-sub="run">Ход</button>
+      <button data-sub="results">Итоги</button>
+      <button data-sub="scenario">Сценарий</button>
+      <button data-sub="journal">Журнал</button>
+      <button data-sub="profile">Профиль</button>
+    </div>
+    <div class="card" data-sub="run">
       <h2>Автопрогон <span id="scenarioName"></span></h2>
       <div id="auto"></div>
     </div>
-    <div class="card" id="resumeCard" hidden>
+    <div class="card wide" data-sub="results">
+      <h2>Итоги прогона <span id="resultsTime"></span><details class="hint"><summary>i</summary><div class="hintbody">По журналам точек каждой платы: что снято в каждом узле на первом этапе (плата с эталонами) и втором (сухая трубка, погружение), показания контуров, ёмкость, изменение относительно +25 °C и разброс показаний. Цвет строки: зелёный - в порядке, жёлтый - точка вне допуска, красный - точки нет. Пояснения к столбцам - под каждой таблицей.</div></details></h2>
+      <div id="results"></div>
+      <div class="buttons"><button class="light" data-bundle="1">🗜 Все файлы прогона одним архивом</button></div>
+    </div>
+    <div class="card" id="resumeCard" data-sub="run" hidden>
       <h2>Прерванный прогон</h2>
       <div id="resumeText"></div>
       <div class="buttons" id="resumeButtons"></div>
     </div>
-    <div class="card">
+    <div class="card" data-sub="scenario">
       <h2>Сценарий <span id="scenarioFile"></span></h2>
       <ul class="list" id="scenarioFiles"></ul>
       <div class="buttons" id="scenarioButtons"></div>
     </div>
-    <div class="card">
+    <div class="card" data-sub="scenario">
       <h2>Правила сценария <span>для всех шагов</span></h2>
-      <div class="form" id="rulesForm"></div>
+      <div class="wrap" id="rulesForm"></div>
       <div class="buttons" id="rulesButtons"></div>
     </div>
-    <div class="card">
+    <div class="card" data-sub="scenario">
       <h2>Шаги сценария <span id="stepsHint"></span></h2>
       <div class="wrap"><table class="steps" id="stepsTable"></table></div>
       <div class="buttons" id="stepsButtons"></div>
     </div>
-    <div class="card">
+    <div class="card" data-sub="journal">
       <h2>Журнал <span id="journal"></span></h2>
       <div class="tiles" id="boards" style="margin-bottom:8px"></div>
       <div id="run"></div>
       <div class="nodes" id="nodes" style="margin-top:8px"></div>
       <div id="report"></div>
     </div>
-    <div class="card">
-      <h2>Журналы на диске <span>свои и прошлых версий</span></h2>
-      <div class="soft">Открыть - новые точки допишутся к этому журналу (так добирают точку к прошлому прогону).</div>
+    <div class="card" data-sub="journal">
+      <h2>Журналы на диске <span>свои и прошлых версий</span><details class="hint"><summary>i</summary><div class="hintbody">«Открыть» - новые точки допишутся к этому журналу (так добирают точку к прошлому прогону).</div></details></h2>
       <ul class="list" id="journals"></ul>
       <div class="buttons" id="journalButtons"></div>
     </div>
-    <div class="card">
+    <div class="card" data-sub="profile">
       <h2>Запись профиля</h2>
       <div class="chips" id="steps"></div>
       <div id="chain" style="margin-top:6px"></div>
     </div>
-    <div class="card" id="testCard" hidden>
+    <div class="card" id="testCard" data-sub="profile" hidden>
       <h2>Тестовый режим</h2>
       <div id="test"></div>
     </div>
-    <div class="card">
+    <div class="card" data-sub="journal">
       <h2>Последние точки</h2>
       <div class="wrap"><table class="points" id="points"></table></div>
     </div>
@@ -353,8 +455,8 @@
   <!-- Графики важных параметров: окно времени, показания под пальцем или курсором. -->
   <section class="tab" id="tab-charts">
     <div class="card wide">
+      <h2>Окно времени<details class="hint"><summary>i</summary><div class="hintbody">Проведите пальцем или курсором по графику - внизу будут значения в этот момент.</div></details></h2>
       <div class="ranges" id="ranges"></div>
-      <div class="soft" style="margin-top:6px">Проведите пальцем или курсором по графику - внизу будут значения в этот момент.</div>
     </div>
     <div class="card">
       <h2>Температура, °C <span id="tempNow"></span></h2>
@@ -399,7 +501,8 @@
       <ul class="list log" id="actions"></ul>
     </div>
     <div class="card">
-      <h2>Файлы <span id="filesHint">придут в чат с ботом</span></h2>
+      <h2>Файлы <span id="filesHint">придут в чат с ботом</span><details class="hint"><summary>i</summary><div class="hintbody">Архив - всё для разбора прогона: журналы и профили всех плат, ход прогона и журнал камеры за 3 дня, отчёт диагностики, настройки и итоги прогона таблицами. Ниже - 25 самых свежих файлов по одному.</div></details></h2>
+      <div class="buttons" style="margin-top:0"><button data-bundle="1">🗜 Все файлы прогона одним архивом</button></div>
       <ul class="list" id="files"></ul>
     </div>
   </section>
@@ -420,14 +523,12 @@
       <div id="access"></div>
     </div>
     <div class="card" id="rightsCard" hidden>
-      <h2>Права управления <span>вы админ</span></h2>
+      <h2>Права управления <span>вы админ</span><details class="hint"><summary>i</summary><div class="hintbody">Назначить или снять админа можно только в окне программы у камеры.</div></details></h2>
       <ul class="list" id="rights"></ul>
-      <div class="soft" style="margin-top:6px">Назначить или снять админа можно только в окне программы у камеры.</div>
       <div id="scope" style="margin-top:10px"></div>
     </div>
     <div class="card">
-      <h2>Сайт</h2>
-      <div class="soft">Эта же страница открывается в любом браузере - на компьютере или телефоне, без входа.</div>
+      <h2>Сайт<details class="hint"><summary>i</summary><div class="hintbody">Эта же страница открывается в любом браузере - на компьютере или телефоне, без входа.</div></details></h2>
       <div class="linkbox" id="siteLink"></div>
       <div class="buttons" id="siteButtons"></div>
     </div>
@@ -453,6 +554,8 @@
     document.documentElement.classList.add("tg");
     tg.ready();
     tg.expand();
+    // Прокрутка вниз внутри страницы не должна сворачивать приложение (закрыть - кнопкой в шапке).
+    if (typeof tg.disableVerticalSwipes === "function") tg.disableVerticalSwipes();
   }
   const initData = inTelegram ? tg.initData : "";
 
@@ -478,6 +581,139 @@
   const siteUrl = window.location.origin + "/";
   const $ = (id) => document.getElementById(id);
   const esc = (text) => String(text ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+  // Сообщение карточкой (notices.py): значок по важности, заголовок; раскрытие - что произошло, почему, что сделать.
+  const noticeHtml = (n, open) => {
+    if (!n || !n.title) return "";
+    const list = (items, tag) => (items || []).length ? `<${tag}>${items.map((x) => `<li>${esc(x)}</li>`).join("")}</${tag}>` : "";
+    const section = (title, items, tag) => (items || []).length ? `<h4>${title}</h4>${list(items, tag)}` : "";
+    const nested = (n.items || []).map((item) => noticeHtml(item, false)).join("");
+    const count = (n.count || 1) > 1 ? ` ×${n.count}` : "";
+    const full = n.detail && !(n.items || []).length ? `<div class="full">${esc(n.detail)}</div>` : "";
+    return `<details class="notice" data-key="${esc((n.kind || "") + "|" + n.title)}" style="background:${esc(n.soft)};border-color:${esc(n.border)}"${open ? " open" : ""}>` +
+      `<summary><span class="badge" style="background:${esc(n.color)}">${esc(n.glyph)}</span>` +
+      `<span class="t" style="color:${esc(n.textColor)}">${esc(n.title)}${count}</span><span class="more">подробнее ›</span></summary>` +
+      `<div class="body">${section("Что произошло", n.what, "ul")}${section("Почему это важно", n.why, "ul")}` +
+      `${section("Что сделать", n.todo, "ol")}${nested}${full}</div></details>`;
+  };
+  // Подсказка «i» с пояснением; пустой текст - без значка.
+  const hintHtml = (tip) => tip ? `<details class="hint" data-key="hint|${esc(tip.slice(0, 60))}"><summary>i</summary><div class="hintbody">${esc(tip)}</div></details>` : "";
+  // Список «параметр - значение» под строкой со значком: подробности без кучи текста.
+  const TONES = {
+    error: { color: "#dc2626", soft: "rgba(220,38,38,.08)", border: "#fca5a5", text: "#991b1b", glyph: "!" },
+    warn: { color: "#d97706", soft: "rgba(217,119,6,.10)", border: "#fcd34d", text: "#92400e", glyph: "!" },
+    info: { color: "#2563eb", soft: "rgba(37,99,235,.06)", border: "#bfdbfe", text: "var(--text)", glyph: "i" },
+    ok: { color: "#16a34a", soft: "rgba(22,163,74,.08)", border: "#86efac", text: "#166534", glyph: "✓" },
+  };
+  const kvNoticeHtml = (title, level, rows) => {
+    const t = TONES[level] || TONES.info;
+    const items = rows.filter(([, v]) => v !== undefined && v !== null && v !== "" && v !== "—");
+    if (!items.length) return "";
+    return `<details class="notice" data-key="kv|${esc(title)}" style="background:${t.soft};border-color:${t.border}">` +
+      `<summary><span class="badge" style="background:${t.color}">${t.glyph}</span>` +
+      `<span class="t" style="color:${t.text}">${esc(title)}</span><span class="more">подробнее ›</span></summary>` +
+      `<div class="body"><table class="tbl kvlist">${items.map(([k, v]) => `<tr><td class="k">${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</table></div></details>`;
+  };
+  // Итоги прогона: таблица с окраской строк и пояснениями к столбцам.
+  const resultsTableHtml = (table) => {
+    if (!table || !(table.columns || []).length) return "";
+    const cols = table.columns;
+    const head = cols.map((c) => `<th title="${esc(c.tip)}">${esc(c.title)}</th>`).join("");
+    const body = (table.rows || []).map((r) => `<tr class="${esc(r.tone)}">` + cols.map((c) =>
+      `<td class="${c.align === "center" ? "c" : c.align === "left" ? "l" : ""}${["status", "verdict", "stage1", "stage2"].includes(c.key) ? " s" : ""}">` +
+      `${esc((r.cells || {})[c.key] ?? "")}</td>`).join("") + `</tr>`).join("");
+    const legend = cols.filter((c) => c.tip).map((c) => `<li><b>${esc(c.title)}</b> - ${esc(c.tip)}</li>`).join("");
+    return `<div class="rtitle">${esc(table.title)} ${hintHtml(table.tip)}</div>` +
+      `<div class="wrap"><table class="rtable"><tr>${head}</tr>${body}</table></div>` +
+      (cols.length > 5 ? `<div class="swipehint">← листайте таблицу вбок →</div>` : "") +
+      (legend ? `<details class="soft" data-key="legend|${esc(table.id || table.title)}" style="margin-top:4px"><summary>ⓘ Что значат столбцы</summary><ul class="legendlist">${legend}</ul></details>` : "");
+  };
+  let resultsPick = -1;
+  // Подвкладки «Прогона»: выбранная запоминается в этом браузере.
+  let runSub = "run";
+  try { runSub = localStorage.getItem("runSub") || "run"; } catch (e) { runSub = "run"; }
+  const showRunSub = (name) => {
+    runSub = name;
+    try { localStorage.setItem("runSub", name); } catch (e) { /* без памяти - не страшно */ }
+    document.querySelectorAll("#runTabs button").forEach((b) => b.classList.toggle("on", b.dataset.sub === name));
+    document.querySelectorAll("#tab-run > .card[data-sub]").forEach((card) => card.classList.toggle("subhide", card.dataset.sub !== name));
+  };
+  document.addEventListener("DOMContentLoaded", () => showRunSub(runSub));
+  setTimeout(() => showRunSub(runSub), 0);
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest("#runTabs button[data-sub]");
+    if (button) showRunSub(button.dataset.sub);
+  });
+
+  // Смахивание влево/вправо: соседняя подвкладка «Прогона», а на краях и в других вкладках - соседняя вкладка.
+  // Не мешает листать широкие таблицы и графики: жест, начатый на них, не перелистывает страницу.
+  const flash = (title) => {
+    let box = document.querySelector(".swipeflash");
+    if (!box) { box = document.createElement("div"); box.className = "swipeflash"; document.body.appendChild(box); }
+    box.textContent = title;
+    box.classList.add("on");
+    clearTimeout(box._timer);
+    box._timer = setTimeout(() => box.classList.remove("on"), 650);
+  };
+  const swipeTo = (step) => {
+    if ($("tab-run").classList.contains("on")) {
+      const subs = [...document.querySelectorAll("#runTabs button")];
+      const at = subs.findIndex((b) => b.dataset.sub === runSub);
+      const next = subs[at + step];
+      if (next) {
+        showRunSub(next.dataset.sub);
+        next.scrollIntoView({ inline: "center", block: "nearest" });
+        window.scrollTo(0, 0);
+        haptic("light");
+        flash("Прогон · " + next.textContent);
+        return;
+      }
+    }
+    const tabs = [...document.querySelectorAll("nav button")].filter((b) => !b.hidden);
+    const at = tabs.findIndex((b) => b.classList.contains("on"));
+    const next = tabs[at + step];
+    if (!next) return;
+    next.click();
+    flash(next.textContent.replace((next.querySelector("b") || {}).textContent || "", "").trim());
+  };
+  let touch = null;
+  document.addEventListener("touchstart", (event) => {
+    if (event.touches.length !== 1) { touch = null; return; }
+    const target = event.target;
+    const scroller = target.closest && target.closest(".wrap, canvas, .plot, input, select, textarea, .subtabs, .ranges, .chips, .hintbody");
+    const point = event.touches[0];
+    touch = scroller ? null : { x: point.clientX, y: point.clientY, at: Date.now() };
+  }, { passive: true });
+  document.addEventListener("touchend", (event) => {
+    if (!touch) return;
+    const point = event.changedTouches[0];
+    const dx = point.clientX - touch.x, dy = point.clientY - touch.y;
+    const quick = Date.now() - touch.at < 700;
+    touch = null;
+    if (!quick || Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.8) return;
+    swipeTo(dx < 0 ? 1 : -1);
+  }, { passive: true });
+  // Страница перерисовывается при каждом опросе: что человек раскрыл, раскрывается снова.
+  const openKeys = new Set();
+  document.addEventListener("toggle", (event) => {
+    const key = event.target && event.target.dataset ? event.target.dataset.key : "";
+    if (!key) return;
+    if (event.target.open) openKeys.add(key); else openKeys.delete(key);
+  }, true);
+  const restoreOpen = () => {
+    document.querySelectorAll("details[data-key]").forEach((item) => {
+      if (openKeys.has(item.dataset.key) && !item.open) item.open = true;
+    });
+  };
+  // Узлы платы по двум этапам: «плата» - первый этап, «в сборе» - сухая трубка, «Ж» - снята «жидкость».
+  const nodeRowsHtml = (b) => {
+    const nodes = b.nodes || [];
+    const board = nodes.map((n) => `<i class="${n.board || (n.board === undefined && n.count > 0) ? "on" : ""}" title="${esc(n.tip || n.node)}">${esc(n.short)}</i>`).join("");
+    const air = nodes.map((n) => `<i class="${n.air > 0 ? "air" : ""}" title="${esc(n.tip || n.node)}">${esc(n.short)}</i>`).join("");
+    const liquid = (b.stages || {}).liquid;
+    return `<div style="margin:4px 0 2px"><span class="stage">плата</span><span class="dots">${board}</span></div>` +
+      `<div style="margin:0 0 4px"><span class="stage">в сборе</span><span class="dots">${air}` +
+      `<i class="${liquid ? "liq" : ""}" title="${liquid ? "«Жидкость» снята" : "«Жидкость» ещё не снята"}">Ж</i></span></div>`;
+  };
   // Каналы пульта камеры S!MCON/32 (Vötsch VT 7100, Weiss WK1): влажность и что включено.
   const simconHtml = (simcon) => {
     const channels = simcon.channels || [];
@@ -845,13 +1081,15 @@
     // Проблемы - первыми: авария камеры, нет связи, прибор молчит, предупреждения прогона.
     const alerts = [];
     if (climate.connected && climate.alarm) alerts.push(["bad", "Авария камеры: " + climate.alarmText]);
-    if (climate.connected && !climate.ok) alerts.push(["bad", climate.status || "Нет связи с камерой"]);
     if (!device.connected) alerts.push(["bad", "Адаптер CAN не подключён: прибор не опрашивается"]);
     else if (!device.freshOk && device.freshText) alerts.push(["warn", device.freshText]);
-    (auto.alerts || []).forEach((a) => alerts.push([a.level === "bad" ? "bad" : "warn", `${a.time || ""} ${a.text}`]));
     if (run.operator) alerts.push(["warn", run.status || "Прогон ждёт оператора"]);
     if (run.paused) alerts.push(["warn", "Прогон на паузе"]);
-    $("alerts").innerHTML = alerts.map(([level, text]) => `<div class="alert ${level}">${esc(text)}</div>`).join("");
+    // Проблемы прогона - одной строкой со счётом, разбор каждой - по нажатию.
+    $("alerts").innerHTML = (climate.connected && !climate.ok
+        ? (noticeHtml((s.notices || {}).climate, false) || `<div class="alert bad">Нет связи с камерой</div>`) : "") +
+      alerts.map(([level, text]) => `<div class="alert ${level}">${esc(text)}</div>`).join("") +
+      noticeHtml((s.notices || {}).alerts, false);
 
     const chamber = climate.chamber || {};
     const espec = climate.espec || {};
@@ -867,13 +1105,16 @@
          <div style="margin-top:8px">${esc(climate.runningText)}${espec.modeText && espec.modeText !== "—"
              ? " · " + esc(espec.modeText) : ""} · авария: <span class="${climate.alarm ? "bad" : ""}">${esc(climate.alarmText)}</span></div>` +
         (espec.heaterText && espec.heaterText !== "—"
-          ? `<div class="soft">Нагреватель ${esc(espec.heaterText)} · холодильник ${esc(espec.refText)} · пределы ${esc(espec.lowText)} … ${esc(espec.highText)}</div>` : "") +
+          ? kvNoticeHtml("Состояние камеры ESPEC", "info", [["Нагреватель", espec.heaterText], ["Холодильник", espec.refText],
+                                                           ["Пределы", `${espec.lowText} … ${espec.highText}`]]) : "") +
         (climate.connected && simcon.visible ? simconHtml(simcon) : "") +
         (climate.connected && zundar.visible
-          ? `<div class="${zundar.lanOk === false ? "bad" : "soft"}" style="margin-top:6px">${esc(zundar.modeText)} · нагрев ${esc(zundar.heaterText)} · охлаждение ${esc(zundar.coolingText)}<br>` +
-            `влажность ${esc(zundar.humidityText)} (в камере ${esc(zundar.humidityActualText)}) · управление по сети ${esc(zundar.lanText)} · пределы аварии ${esc(zundar.limitsText)}</div>` : "") +
-        (climate.connected && (climate.dew || {}).visible
-          ? `<div class="${climate.dew.danger ? "bad" : "soft"}" style="margin-top:6px">${esc(climate.dew.text)}</div>` : "");
+          ? kvNoticeHtml(zundar.lanOk === false ? "Только чтение: уставку и пуск задают на пульте" : "Состояние камеры",
+                         zundar.lanOk === false ? "warn" : "info",
+                         [["Режим", zundar.modeText], ["Нагрев", zundar.heaterText], ["Охлаждение", zundar.coolingText],
+                          ["Влажность задана", zundar.humidityText], ["Влажность в камере", zundar.humidityActualText],
+                          ["Управление по сети", zundar.lanText], ["Пределы аварии", zundar.limitsText]]) : "") +
+        (climate.connected ? noticeHtml((s.notices || {}).dew, false) : "");
 
     const live = s.live || {};
     const board = live.boardTemp || {}, fuel = live.fuelTemp || {}, main = live.main || {}, media = live.media || {};
@@ -928,12 +1169,10 @@
         `<div class="bar"><div style="width:${Math.round((auto.progress || 0) * 100)}%"></div></div>` +
         `<div class="soft">${esc(auto.progressText)}</div>` +
         `<div class="chips" style="margin:8px 0">${nodes}</div>` +
-        `<div style="color:${esc(run.color)}">${esc(run.status)}</div>` +
-        (auto.nodesText ? `<div class="soft" style="margin-top:4px">По узлам: ${esc(auto.nodesText)}</div>` : "") +
-        (auto.boardModel ? `<div class="soft" style="margin-top:4px">Плата и воздух: ${esc(auto.boardModel)}</div>` : "") +
+        (noticeHtml((s.notices || {}).run, false) || `<div style="color:${esc(run.color)}">${esc(run.status)}</div>`) +
+        noticeHtml((s.notices || {}).nodes, false) + noticeHtml((s.notices || {}).boardModel, false) +
         (auto.problems ? `<div class="warn" style="margin-top:4px">Проблем за прогон: ${auto.problems}</div>` : "") +
-        ((run.followPlan || []).length
-          ? `<div class="soft" style="margin-top:6px">Камера ведёт свою программу:<br>${run.followPlan.map(esc).join("<br>")}</div>` : "");
+        noticeHtml((s.notices || {}).followPlan, false);
     } else if (auto.resume) {
       $("auto").innerHTML = `<div class="warn">${esc(auto.resume.text)}</div>`;
     } else {
@@ -955,15 +1194,13 @@
       `<div class="tile ${b.active ? "shown" : ""}">` +
       `<div class="head"><span class="mark" style="background:${boardColor(i)}"></span><span class="name">${esc(b.name)}</span>` +
       `<span class="sa">${esc(b.saText)}</span></div>` +
-      `<div style="margin:5px 0"><span class="dots">${(b.nodes || []).map((n) =>
-        `<i class="${n.count > 0 ? "on" : ""}" title="${esc(n.node)}: точек ${n.count}">${esc(n.short)}</i>`).join("")}</span></div>` +
+      nodeRowsHtml(b) +
       `<div class="sub">точек ${esc(b.points)} · ${b.tablesComplete ? "<span class=ok>таблицы готовы</span>" : "таблиц нет"}</div>` +
       `<div class="sub ${tones[b.profileTone] || ""}">профиль: ${esc(b.profileState || "—")}</div></div>`).join("");
     $("run").innerHTML =
       (shownBoard ? `<div class="section" style="margin-top:4px">Показанная плата «${esc(shownBoard.name)}» ${esc(shownBoard.saText)}</div>` : "") +
       `<div class="soft">${esc(journal.file || "журнал ещё не сохранён")}</div>` +
-      `<div style="color:${esc(journal.statusColor)}">${esc(journal.status)}</div>` +
-      `<div style="color:${esc(journal.tablesColor)}">${esc(journal.tablesText)}</div>`;
+      noticeHtml((s.notices || {}).journal, false) + noticeHtml((s.notices || {}).tables, false);
     // Узлы одной платы - только когда плата одна: при нескольких узлы каждой платы - в её плитке.
     $("nodes").hidden = live.length > 0;
     $("nodes").innerHTML = (journal.coverage || []).map((row) =>
@@ -971,13 +1208,12 @@
       `<span class="${row.capsOk ? "ok" : "warn"}">${esc(row.caps)}</span><br>` +
       `<span class="${row.tubeOk ? "ok" : "warn"}">трубка: ${esc(row.tube)}</span></div>`).join("");
     const report = journal.report || [];
-    $("report").innerHTML = report.length
-      ? `<div class="alert warn" style="margin:8px 0 0">Чего не хватило расчёту:<br>${report.map(esc).join("<br>")}</div>` : "";
+    $("report").innerHTML = report.length ? noticeHtml((s.notices || {}).report, false) : "";
 
     const chain = s.chain || {};
     $("steps").innerHTML = (chain.steps || []).map((step, i) =>
       `<span class="chip ${esc(step.state)}">${i + 1}. ${esc(step.title)}${step.state === "ok" ? " ✓" : step.state === "fail" ? " ✗" : step.state === "run" ? " …" : ""}</span>`).join("");
-    $("chain").innerHTML = `<div style="color:${esc(chain.color)}">${esc(chain.status)}</div>` +
+    $("chain").innerHTML = noticeHtml((s.notices || {}).chain, false) +
       `<div class="soft">Запись при полных данных: ${chain.autoWrite ? "сама" : "вручную"}</div>`;
 
     const test = s.test || {};
@@ -1136,13 +1372,15 @@
     if (typing("rulesForm")) return;
     const control = (s.climate || {}).control || {};
     const edit = canControl(s);
-    $("rulesForm").innerHTML = (control.rules || []).map((r) => {
-      const value = r.value === null || r.value === undefined ? "" : (typeof r.value === "boolean" ? r.value : String(r.value).replace(".", ","));
-      const field = !edit ? `<span>${esc(typeof value === "boolean" ? (value ? "да" : "нет") : (value || "—"))} ${esc(r.unit)}</span>`
-        : typeof r.value === "boolean" ? `<input type="checkbox" data-rule="${r.key}" ${value ? "checked" : ""}>`
-        : `<span><input type="text" inputmode="decimal" data-rule="${r.key}" value="${esc(value)}"> ${esc(r.unit)}</span>`;
-      return `<span class="soft">${esc(r.title)}</span>${field}`;
-    }).join("");
+    const rules = control.rules || [];
+    $("rulesForm").innerHTML = rules.length ? `<table class="tbl"><tr><th>Правило</th><th>Значение</th><th>Ед.</th></tr>` +
+      rules.map((r) => {
+        const value = r.value === null || r.value === undefined ? "" : (typeof r.value === "boolean" ? r.value : String(r.value).replace(".", ","));
+        const field = !edit ? esc(typeof value === "boolean" ? (value ? "да" : "нет") : (value || "—"))
+          : typeof r.value === "boolean" ? `<input type="checkbox" data-rule="${r.key}" ${value ? "checked" : ""}>`
+          : `<input type="text" inputmode="decimal" data-rule="${r.key}" value="${esc(value)}">`;
+        return `<tr><td class="k">${esc(r.title)}</td><td class="v">${field}</td><td class="u">${esc(r.unit || "")}</td></tr>`;
+      }).join("") + `</table>` : `<div class="soft">Сценарий не выбран.</div>`;
     $("rulesButtons").innerHTML = edit ? `<button data-rules="apply">Применить правила</button>` : "";
   }
 
@@ -1250,7 +1488,7 @@
       + (offline.length ? ` · ещё в списке без связи: ${offline.join(", ")}` : "");
     const st = s.stability || {};
     $("boardsStability").innerHTML = `<span class="${st.ok ? "ok" : "warn"}">${st.ok ? "● " : "○ "}${esc(st.text)}</span>`;
-    $("boardsStatus").textContent = view.status || "";
+    $("boardsStatus").innerHTML = noticeHtml((s.notices || {}).boards, false);
     const edit = canControl(s);
     const profileTone = { ok: "ok", bad: "bad", run: "accent", normal: "" };
     $("boardCards").innerHTML = rows.map((b, i) => {
@@ -1278,7 +1516,7 @@
         `<span>профиль <b class="${profileTone[b.profileTone] || ""}">${esc(b.profileState || "—")}</b></span>` +
         (b.lastPoint ? `<span>последняя точка <b>${esc(b.lastPoint)}</b></span>` : "") + `</div>` +
         (b.file ? `<div class="soft" style="margin-top:4px;word-break:break-all">${esc(b.file)}</div>` : "") +
-        (b.tablesText ? `<div class="soft" style="margin-top:2px">${esc(b.tablesText)}</div>` : "") +
+        noticeHtml(b.tablesNotice, false) +
         (edit && !b.active ? `<div class="buttons"><button class="light" data-show-board="${esc(b.saText)}" data-name="${esc(b.name)}">Показать в программе</button></div>` : "") +
         `</div>`;
     }).join("");
@@ -1290,12 +1528,68 @@
     control({ action: "board_show", sa: button.dataset.showBoard });
   });
 
+  // Итоги прогона: сводка по платам, выбор платы, итог, показатели и таблицы.
+  function renderResults(s) {
+    const results = s.results || {};
+    const boards = results.boards || [];
+    $("resultsTime").textContent = results.time ? "посчитано " + results.time : "";
+    if (!boards.length) { $("results").innerHTML = `<div class="soft">Точек пока нет.</div>`; return; }
+    let index = resultsPick >= 0 && resultsPick < boards.length ? resultsPick : boards.findIndex((b) => b.shown);
+    if (index < 0) index = 0;
+    const b = boards[index];
+    const t = TONES[b.tone] || TONES.info;
+    const chips = boards.length > 1 ? `<div class="chips" style="margin:8px 0">` + boards.map((x, i) =>
+      `<button class="${i === index ? "" : "light"}" data-results-board="${i}" style="padding:4px 10px">` +
+      `<span style="color:${(TONES[x.tone] || TONES.info).color}">●</span> ${esc(x.name)} ${esc(x.sa)}</button>`).join("") + `</div>` : "";
+    const verdict = `<div class="alert ${b.tone === "ok" ? "ok" : b.tone === "warn" ? "warn" : ""}" style="margin:8px 0">` +
+      `<b style="color:${t.color}">${t.glyph}</b> ${esc(b.verdict)}</div>`;
+    const summary = (b.summary || []).length ? `<table class="tbl rsumt"><tr><th>Показатель</th><th>Значение</th></tr>` +
+      b.summary.map((m) => `<tr><td class="k">${esc(m.label)} ${hintHtml(m.tip)}</td>` +
+        `<td class="val ${m.tone === "warn" ? "warn" : m.tone === "ok" ? "ok" : ""}">${esc(m.value)}</td></tr>`).join("") +
+      `</table>` : "";
+    $("results").innerHTML = resultsTableHtml(results.overview) + chips + verdict + summary +
+      (b.tables || []).map(resultsTableHtml).join("");
+  }
+
+  $("results").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-results-board]");
+    if (!button) return;
+    resultsPick = Number(button.dataset.resultsBoard);
+    if (state) { renderResults(state); restoreOpen(); }
+  });
+
+  // Все файлы прогона одним архивом: в Telegram - в чат, в браузере - скачать.
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest("button[data-bundle]");
+    if (!button) return;
+    button.disabled = true;
+    haptic("medium");
+    toast("Собираю архив...");
+    try {
+      const answer = await api("api/control", { action: "send_file", which: "bundle" });
+      const name = (String(answer.text || "").match(/архив_прогона_\d+_\d+\.zip/) || [])[0];
+      if (answer.ok && !inTelegram && name) {
+        const link = document.createElement("a");
+        link.href = "api/file?folder=" + encodeURIComponent("прогон") + "&name=" + encodeURIComponent(name);
+        link.download = name;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      }
+      toast((answer.ok ? "✅ " : "❌ ") + answer.text);
+    } catch (error) {
+      toast("Не получилось: " + error.message);
+    }
+    setTimeout(() => { button.disabled = false; }, 4000);
+  });
+
   function render(s) {
     state = s;
     renderNow(s);
     renderBoards(s);
     renderControl(s);
     renderRun(s);
+    renderResults(s);
     renderSteps(s);
     renderRules(s);
     renderScenarios(s);
@@ -1304,6 +1598,7 @@
     renderActions(s);
     renderCharts(s);
     if (!busy) { renderSettings(s); renderAccess(s); }
+    restoreOpen();
   }
 
   // Действие управления: подтверждение опасного, ответ программы - во всплывающей строке.

@@ -131,6 +131,8 @@ def test_text_lists_are_parsed():
 def test_run_walks_all_nodes_and_returns_the_chamber(tmp_path: Path):
     stub = _ClimateStub(tmp_path)
     stub._climate_settings["run_nodes"] = "25, -40, 85"
+    # Отогрев без ограничения (0): тест проверяет уставки узлов, а не ступени отогрева.
+    stub._climate_settings["warm_ramp_c_min"] = 0.0
     stub._chamber_label = "0/0"
     stub._climate_reading = stub.sim.read()
     stub._climate_last_ok_s = time.monotonic()

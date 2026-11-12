@@ -101,6 +101,10 @@ def test_return_at_the_end_from_cold_is_ramped(tmp_path: Path):
 
 def test_without_the_rule_warming_is_one_setpoint(tmp_path: Path):
     stub = _ready(tmp_path, "25, -20, 50")
+    # Правило выключено явно (0): с 09.11.2026 по умолчанию отогрев 1 °C/мин.
+    stub._climate_settings["warm_ramp_c_min"] = 0.0
+    if getattr(stub, "_climate_scenario", None):
+        stub._climate_scenario["warm_ramp_c_min"] = 0.0
     log = _setpoints(stub)
     assert stub._climate_run_start(), stub._climate_run_status
     _walk(stub)
@@ -202,7 +206,8 @@ def test_dew_point_reaches_the_bot_status():
 
 def test_warm_ramp_rule_is_in_the_scenario():
     clean, problems = cs.normalize(cs.board_cycle_scenario())
-    assert problems == [] and clean["warm_ramp_c_min"] == 0.0
+    # С 09.11.2026 отогрев 1 °C/мин - во всех сценариях по умолчанию (VT без осушителя).
+    assert problems == [] and clean["warm_ramp_c_min"] == cs.DEFAULTS["warm_ramp_c_min"] == 1.0
     assembly, problems = cs.normalize(cs.assembly_scenario())
     assert problems == [] and assembly["warm_ramp_c_min"] == cs.ASSEMBLY_WARM_RAMP_C_MIN == 1.0
     clean, problems = cs.normalize({"name": "проба", "warm_ramp_c_min": "0,5", "steps": [{"temp": 25}]})

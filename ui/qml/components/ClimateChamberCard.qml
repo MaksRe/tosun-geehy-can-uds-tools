@@ -358,15 +358,11 @@ Card {
                 }
             }
 
-            Text {
-                Layout.fillWidth: true
-                visible: (root.climate.modeHint || "").length > 0
-                text: "⚠ " + (root.climate.modeHint || "")
-                color: "#b45309"
-                font.pixelSize: 12
-                font.bold: true
-                font.family: "Bahnschrift"
-                wrapMode: Text.WordWrap
+            NoticeLine {
+                appController: root.appController
+                text: root.climate.modeHint || ""
+                tone: "warn"
+                kind: "Режим"
             }
 
             // --- Подключение выбранной камеры ---
@@ -423,14 +419,12 @@ Card {
                                 font.family: "Bahnschrift"
                             }
 
-                            // Перенос, а не обрезка: в причине нет связи подсказано, какую пару кабеля проверить.
-                            Text {
-                                Layout.fillWidth: true
+                            // Состояние связи: заголовок, а причина и что проверить - по нажатию.
+                            NoticeLine {
+                                appController: root.appController
                                 text: root.climate.status || ""
-                                color: root.climate.connected && !root.climate.ok ? "#b45309" : root.textSoft
-                                font.pixelSize: 11
-                                font.family: "Bahnschrift"
-                                wrapMode: Text.WordWrap
+                                tone: root.climate.ok ? "ok" : (root.climate.connected ? "bad" : "info")
+                                kind: "Связь с камерой"
                             }
                         }
 
@@ -450,48 +444,37 @@ Card {
                         }
                     }
 
-                    // Предупреждения, которые нельзя прятать: режим порта Moxa не тот или идёт поиск камеры.
-                    Text {
-                        Layout.fillWidth: true
-                        visible: root.espec && (root.climate.moxaCheck || {}).ok === false
-                        text: "⚠ " + ((root.climate.moxaCheck || {}).text || "")
-                        color: "#dc2626"
-                        font.pixelSize: 12
-                        font.bold: true
-                        font.family: "Bahnschrift"
-                        wrapMode: Text.WordWrap
+                    // Режим порта Moxa не тот, поиск камеры, мост имитатора - каждое одной строкой.
+                    NoticeLine {
+                        appController: root.appController
+                        text: root.espec && (root.climate.moxaCheck || {}).ok === false ? ((root.climate.moxaCheck || {}).text || "") : ""
+                        tone: "bad"
+                        kind: "Порт Moxa"
                     }
 
-                    Text {
-                        Layout.fillWidth: true
-                        visible: (root.climate.scan || {}).active === true
-                        text: (root.climate.scan || {}).status || ""
-                        color: "#0e7490"
-                        font.pixelSize: 12
-                        font.family: "Bahnschrift"
-                        wrapMode: Text.WordWrap
+                    NoticeLine {
+                        appController: root.appController
+                        text: (root.climate.scan || {}).active === true ? ((root.climate.scan || {}).status || "") : ""
+                        tone: "info"
+                        kind: "Поиск камеры"
                     }
 
-                    Text {
-                        Layout.fillWidth: true
-                        visible: (root.climate.bridgeStatus || "").length > 0
+                    NoticeLine {
+                        appController: root.appController
                         text: root.climate.bridgeStatus || ""
-                        color: "#9a3412"
-                        font.pixelSize: 12
-                        font.family: "Bahnschrift"
-                        wrapMode: Text.WordWrap
+                        tone: "warn"
+                        kind: "Имитатор"
                     }
                 }
             }
 
-            Text {
-                Layout.fillWidth: true
-                visible: root.climate.driver === "none"
-                text: "Камера не выбрана. Нажмите на плитку нужной камеры выше. Другая камера с Modbus выбирается в «Настройках связи»."
-                color: root.textSoft
-                font.pixelSize: 12
-                font.family: "Bahnschrift"
-                wrapMode: Text.WordWrap
+            NoticeLine {
+                appController: root.appController
+                text: root.climate.driver === "none"
+                      ? "Камера не выбрана. Нажмите на плитку нужной камеры выше. Другая камера с Modbus выбирается в «Настройках связи»."
+                      : ""
+                tone: "info"
+                kind: "Камера"
             }
 
             // --- Камера сейчас ---
@@ -546,15 +529,12 @@ Card {
                 }
 
                 // Точка росы воздуха камеры и самая холодная плата: плата холоднее - на ней оседает влага.
-                Text {
-                    Layout.fillWidth: true
-                    visible: root.climate.ok === true && root.climate.dew !== undefined && root.climate.dew.visible === true
-                    text: root.climate.dew ? root.climate.dew.text || "" : ""
-                    color: root.climate.dew && root.climate.dew.danger ? "#dc2626" : root.textSoft
-                    font.pixelSize: 12
-                    font.bold: root.climate.dew && root.climate.dew.danger === true
-                    font.family: "Bahnschrift"
-                    wrapMode: Text.WordWrap
+                NoticeLine {
+                    appController: root.appController
+                    text: root.climate.ok === true && root.climate.dew !== undefined && root.climate.dew.visible === true
+                          ? (root.climate.dew.text || "") : ""
+                    tone: root.climate.dew && root.climate.dew.danger ? "bad" : "info"
+                    kind: "Роса"
                 }
 
                 // Камера с пультом S!MCON/32 (Vötsch VT 7100, Weiss WK1): влажность и все цифровые каналы пульта.
@@ -629,35 +609,21 @@ Card {
                         }
                     }
 
-                    Text {
-                        Layout.fillWidth: true
-                        visible: (root.simconState.problems || []).length > 0
-                        text: "Не так, как задала программа: " + (root.simconState.problems || []).join("; ") + "."
-                        color: "#dc2626"
-                        font.pixelSize: 12
-                        font.family: "Bahnschrift"
-                        wrapMode: Text.WordWrap
-                    }
-
-                    Text {
-                        Layout.fillWidth: true
-                        text: "Названия каналов - как на пульте Vötsch VT 7100. У другой камеры смотрите её меню «Digitalkanäle»: с 3-го канала назначение может отличаться."
-                        color: root.textSoft
-                        font.pixelSize: 10
-                        font.family: "Bahnschrift"
-                        wrapMode: Text.WordWrap
+                    NoticeLine {
+                        appController: root.appController
+                        items: root.simconState.problems || []
+                        tone: "bad"
+                        kind: "Пульт камеры"
+                        title: "Пульт не так, как задала программа: {count}"
                     }
                 }
 
-                Text {
-                    Layout.fillWidth: true
-                    visible: (root.especState.programText || "").length > 0 || (root.especState.alarmsText || "").length > 0
-                    text: ((root.especState.programText || "").length > 0 ? "Программа: " + root.especState.programText + ".  " : "")
+                NoticeLine {
+                    appController: root.appController
+                    text: ((root.especState.programText || "").length > 0 ? "Программа: " + root.especState.programText + ". " : "")
                           + ((root.especState.alarmsText || "").length > 0 ? "Номера аварий: " + root.especState.alarmsText + "." : "")
-                    color: (root.especState.alarmsText || "").length > 0 ? "#dc2626" : "#7c3aed"
-                    font.pixelSize: 12
-                    font.family: "Bahnschrift"
-                    wrapMode: Text.WordWrap
+                    tone: (root.especState.alarmsText || "").length > 0 ? "bad" : "info"
+                    kind: "Камера ESPEC"
                 }
 
                 // Экстренная остановка: прогон останавливается, камера переходит в «Стоп». Действие - в журнале.
@@ -734,14 +700,11 @@ Card {
                         }
                     }
 
-
-                    Text {
-                        Layout.fillWidth: true
+                    NoticeLine {
+                        appController: root.appController
                         text: root.climate.commandStatus || ""
-                        color: root.textSoft
-                        font.pixelSize: 12
-                        font.family: "Bahnschrift"
-                        elide: Text.ElideRight
+                        tone: "info"
+                        kind: "Команда камере"
                     }
                 }
             }
@@ -779,14 +742,12 @@ Card {
                             anchors.margins: 7
                             spacing: 8
 
-                            Text {
-                                Layout.fillWidth: true
+                            NoticeLine {
+                                appController: root.appController
                                 text: ((root.auto.resume || {}).text || "")
                                       + ((root.auto.resume || {}).auto ? " Продолжится сам, когда камера и прибор будут на связи 30 с." : "")
-                                color: "#9a3412"
-                                font.pixelSize: 12
-                                font.family: "Bahnschrift"
-                                wrapMode: Text.WordWrap
+                                tone: "warn"
+                                kind: "Прерванный прогон"
                             }
 
                             FancyButton {
@@ -810,28 +771,36 @@ Card {
                         }
                     }
 
-                    // Проверка перед стартом: что мешает (✗) и что стоит знать (!).
+                    // Проверка перед стартом: что мешает (красный) и что стоит знать (жёлтый) - каждое строкой,
+                    // пройденные - одной зелёной строкой; разбор любой - по нажатию.
                     GridLayout {
                         Layout.fillWidth: true
                         visible: !root.run.active && root.climate.driver !== "none"
                         columns: 2
                         columnSpacing: 16
-                        rowSpacing: 3
+                        rowSpacing: 2
 
                         Repeater {
-                            model: root.auto.checks || []
+                            model: (root.auto.checks || []).filter(function(check) { return !check.ok })
 
-                            Text {
+                            NoticeLine {
                                 required property var modelData
-                                Layout.fillWidth: true
                                 Layout.preferredWidth: 1
-                                text: (modelData.ok ? "✓  " : (modelData.level === "block" ? "✗  " : "!  ")) + modelData.text
-                                color: modelData.ok ? "#15803d" : (modelData.level === "block" ? "#dc2626" : "#b45309")
-                                font.pixelSize: 12
-                                font.bold: !modelData.ok && modelData.level === "block"
-                                font.family: "Bahnschrift"
-                                wrapMode: Text.WordWrap
+                                appController: root.appController
+                                text: modelData.text || ""
+                                tone: modelData.level === "block" ? "bad" : "warn"
+                                kind: "Проверка перед стартом"
                             }
+                        }
+
+                        NoticeLine {
+                            Layout.preferredWidth: 1
+                            appController: root.appController
+                            items: (root.auto.checks || []).filter(function(check) { return check.ok })
+                                                           .map(function(check) { return check.text })
+                            tone: "ok"
+                            kind: "Проверка перед стартом"
+                            title: "В порядке: {count}"
                         }
                     }
 
@@ -915,52 +884,33 @@ Card {
                             font.family: "Bahnschrift"
                         }
 
-                        Text {
-                            Layout.fillWidth: true
-                            visible: (root.auto.nodesText || "").length > 0
-                            text: "Время по узлам: " + (root.auto.nodesText || "")
-                            color: root.textSoft
-                            font.pixelSize: 12
-                            font.family: "Bahnschrift"
-                            wrapMode: Text.WordWrap
+                        NoticeLine {
+                            appController: root.appController
+                            text: (root.auto.nodesText || "").length > 0 ? "Время по узлам: " + root.auto.nodesText : ""
+                            tone: "info"
+                            kind: "Прогон"
                         }
 
                         // Как плата отстаёт от воздуха в этом прогоне: по этому упреждение и доводка уставки.
-                        Text {
-                            Layout.fillWidth: true
-                            visible: (root.auto.boardModel || "").length > 0
-                            text: "Плата и воздух: " + (root.auto.boardModel || "")
-                                  + " - уставка шагов ставится с этой поправкой"
-                            color: root.textSoft
-                            font.pixelSize: 12
-                            font.family: "Bahnschrift"
-                            wrapMode: Text.WordWrap
+                        NoticeLine {
+                            appController: root.appController
+                            text: (root.auto.boardModel || "").length > 0
+                                  ? "Плата и воздух: " + root.auto.boardModel + ". Уставка шагов ставится с этой поправкой." : ""
+                            tone: "info"
+                            kind: "Прогон"
                         }
                     }
 
-                    // Текущие проблемы: каждая видна, пока не прошла.
+                    // Текущие проблемы: каждая строкой, пока не прошла; разбор - по нажатию.
                     Repeater {
                         model: root.auto.alerts || []
 
-                        Rectangle {
+                        NoticeLine {
                             required property var modelData
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: alertText.implicitHeight + 10
-                            radius: 8
-                            color: modelData.level === "bad" ? "#fef2f2" : "#fffbeb"
-                            border.width: 1
-                            border.color: modelData.level === "bad" ? "#fca5a5" : "#fcd34d"
-
-                            Text {
-                                id: alertText
-                                anchors.fill: parent
-                                anchors.margins: 5
-                                text: (parent.modelData.level === "bad" ? "⛔  " : "⚠  ") + parent.modelData.time + "  " + parent.modelData.text
-                                color: parent.modelData.level === "bad" ? "#b91c1c" : "#92400e"
-                                font.pixelSize: 12
-                                font.family: "Bahnschrift"
-                                wrapMode: Text.WordWrap
-                            }
+                            appController: root.appController
+                            text: modelData.text || ""
+                            tone: modelData.level === "bad" ? "bad" : "warn"
+                            kind: "Прогон, с " + (modelData.time || "")
                         }
                     }
 
@@ -1042,25 +992,22 @@ Card {
                             onClicked: if (root.appController) root.appController.continueClimateRun()
                         }
 
-                        Text {
-                            Layout.fillWidth: true
+                        NoticeLine {
+                            appController: root.appController
                             text: root.run.status || ""
-                            color: root.run.color || root.textSoft
-                            font.pixelSize: 13
-                            font.family: "Bahnschrift"
-                            wrapMode: Text.WordWrap
+                            tone: root.run.color || ""
+                            kind: "Прогон"
+                            fontSize: 13
                         }
                     }
 
-                    // Камера только читается: прогон следует за её программой - вот что задать на пульте.
-                    Text {
-                        Layout.fillWidth: true
-                        visible: (root.run.followPlan || []).length > 0
-                        text: "Программа для пульта камеры (Программа редактор):\n" + (root.run.followPlan || []).join("\n")
-                        color: "#7c3aed"
-                        font.pixelSize: 12
-                        font.family: "Bahnschrift"
-                        wrapMode: Text.WordWrap
+                    // Камера только читается: прогон следует за её программой - шаги для пульта по нажатию.
+                    NoticeLine {
+                        appController: root.appController
+                        text: (root.run.followPlan || []).length > 0
+                              ? "Программа для пульта камеры (Программа редактор): " + root.run.followPlan.join("; ") : ""
+                        tone: "info"
+                        kind: "Пульт камеры"
                     }
                 }
             }
@@ -1115,18 +1062,12 @@ Card {
                         SettingField { key: "report_every_min"; Layout.preferredWidth: 55 }
                         Caption { text: "   Плата дальше от воздуха, чем на, °C - проблема" }
                         SettingField { key: "board_gap_c"; Layout.preferredWidth: 55 }
+                        InfoMark {
+                            tip: "Температуры, порядок, выдержки, критерии устойчивости и что делать в конце задаются в сценарии "
+                                 + "(кнопка «Сценарий прогона…»).<br>В каждом шаге: уставка - выход камеры на неё - плата "
+                                 + "устоялась - выдержка - точки со всеми пометками - следующий шаг."
+                        }
                         Item { Layout.fillWidth: true }
-                    }
-
-                    Text {
-                        Layout.fillWidth: true
-                        text: "Температуры, порядок, выдержки, критерии устойчивости и что делать в конце задаются в сценарии "
-                              + "(кнопка «Сценарий прогона…»). В каждом шаге: уставка - выход камеры на неё - плата устоялась - "
-                              + "выдержка - точки со всеми пометками - следующий шаг."
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                        wrapMode: Text.WordWrap
                     }
                 }
             }
@@ -1241,28 +1182,22 @@ Card {
                             onClicked: if (root.appController) root.appController.scanClimateChamber()
                         }
 
-                        Text {
-                            Layout.fillWidth: true
+                        NoticeLine {
+                            appController: root.appController
                             text: (root.climate.scan || {}).status || (root.espec ? "Если адрес и скорость на пульте неизвестны, нажмите «Найти камеру»."
                                                                                      : "Камера не отвечает - нажмите «Найти камеру»: программа проверит порты и сеть и скажет, что видно.")
-                            color: (root.climate.scan || {}).active ? "#0e7490" : root.textSoft
-                            font.pixelSize: 12
-                            font.family: "Bahnschrift"
-                            wrapMode: Text.WordWrap
+                            tone: "info"
+                            kind: "Поиск камеры"
                         }
-                    }
 
-                    Text {
-                        Layout.fillWidth: true
-                        visible: root.climate.driver === "espec"
-                        text: "Moxa UPort 1150: в диспетчере устройств у порта выберите Interface = RS-422 (или RS-485 4W), из коробки там RS-232. "
-                              + "Кабель от клеммника переходника Moxa (TB) к DB9 камеры: клемма 1 TxD+ → 3 RD+, 2 TxD− → 4 RD−, "
-                              + "3 RxD+ → 1 SD+, 4 RxD− → 2 SD−, 5 GND → 5. Соединять по знаку «+»/«−», буквы A/B у Moxa и ESPEC противоположны. "
-                              + "На пульте камеры: 8 бит, без чётности, защита от удалённого управления выключена."
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                        wrapMode: Text.WordWrap
+                        InfoMark {
+                            tip: root.climate.driver === "espec"
+                                 ? "Moxa UPort 1150: в диспетчере устройств у порта выберите Interface = RS-422 (или RS-485 4W), из коробки там RS-232.<br>"
+                                   + "Кабель от клеммника переходника Moxa (TB) к DB9 камеры: клемма 1 TxD+ → 3 RD+, 2 TxD− → 4 RD−, "
+                                   + "3 RxD+ → 1 SD+, 4 RxD− → 2 SD−, 5 GND → 5. Соединять по знаку «+»/«−», буквы A/B у Moxa и ESPEC противоположны.<br>"
+                                   + "На пульте камеры: 8 бит, без чётности, защита от удалённого управления выключена."
+                                 : ""
+                        }
                     }
 
                     // Zundar EEXTH1000U: контроллер AZ1000, Modbus TCP по Ethernet.
@@ -1314,40 +1249,36 @@ Card {
                         Item { Layout.fillWidth: true }
                     }
 
-                    Text {
-                        Layout.fillWidth: true
-                        visible: root.climate.driver === "zundar_az1000"
-                        text: ((root.climate.net || {}).status || "")
-                              || ("Ноутбуку нужен адрес в сети камеры: программа задаст проводному адаптеру " + ((root.climate.net || {}).laptop || "192.168.0.10")
-                                  + ", маска 255.255.255.0, без шлюза (Wi-Fi и интернет не трогаются). Windows спросит разрешение администратора.")
-                        color: (root.climate.net || {}).ok === false ? "#dc2626" : ((root.climate.net || {}).ok === true ? "#15803d" : root.textSoft)
-                        font.pixelSize: 12
-                        font.family: "Bahnschrift"
-                        wrapMode: Text.WordWrap
+                    NoticeLine {
+                        appController: root.appController
+                        text: root.climate.driver !== "zundar_az1000" ? ""
+                              : (((root.climate.net || {}).status || "")
+                                 || ("Ноутбуку нужен адрес в сети камеры: программа задаст проводному адаптеру " + ((root.climate.net || {}).laptop || "192.168.0.10")
+                                     + ", маска 255.255.255.0, без шлюза (Wi-Fi и интернет не трогаются). Windows спросит разрешение администратора."))
+                        tone: (root.climate.net || {}).ok === false ? "bad" : ((root.climate.net || {}).ok === true ? "ok" : "info")
+                        kind: "Сеть ноутбука"
                     }
 
                     // Связи нет: кто ещё с этого ноутбука подключён к камере (контроллер держит одно подключение).
-                    Text {
-                        Layout.fillWidth: true
-                        visible: root.climate.driver === "zundar_az1000" && ((root.climate.net || {}).peers || "") !== ""
-                        text: (root.climate.net || {}).peers || ""
-                        color: ((root.climate.net || {}).peers || "").indexOf("уже подключено") >= 0 ? "#dc2626" : root.textSoft
-                        font.pixelSize: 12
-                        font.family: "Bahnschrift"
-                        wrapMode: Text.WordWrap
+                    NoticeLine {
+                        appController: root.appController
+                        text: root.climate.driver === "zundar_az1000" ? ((root.climate.net || {}).peers || "") : ""
+                        tone: ((root.climate.net || {}).peers || "").indexOf("уже подключено") >= 0 ? "bad" : "info"
+                        kind: "Сеть ноутбука"
                     }
 
-                    Text {
+                    RowLayout {
                         Layout.fillWidth: true
                         visible: root.climate.driver === "zundar_az1000"
-                        text: "Кабель витой пары от разъёма LAN камеры в ноутбук (или через роутер). На пульте: Внутренняя настройка → 7 «Система» → "
-                              + "73 «Связь»: режим «Сервер», IP камеры (например 192.168.0.100); способ управления «Оба» или «Только LAN». "
-                              + "Ноутбуку - адрес в той же сети, например 192.168.0.10, маска 255.255.255.0. Порт 502, станция 0. "
-                              + "Без обмена 20 с камера сама рвёт связь - программа опрашивает её чаще."
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                        wrapMode: Text.WordWrap
+                        Caption { text: "Кабель и настройка пульта" }
+                        InfoMark {
+                            tip: "Кабель витой пары от разъёма LAN камеры в ноутбук (или через роутер).<br>На пульте: Внутренняя "
+                                 + "настройка → 7 «Система» → 73 «Связь»: режим «Сервер», IP камеры (например 192.168.0.100); "
+                                 + "способ управления «Оба» или «Только LAN».<br>Ноутбуку - адрес в той же сети, например "
+                                 + "192.168.0.10, маска 255.255.255.0. Порт 502, станция 0.<br>Без обмена 20 с камера сама рвёт "
+                                 + "связь - программа опрашивает её чаще."
+                        }
+                        Item { Layout.fillWidth: true }
                     }
 
                     // Vötsch VT 7100 / Weiss WK1: контроллер S!MCON/32, протокол ASCII-2 по RS-232.
@@ -1373,19 +1304,15 @@ Card {
                                           + "VT 7100: 3 - защита от конденсата, 5 - осушитель сжатого воздуха. Пусто - не трогает. "
                                           + "Можно 3-12: 1 и 2 программа ведёт сама, 13-16 - сервис и сброс ошибки"
                         }
+                        InfoMark {
+                            tip: "Нуль-модемный кабель RS-232: 2↔3 крест, 5 - земля. На пульте: протокол ASCII-2, те же скорость "
+                                 + "и адрес, режим EXTERN.<br>Камера принимает не больше одной строки в 5 секунд, показания "
+                                 + "обновляются раз в 5 с.<br>В режиме EXTERN каналы на пульте не переключаются: защиту от "
+                                 + "конденсата (3) и осушитель (5) включает программа, если они заданы в поле «Каналы при пуске».<br>"
+                                 + "Названия каналов - как на пульте Vötsch VT 7100; у другой камеры смотрите её меню "
+                                 + "«Digitalkanäle»: с 3-го канала назначение может отличаться."
+                        }
                         Item { Layout.fillWidth: true }
-                    }
-
-                    Text {
-                        Layout.fillWidth: true
-                        visible: root.climate.driver === "simcon_ascii2"
-                        text: "Нуль-модемный кабель RS-232: 2↔3 крест, 5 - земля. На пульте: протокол ASCII-2, те же скорость и адрес, режим EXTERN. "
-                              + "Камера принимает не больше одной строки в 5 секунд, показания обновляются раз в 5 с. "
-                              + "В режиме EXTERN каналы на пульте не переключаются: защиту от конденсата (3) и осушитель (5) включает программа, если они заданы в поле «Каналы при пуске»."
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                        wrapMode: Text.WordWrap
                     }
 
                     RowLayout {
@@ -1505,14 +1432,11 @@ Card {
                         }
                     }
 
-                    Text {
-                        Layout.fillWidth: true
-                        visible: (root.climate.bridgeStatus || "").length > 0
+                    NoticeLine {
+                        appController: root.appController
                         text: root.climate.bridgeStatus || ""
-                        color: "#9a3412"
-                        font.pixelSize: 12
-                        font.family: "Bahnschrift"
-                        wrapMode: Text.WordWrap
+                        tone: "warn"
+                        kind: "Имитатор"
                     }
 
                     RowLayout {
@@ -1561,14 +1485,13 @@ Card {
 
                 BlockTitle { text: "Карта регистров камеры" }
 
-                Text {
-                    Layout.fillWidth: true
+                NoticeLine {
+                    appController: root.appController
                     text: "Адреса берутся из документации камеры, с нуля: регистр 40001 - это адрес 0 в таблице holding, 30001 - адрес 0 в input. "
                           + "Масштаб переводит число в градусы: 0,1 означает «в регистре десятые доли градуса»."
-                    color: root.textSoft
-                    font.pixelSize: 11
-                    font.family: "Bahnschrift"
-                    wrapMode: Text.WordWrap
+                    title: "Как заполнять адреса и масштаб"
+                    tone: "info"
+                    kind: "Карта регистров"
                 }
 
                 GridLayout {
@@ -1724,14 +1647,13 @@ Card {
                     Item { Layout.fillWidth: true }
                 }
 
-                Text {
-                    Layout.fillWidth: true
+                NoticeLine {
+                    appController: root.appController
                     text: "Плавный переход - удалённая программа камеры: температура меняется от начальной к конечной за заданное время, "
                           + "потом конечная держится. Все команды и ответы камеры видны в журнале обмена ниже."
-                    color: root.textSoft
-                    font.pixelSize: 11
-                    font.family: "Bahnschrift"
-                    wrapMode: Text.WordWrap
+                    title: "Что такое плавный переход"
+                    tone: "info"
+                    kind: "Программа камеры"
                 }
                 }
             }
@@ -1865,25 +1787,23 @@ Card {
                             wrapMode: Text.WordWrap
                         }
 
-                        Text {
-                            Layout.fillWidth: true
-                            visible: root.zundar && root.selectedCommand !== null && root.selectedCommand.setting === true
-                                     && root.zundarState.panel === true
-                            text: "Сейчас отвечает сенсорная панель: запись она принимает без ошибки, но не выполняет. Команда - для проверки, когда Zundar пришлёт настройку сервера контроллера."
-                            color: "#b45309"
-                            font.pixelSize: 12
-                            font.family: "Bahnschrift"
-                            wrapMode: Text.WordWrap
+                        NoticeLine {
+                            appController: root.appController
+                            text: root.zundar && root.selectedCommand !== null && root.selectedCommand.setting === true
+                                  && root.zundarState.panel === true
+                                  ? "Сейчас отвечает сенсорная панель: запись она принимает без ошибки, но не выполняет. Команда - для проверки, когда Zundar пришлёт настройку сервера контроллера."
+                                  : ""
+                            tone: "warn"
+                            kind: "Команда камере"
                         }
 
-                        Text {
-                            Layout.fillWidth: true
-                            visible: root.selectedCommand !== null && root.selectedCommand.newOnly === true
-                            text: "Эта команда есть только у новой серии контроллера (модели на «2»). MC-811P ответит «камера не знает такой команды»."
-                            color: "#b45309"
-                            font.pixelSize: 12
-                            font.family: "Bahnschrift"
-                            wrapMode: Text.WordWrap
+                        NoticeLine {
+                            appController: root.appController
+                            text: root.selectedCommand !== null && root.selectedCommand.newOnly === true
+                                  ? "Эта команда есть только у новой серии контроллера (модели на «2»). MC-811P ответит «камера не знает такой команды»."
+                                  : ""
+                            tone: "warn"
+                            kind: "Команда камере"
                         }
 
                         Repeater {
@@ -1974,13 +1894,11 @@ Card {
                             }
                         }
 
-                        Text {
-                            Layout.fillWidth: true
+                        NoticeLine {
+                            appController: root.appController
                             text: root.climate.commandStatus || ""
-                            color: root.textSoft
-                            font.pixelSize: 12
-                            font.family: "Bahnschrift"
-                            wrapMode: Text.WordWrap
+                            tone: "info"
+                            kind: "Команда камере"
                         }
                     }
                 }
@@ -2044,15 +1962,11 @@ Card {
                 readonly property var moxaCheck: root.climate.moxaCheck || ({})
 
 
-                Text {
-                    Layout.fillWidth: true
-                    visible: (diagBlock.moxaCheck.text || "").length > 0
-                    text: (diagBlock.moxaCheck.ok ? "✓ " : "⚠ ") + (diagBlock.moxaCheck.text || "")
-                    color: diagBlock.moxaCheck.ok ? "#15803d" : "#dc2626"
-                    font.pixelSize: 12
-                    font.bold: !diagBlock.moxaCheck.ok
-                    font.family: "Bahnschrift"
-                    wrapMode: Text.WordWrap
+                NoticeLine {
+                    appController: root.appController
+                    text: diagBlock.moxaCheck.text || ""
+                    tone: diagBlock.moxaCheck.ok ? "ok" : "bad"
+                    kind: "Порт Moxa"
                 }
 
                 Text {
@@ -2065,14 +1979,11 @@ Card {
                     wrapMode: Text.WordWrap
                 }
 
-                Text {
-                    Layout.fillWidth: true
-                    visible: (diagBlock.diag.lastError || "").length > 0
-                    text: "Последняя ошибка (" + (diagBlock.diag.lastErrorTime || "") + "): " + (diagBlock.diag.lastError || "")
-                    color: "#b45309"
-                    font.pixelSize: 12
-                    font.family: "Bahnschrift"
-                    wrapMode: Text.WordWrap
+                NoticeLine {
+                    appController: root.appController
+                    text: diagBlock.diag.lastError || ""
+                    tone: "warn"
+                    kind: "Последняя ошибка, " + (diagBlock.diag.lastErrorTime || "")
                 }
 
                 RowLayout {
@@ -2131,14 +2042,11 @@ Card {
                     wrapMode: Text.WrapAnywhere
                 }
 
-                Text {
-                    Layout.fillWidth: true
-                    visible: (diagBlock.diag.writeError || "").length > 0
-                    text: "⚠ " + (diagBlock.diag.writeError || "")
-                    color: "#dc2626"
-                    font.pixelSize: 12
-                    font.family: "Bahnschrift"
-                    wrapMode: Text.WordWrap
+                NoticeLine {
+                    appController: root.appController
+                    text: diagBlock.diag.writeError || ""
+                    tone: "bad"
+                    kind: "Журнал обмена"
                 }
 
                 // Итог проверки связи: по каждому запросу ответ, задержка и смысл словами.

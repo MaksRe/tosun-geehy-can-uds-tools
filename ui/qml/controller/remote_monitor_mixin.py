@@ -40,6 +40,7 @@ from datetime import datetime
 from PySide6.QtCore import QTimer
 
 import chamber_fit
+from ui.qml.notices import make_notice, notice_list
 from ui.qml.remote_file_sync import MODE_FOLDER, MODE_SFTP, FileSyncConfig, RemoteFileSync
 from ui.qml.public_tunnel import (CloudflareTunnel, NgrokTunnel, TailscaleFunnel, find_cloudflared, find_ngrok,
                                   find_tailscale, ngrok_config_has_token)
@@ -525,7 +526,7 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
     def _remote_note_point(self, point: dict):
         """Точка записана: событие для страницы и, по желанию, сообщение."""
         node = chamber_fit.nearest_node(point["board_temp_x10"])
-        where = chamber_fit.node_text(node) if node is not None else "вне сетки"
+        where = chamber_fit.node_text(node) if node is not None else "вне допуска ±3 °C"
         media = "-" if point.get("media") is None else point["media"]
         trial = " (проба)" if point.get("rehearsal") else ""
         self._remote_event(
@@ -543,7 +544,7 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         if not self._remote_multi():
             return ""
         sa = getattr(self, "_mb_active_sa", None)
-        return "" if sa is None else f"«{self._mb_name(sa)}»: "
+        return "" if sa is None else f"{self._mb_label(sa)}: "
 
     def _remote_note_journal_saved(self, path: str):
         """Журнал прогона сохранён: его копия уходит на рабочее место."""
@@ -770,7 +771,7 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             self._remote_stable_text = f"Все платы устоялись: {total} из {total}{avg_text}. Можно снимать точки."
             self._remote_stable_ok = True
             return
-        moving = [f"«{self._mb_name(sa)}» " + ("истории мало" if rate is None
+        moving = [f"{self._mb_label(sa)} " + ("истории мало" if rate is None
                                                 else f"{rate:+.3f} °C/мин".replace(".", ","))
                   for sa, (rate, stable) in result.items() if not stable]
         self._remote_stable_text = (f"Устоялись {stable_count} из {total} плат{avg_text}; ещё меняются: "
@@ -801,9 +802,11 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
                 "stable": bool(stable), "main": row["main"], "media": row["media"],
                 "points": row["points"], "tablesComplete": row["tablesComplete"],
                 "profileState": row.get("profileState", ""), "profileTone": row.get("profileTone", "normal"),
-                "nodes": row.get("nodes", []),
+                "nodes": row.get("nodes", []), "stages": row.get("stages", {}),
                 "coverage": extra.get("coverage", []), "file": extra.get("file", ""),
                 "tablesText": extra.get("tablesText", ""), "lastPoint": extra.get("lastPoint", ""),
+                "tablesNotice": make_notice(extra.get("tablesText", ""), "ok" if row["tablesComplete"] else "warn",
+                                            "Таблицы"),
             })
         avg = self._remote_history[-1][1] if self._remote_history else None
         return {"enabled": True, "rows": rows, "boardOnly": bool(getattr(self, "_chamber_board_only", False)),
@@ -848,7 +851,7 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             return None if value is None else round(float(value), digits)
 
         write_open = getattr(self, "_chamber_chain_write_ready", None)
-        return {
+        snapshot = {
             "time": datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
             "device": {
                 "connected": bool(self._can.is_connect) and bool(self._can.is_trace),
@@ -898,6 +901,44 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             "events": list(self._remote_events)[:30],
             "boards": self._remote_boards_snapshot(now),
         } | self._remote_history_boards()
+        snapshot["notices"] = self._remote_notices(snapshot)
+        # Итоги прогона по платам и этапам - те же таблицы, что в окне программы.
+        snapshot["results"] = self._chamber_results_view()
+        return snapshot
+
+    @staticmethod
+    def _remote_notices(snapshot: dict) -> dict:
+        """Сообщения для страницы карточками (notices.py): значок по важности, заголовок, раскрытие.
+
+        Страница показывает строку «значок + заголовок», а по нажатию - что произошло, почему, что сделать.
+        """
+        run = snapshot.get("run") or {}
+        climate = snapshot.get("climate") or {}
+        auto_run = climate.get("run") or {}
+        auto = auto_run.get("auto") or {}
+        chain = snapshot.get("chain") or {}
+        report = [str(item) for item in run.get("report") or []]
+        return {
+            "journal": make_notice(run.get("status", ""), run.get("statusColor", ""), "Журнал"),
+            "tables": make_notice(run.get("tablesText", ""), run.get("tablesColor", ""), "Таблицы"),
+            "report": notice_list(report, "warn", "Таблицы", "Чего не хватило расчёту: замечаний {count}",
+                                  remarks=True) if report else {},
+            "chain": make_notice(chain.get("status", ""), chain.get("color", ""), "Профиль"),
+            "run": make_notice(auto_run.get("status", ""), auto_run.get("color", ""), "Прогон"),
+            "alerts": notice_list([{"text": item.get("text", ""), "level": item.get("level", "warn")}
+                                   for item in auto.get("alerts") or []],
+                                  "warn", "Прогон", "Проблемы прогона сейчас: {count}"),
+            "climate": make_notice("" if climate.get("ok") else climate.get("status", ""), "bad", "Камера"),
+            "dew": make_notice((climate.get("dew") or {}).get("text", "") if (climate.get("dew") or {}).get("visible") else "",
+                               "bad" if (climate.get("dew") or {}).get("danger") else "info", "Роса"),
+            "nodes": make_notice("Время по узлам: " + auto["nodesText"] if auto.get("nodesText") else "", "info", "Прогон"),
+            "boardModel": make_notice(f"Плата и воздух: {auto['boardModel']}. Уставка шагов ставится с этой поправкой."
+                                      if auto.get("boardModel") else "", "info", "Прогон"),
+            "followPlan": make_notice("Программа для пульта камеры (Программа редактор): "
+                                      + "; ".join(auto_run.get("followPlan") or []) if auto_run.get("followPlan") else "",
+                                      "info", "Пульт камеры"),
+            "boards": make_notice((snapshot.get("boards") or {}).get("status", ""), "info", "Платы"),
+        }
 
     def _remote_history_boards(self) -> dict:
         """Цель функции в линии каждой платы для графиков: моменты те же, что у общей истории."""

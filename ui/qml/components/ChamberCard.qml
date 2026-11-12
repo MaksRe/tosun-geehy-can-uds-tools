@@ -32,6 +32,16 @@ Card {
     property color inputBg: "#f6faff"
     property color inputBorder: "#c8d9ea"
     property color inputFocus: "#0ea5e9"
+    // Вкладка раздела: показания и запись точки видны всегда, остальное - на своей вкладке.
+    property string page: "points"
+    readonly property var pages: [
+        { "key": "points", "title": "Точки", "tip": "Запись точки, полнота по узлам, замечания расчёта и журнал точек" },
+        { "key": "results", "title": "Итоги", "tip": "Итоги прогона: таблицы по узлам и этапам, ёмкость, уход от +25 °C, разброс" },
+        { "key": "profile", "title": "Расчёт и профиль", "tip": "Режим прогона, расчёт таблиц и запись профиля в прибор" },
+        { "key": "journals", "title": "Журналы", "tip": "Журналы на диске: открыть, сохранить, журналы первого этапа всем платам" },
+        { "key": "boards", "title": "Платы", "tip": "Несколько плат в камере: список плат, адреса, у каждой свой журнал" },
+        { "key": "test", "title": "Тестовый режим", "tip": "Отладка прогона на столе без камеры" }
+    ]
 
     signal saveLogRequested()
     signal loadLogRequested()
@@ -302,9 +312,65 @@ Card {
                 }
             }
 
+            // --- Вкладки раздела ---
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 42
+                radius: 11
+                color: "#eef3f9"
+                border.width: 1
+                border.color: "#d6e2ef"
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.margins: 4
+                    spacing: 4
+
+                    Repeater {
+                        model: root.pages
+
+                        Rectangle {
+                            id: pageTab
+                            required property var modelData
+                            readonly property bool current: root.page === pageTab.modelData.key
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            radius: 8
+                            color: pageTab.current ? "#0f766e" : (pageTabArea.containsMouse ? "#dfe8f1" : "transparent")
+
+                            Text {
+                                anchors.centerIn: parent
+                                text: pageTab.modelData.title
+                                      + (pageTab.modelData.key === "points" && root.appController
+                                         ? "  " + root.appController.chamberPointCount : "")
+                                color: pageTab.current ? "#ffffff" : root.textMain
+                                font.pixelSize: 13
+                                font.bold: pageTab.current
+                                font.family: "Bahnschrift"
+                            }
+
+                            MouseArea {
+                                id: pageTabArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.page = pageTab.modelData.key
+                            }
+
+                            ToolTip {
+                                visible: pageTabArea.containsMouse
+                                delay: 500
+                                text: pageTab.modelData.tip
+                            }
+                        }
+                    }
+                }
+            }
+
             // --- Снятие точки ---
             Rectangle {
                 Layout.fillWidth: true
+                visible: root.page === "points"
                 Layout.preferredHeight: captureLayout.implicitHeight + 20
                 radius: 12
                 color: "#f2f7ff"
@@ -377,21 +443,13 @@ Card {
                         Layout.fillWidth: true
                         spacing: 10
 
-                        Rectangle {
-                            Layout.alignment: Qt.AlignVCenter
-                            Layout.preferredWidth: 10
-                            Layout.preferredHeight: 10
-                            radius: 5
-                            color: root.appController ? root.appController.chamberStatusColor : "#64748b"
-                        }
-
-                        Text {
-                            Layout.fillWidth: true
+                        // Последнее сообщение журнала: значок и заголовок, разбор - по нажатию.
+                        NoticeLine {
+                            appController: root.appController
                             text: root.appController ? root.appController.chamberStatusText : "Контроллер недоступен"
-                            color: root.appController ? root.appController.chamberStatusColor : "#64748b"
-                            font.pixelSize: 13
-                            font.family: "Bahnschrift"
-                            elide: Text.ElideRight
+                            tone: root.appController ? root.appController.chamberStatusColor : ""
+                            kind: "Журнал"
+                            fontSize: 13
                         }
 
                         SmallButton {
@@ -408,6 +466,7 @@ Card {
             // --- Полнота прогона по узлам ---
             ColumnLayout {
                 Layout.fillWidth: true
+                visible: root.page === "points"
                 spacing: 6
 
                 Text {
@@ -483,6 +542,7 @@ Card {
             // --- Запись профиля в прибор: доступ, запись, сверка, файл ---
             Rectangle {
                 Layout.fillWidth: true
+                visible: root.page === "profile"
                 Layout.preferredHeight: chainLayout.implicitHeight + 18
                 radius: 12
                 color: "#f0fdf4"
@@ -545,59 +605,31 @@ Card {
                         }
                     }
 
-                    Text {
-                        Layout.fillWidth: true
-                        text: (root.chain.status || "") + (root.chain.autoWrite === true ? "  ·  запишется сам при полных данных" : "")
-                        color: root.chain.color || root.textSoft
-                        font.pixelSize: 12
-                        font.family: "Bahnschrift"
-                        elide: Text.ElideRight
+                    NoticeLine {
+                        appController: root.appController
+                        text: (root.chain.status || "") + (root.chain.autoWrite === true ? ". Запишется сам при полных данных." : "")
+                        tone: root.chain.color || ""
+                        kind: "Профиль"
                     }
                 }
             }
 
-            // --- Замечания расчёта: только когда расчёту чего-то не хватило ---
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: reportLayout.implicitHeight + 16
-                visible: root.appController && root.appController.chamberReportLines.length > 0
-                radius: 10
-                color: "#fffbeb"
-                border.width: 1
-                border.color: "#fcd34d"
-
-                ColumnLayout {
-                    id: reportLayout
-                    anchors.fill: parent
-                    anchors.margins: 8
-                    spacing: 2
-
-                    Text {
-                        text: "Чего не хватило расчёту"
-                        color: "#92400e"
-                        font.pixelSize: 12
-                        font.bold: true
-                        font.family: "Bahnschrift"
-                    }
-
-                    Repeater {
-                        model: root.appController ? root.appController.chamberReportLines : []
-
-                        Text {
-                            required property string modelData
-                            Layout.fillWidth: true
-                            text: "- " + modelData
-                            color: "#92400e"
-                            font.pixelSize: 11
-                            font.family: "Bahnschrift"
-                            wrapMode: Text.WordWrap
-                        }
-                    }
-                }
+            // --- Замечания расчёта: одной строкой со счётом, каждое с пояснением - по нажатию ---
+            NoticeLine {
+                visible: root.page === "points" && hasNotice
+                appController: root.appController
+                items: root.appController ? root.appController.chamberReportLines : []
+                remarks: true
+                tone: "warn"
+                kind: "Таблицы"
+                title: "Чего не хватило расчёту: замечаний {count}"
+                fontSize: 13
             }
 
             // --- Режим прогона и расчёт: задаётся один раз на прогон ---
             Spoiler {
+                visible: root.page === "profile"
+                expanded: true
                 title: "Режим прогона и расчёт таблиц"
                 hintText: (root.boardOnly ? "только плата (" + (root.appController ? root.appController.chamberSingleModel : "") + ")"
                                           : "эталоны и трубка")
@@ -645,19 +677,15 @@ Card {
                             }
                         }
 
-                        Item { Layout.fillWidth: true }
-                    }
+                        InfoMark {
+                            tip: root.boardOnly
+                                 ? "В каждом узле снимается одна точка «0/0»: к входам ничего не подключено. Поправка возвращает "
+                                   + "показание при своей ёмкости платы к показанию при +25 °C.<br>При подключённой трубке это "
+                                   + "допущение: сдвиг и растяжение по одной ёмкости не разделить. Ряды трубки в профиле не меняются."
+                                 : ""
+                        }
 
-                    Text {
-                        Layout.fillWidth: true
-                        visible: root.boardOnly
-                        text: "В каждом узле снимается одна точка «0/0»: к входам ничего не подключено. Поправка возвращает показание "
-                              + "при своей ёмкости платы к показанию при +25 °C. При подключённой трубке это допущение: сдвиг и "
-                              + "растяжение по одной ёмкости не разделить. Ряды трубки в профиле не меняются."
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                        wrapMode: Text.WordWrap
+                        Item { Layout.fillWidth: true }
                     }
 
                     RowLayout {
@@ -677,6 +705,12 @@ Card {
                             color: root.textMain
                             font.pixelSize: 13
                             font.family: "Bahnschrift"
+                        }
+
+                        InfoMark {
+                            tip: "Нужно, когда в камеру нельзя ставить топливо. Погружение снимается один раз при комнатной "
+                                 + "температуре, в остальных узлах размах считается таким же.<br>Пустое поле размаха - "
+                                 + "«взять размах из снятой пары состояний»."
                         }
 
                         Caption { text: "  основной"; visible: extendSwitch.checked }
@@ -716,17 +750,6 @@ Card {
                         Item { Layout.fillWidth: true }
                     }
 
-                    Text {
-                        Layout.fillWidth: true
-                        visible: !root.boardOnly && extendSwitch.checked
-                        text: "Нужно, когда в камеру нельзя ставить топливо. Погружение снимается один раз "
-                            + "при комнатной температуре, в остальных узлах размах считается таким же. "
-                            + "Пустое поле означает «взять размах из снятой пары состояний»."
-                        color: root.textSoft
-                        font.pixelSize: 11
-                        font.family: "Bahnschrift"
-                        wrapMode: Text.WordWrap
-                    }
 
                     RowLayout {
                         Layout.fillWidth: true
@@ -779,15 +802,11 @@ Card {
                             onClicked: if (root.appController) root.appController.computeChamberTables()
                         }
 
-                        Text {
-                            Layout.fillWidth: true
+                        NoticeLine {
+                            appController: root.appController
                             text: root.appController ? root.appController.chamberTablesText : ""
-                            color: root.appController ? root.appController.chamberTablesColor : root.textSoft
-                            font.pixelSize: 12
-                            font.family: "Bahnschrift"
-                            wrapMode: Text.WordWrap
-                            maximumLineCount: 2
-                            elide: Text.ElideRight
+                            tone: root.appController ? root.appController.chamberTablesColor : ""
+                            kind: "Таблицы"
                         }
                     }
                 }
@@ -796,11 +815,12 @@ Card {
             // --- Несколько плат в камере: у каждой свой журнал, таблицы и профиль ---
             Spoiler {
                 id: boardsSpoiler
+                visible: root.page === "boards"
                 readonly property var mb: root.appController ? root.appController.chamberBoards : ({})
                 title: "Несколько плат в камере"
                 hintText: (boardsSpoiler.mb.enabled ? "включено: плат " + (boardsSpoiler.mb.boards || []).length
                            : "выключено: одна плата") + (boardsSpoiler.mb.status ? "  ·  " + boardsSpoiler.mb.status : "")
-                expanded: boardsSpoiler.mb.enabled === true
+                expanded: true
 
                 RowLayout {
                     Layout.fillWidth: true
@@ -940,9 +960,27 @@ Card {
                 }
             }
 
+            // --- Итоги прогона: таблицы по узлам и этапам, по ним видно, удался ли прогон ---
+            Spoiler {
+                id: resultsSpoiler
+                visible: root.page === "results"
+                expanded: true
+                title: "Итоги прогона"
+                hintText: (((root.appController ? root.appController.chamberResults : ({})).boards || []).length > 1
+                           ? "сводка по платам, " : "")
+                          + "узлы по этапам, ёмкость, уход от +25 °C, разброс"
+
+                ResultsPanel {
+                    Layout.fillWidth: true
+                    appController: root.appController
+                }
+            }
+
             // --- Журналы и таблицы: журнал и так сохраняется сам после каждой точки ---
             Spoiler {
                 id: journalsSpoiler
+                visible: root.page === "journals"
+                expanded: true
                 title: "Журналы и таблицы"
                 // Несколько плат: у каждого журнала - плата по адресу в имени файла; показанная плата.
                 readonly property var mb: root.appController ? root.appController.chamberBoards : ({})
@@ -1005,23 +1043,21 @@ Card {
                         enabled: root.appController !== null && !root.busy
                         onClicked: if (root.appController) root.appController.openStage1Journals()
                     }
-                    Caption {
-                        Layout.fillWidth: true
-                        text: "Кнопка «Открыть» ниже открывает журнал только показанной плате"
-                              + (journalsSpoiler.mb.shownName ? " - «" + journalsSpoiler.mb.shownName + "»" : "")
-                              + ". Журнал другой платы не откроется: покажите её в ленте."
-                        wrapMode: Text.WordWrap
+                    InfoMark {
+                        tip: "Кнопка «Открыть» ниже открывает журнал только показанной плате"
+                             + (journalsSpoiler.mb.shownName ? " - «" + journalsSpoiler.mb.shownName + "»" : "")
+                             + ".<br>Журнал другой платы не откроется: покажите её в ленте."
                     }
+
+                    Item { Layout.fillWidth: true }
                 }
 
-                Text {
-                    Layout.fillWidth: true
-                    visible: journalsSpoiler.multi && (journalsSpoiler.mb.status || "").indexOf("Журналы первого этапа") === 0
-                    text: journalsSpoiler.mb.status || ""
-                    color: root.textMain
-                    font.pixelSize: 12
-                    font.family: "Bahnschrift"
-                    wrapMode: Text.WordWrap
+                NoticeLine {
+                    appController: root.appController
+                    text: journalsSpoiler.multi && (journalsSpoiler.mb.status || "").indexOf("Журналы первого этапа") === 0
+                          ? journalsSpoiler.mb.status : ""
+                    tone: (journalsSpoiler.mb.status || "").indexOf("нет") >= 0 ? "warn" : "ok"
+                    kind: "Журналы"
                 }
 
                 Repeater {
@@ -1121,7 +1157,8 @@ Card {
                 title: "Тестовый режим на столе (отладка без камеры)"
                 hintText: root.test.mode ? "включён: " + (root.test.emulationText || "настоящая температура")
                                          : "температура задаётся прибору эмуляцией, весь прогон проходится на столе"
-                expanded: false
+                visible: root.page === "test"
+                expanded: true
 
                 ColumnLayout {
                     Layout.fillWidth: true
@@ -1247,21 +1284,18 @@ Card {
                         }
                     }
 
-                    Text {
-                        Layout.fillWidth: true
-                        visible: root.test.mode === true && (root.test.checkText || "").length > 0
-                        text: root.test.checkText || ""
-                        color: root.test.checkColor || root.textSoft
-                        font.pixelSize: 12
-                        font.bold: true
-                        font.family: "Bahnschrift"
-                        wrapMode: Text.WordWrap
+                    NoticeLine {
+                        appController: root.appController
+                        text: root.test.mode === true ? (root.test.checkText || "") : ""
+                        tone: root.test.checkColor || ""
+                        kind: "Проверка"
                     }
                 }
             }
 
             // --- Журнал снятых точек ---
             Text {
+                visible: root.page === "points"
                 text: "Журнал точек" + (root.appController ? "  ·  снято " + root.appController.chamberPointCount : "")
                 color: root.textMain
                 font.pixelSize: 13
@@ -1269,8 +1303,16 @@ Card {
                 font.family: "Bahnschrift"
             }
 
+            // На вкладках без журнала точек свободное место - внизу, а не над содержимым.
+            Item {
+                visible: root.page !== "points"
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+            }
+
             ScrollView {
                 id: logScroll
+                visible: root.page === "points"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 // Хотя бы несколько последних точек видно всегда, даже в невысоком окне.
@@ -1283,7 +1325,7 @@ Card {
                 ColumnLayout {
                     id: logBody
                     width: logScroll.availableWidth
-                    spacing: 3
+                    spacing: 0
 
                     // Ширина колонок считается один раз и применяется и к шапке, и к
                     // строкам: иначе подписи разъедутся с данными.
@@ -1291,31 +1333,50 @@ Card {
                     // Справа у каждой строки - кнопка «убрать точку».
                     readonly property int removeWidth: 34
                     function columnWidth(index) {
-                        return Math.max(54, (width - 8 * 6 - removeWidth) * weights[index])
+                        return Math.max(54, (width - removeWidth) * weights[index])
                     }
 
+                    // Шапка таблицы: каждая подпись в своей ячейке с рамкой - над своим столбцом.
                     RowLayout {
                         Layout.fillWidth: true
-                        spacing: 6
+                        spacing: 0
 
                         Repeater {
-                            model: ["Время", "Что подключено", "Основной", "Вид топлива",
-                                    "T топлива", "T платы", "T камеры", "Узел"]
+                            model: ["Время", "Что подключено", "Основной, отсч.", "Вид топлива, отсч.",
+                                    "Трубка, °C", "Плата, °C", "Воздух камеры, °C", "Узел"]
 
-                            Text {
+                            Rectangle {
+                                id: headCell
                                 required property int index
                                 required property string modelData
-                                Layout.preferredWidth: logBody.columnWidth(index)
-                                Layout.fillWidth: false
-                                text: modelData
-                                color: root.textSoft
-                                font.pixelSize: 11
-                                font.bold: true
-                                font.family: "Bahnschrift"
-                                elide: Text.ElideRight
+                                Layout.preferredWidth: logBody.columnWidth(headCell.index)
+                                Layout.preferredHeight: 28
+                                color: "#e8eef5"
+                                border.width: 1
+                                border.color: "#c5d0dc"
+
+                                Text {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 6
+                                    anchors.rightMargin: 6
+                                    verticalAlignment: Text.AlignVCenter
+                                    horizontalAlignment: Text.AlignHCenter
+                                    text: headCell.modelData
+                                    color: "#334155"
+                                    font.pixelSize: 11
+                                    font.bold: true
+                                    font.family: "Bahnschrift"
+                                    elide: Text.ElideRight
+                                }
                             }
                         }
-                        Item { Layout.preferredWidth: logBody.removeWidth }
+                        Rectangle {
+                            Layout.preferredWidth: logBody.removeWidth
+                            Layout.preferredHeight: 28
+                            color: "#e8eef5"
+                            border.width: 1
+                            border.color: "#c5d0dc"
+                        }
                     }
 
                     Repeater {
@@ -1324,9 +1385,12 @@ Card {
                         RowLayout {
                             id: logRow
                             required property var modelData
+                            required property int index
+                            // Строки через одну - с подложкой: глаз не теряет строку в широкой таблице.
+                            readonly property color rowColor: logRow.index % 2 === 1 ? "#f5f8fb" : "#ffffff"
 
                             Layout.fillWidth: true
-                            spacing: 6
+                            spacing: 0
 
                             Repeater {
                                 model: [logRow.modelData.time, logRow.modelData.note, logRow.modelData.main,
@@ -1334,25 +1398,47 @@ Card {
                                         logRow.modelData.boardTemp, logRow.modelData.chamberTemp,
                                         logRow.modelData.node]
 
-                                Text {
+                                Rectangle {
+                                    id: bodyCell
                                     required property int index
                                     required property string modelData
-                                    Layout.preferredWidth: logBody.columnWidth(index)
-                                    Layout.fillWidth: false
-                                    text: modelData
-                                    color: (index === 7 && !logRow.modelData.nodeOk) ? "#b45309" : root.textMain
-                                    font.pixelSize: 12
-                                    font.family: "Bahnschrift"
-                                    elide: Text.ElideRight
+                                    Layout.preferredWidth: logBody.columnWidth(bodyCell.index)
+                                    Layout.preferredHeight: 26
+                                    color: (bodyCell.index === 7 && !logRow.modelData.nodeOk) ? "#fff7e6" : logRow.rowColor
+                                    border.width: 1
+                                    border.color: "#dbe3ec"
+
+                                    Text {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 6
+                                        anchors.rightMargin: 6
+                                        verticalAlignment: Text.AlignVCenter
+                                        // Числа - по правому краю, слова - по левому: так столбцы читаются ровно.
+                                        horizontalAlignment: bodyCell.index >= 2 && bodyCell.index <= 6 ? Text.AlignRight
+                                                                                                         : Text.AlignLeft
+                                        text: bodyCell.modelData
+                                        color: (bodyCell.index === 7 && !logRow.modelData.nodeOk) ? "#b45309" : root.textMain
+                                        font.pixelSize: 12
+                                        font.family: "Bahnschrift"
+                                        elide: Text.ElideRight
+                                    }
                                 }
                             }
 
                             // Убрать эту точку (например, недостоверную): первое нажатие - «точно?», второе - убирает.
+                            Rectangle {
+                                Layout.preferredWidth: logBody.removeWidth
+                                Layout.preferredHeight: 26
+                                color: logRow.rowColor
+                                border.width: 1
+                                border.color: "#dbe3ec"
+
                             SmallButton {
                                 id: removeButton
                                 property bool armed: false
-                                Layout.preferredWidth: logBody.removeWidth
-                                Layout.preferredHeight: 22
+                                anchors.centerIn: parent
+                                width: logBody.removeWidth - 8
+                                height: 20
                                 fontPixelSize: 11
                                 text: armed ? "?" : "✕"
                                 tone: armed ? "#dc2626" : "#94a3b8"; toneHover: "#dc2626"; tonePressed: "#b91c1c"
@@ -1366,6 +1452,7 @@ Card {
                                         root.appController.removeChamberPoint(logRow.modelData.index, logRow.modelData.time)
                                 }
                                 Timer { id: removeDisarm; interval: 4000; onTriggered: removeButton.armed = false }
+                            }
                             }
                         }
                     }

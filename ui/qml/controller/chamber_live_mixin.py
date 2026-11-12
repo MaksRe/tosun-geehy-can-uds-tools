@@ -195,8 +195,11 @@ class AppControllerChamberLiveMixin(AppControllerContract):
             "media": None if media is None else int(round(media["mean"])),
             "fuel_temp_x10": int(round(temps["fuel_temp"]["mean"])),
             "board_temp_x10": int(round(temps["board_temp"]["mean"])),
+            "samples": int(main["count"]),
+            "main_spread": main["spread"],
+            "media_spread": None if media is None else media["spread"],
         }
-        detail = f"среднее за {_decimal(main['span_s'], 0)} с по {main['count']} показаниям, разброс {main['spread']}"
+        detail =f"среднее за {_decimal(main['span_s'], 0)} с по {main['count']} показаниям, разброс {main['spread']}"
         if media is not None:
             detail += f" / {media['spread']}"
 
