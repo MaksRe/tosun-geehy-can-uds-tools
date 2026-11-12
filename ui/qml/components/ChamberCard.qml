@@ -37,7 +37,7 @@ Card {
     readonly property var pages: [
         { "key": "points", "title": "Точки", "tip": "Запись точки, полнота по узлам, замечания расчёта и журнал точек" },
         { "key": "results", "title": "Итоги", "tip": "Итоги прогона: таблицы по узлам и этапам, ёмкость, уход от +25 °C, разброс" },
-        { "key": "monitor", "title": "Монитор", "tip": "Монитор отклонений в реальном времени: уровень и итог периода, которые считает сам прибор по записанному профилю" },
+        { "key": "monitor", "title": "Уровень", "tip": "Уровень топлива сейчас у всех плат: погрешность и сдвиг от +25 °C по тому, что считает сам прибор" },
         { "key": "profile", "title": "Расчёт и профиль", "tip": "Режим прогона, расчёт таблиц и запись профиля в прибор" },
         { "key": "journals", "title": "Журналы", "tip": "Журналы на диске: открыть, сохранить, журналы первого этапа всем платам" },
         { "key": "boards", "title": "Платы", "tip": "Несколько плат в камере: список плат, адреса, у каждой свой журнал" },
@@ -961,63 +961,73 @@ Card {
                 }
             }
 
-            // --- Монитор отклонений: что выдаёт сам прибор по записанному профилю, прямо во время прогона ---
+            // --- Уровень топлива сейчас: что выдаёт сам прибор по записанному профилю, у всех плат сразу ---
             Spoiler {
                 id: monitorSpoiler
                 visible: root.page === "monitor"
                 expanded: true
-                title: "Монитор отклонений"
+                title: "Уровень топлива сейчас"
                 readonly property var monitor: root.appController ? root.appController.chamberMonitor : ({})
                 hintText: monitorSpoiler.monitor.worst
-                          ? "наибольшее отклонение от опоры " + monitorSpoiler.monitor.worst + " п.п."
-                          : "уровень прибора от опоры при +25 °C, запись раз в " + (monitorSpoiler.monitor.everyS || 20) + " с"
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-
-                    SmallButton {
-                        Layout.preferredWidth: 150
-                        text: "Опора - сейчас"
-                        tone: "#0284c7"; toneHover: "#0369a1"; tonePressed: "#075985"
-                        toolTipText: "Текущее показание каждой платы становится опорой: от него считаются отклонения. Сама опора берётся при первом попадании трубки в +25 °C"
-                        enabled: root.appController !== null
-                        onClicked: if (root.appController) root.appController.setChamberMonitorReference()
-                    }
-                    SmallButton {
-                        id: monitorResetButton
-                        property bool armed: false
-                        Layout.preferredWidth: 170
-                        text: armed ? "Точно? Ещё раз" : "Сбросить наблюдение"
-                        toolTipText: "Забыть историю и опору монитора у всех плат. Журналы точек не трогаются"
-                        enabled: root.appController !== null
-                        onClicked: {
-                            if (!armed) { armed = true; monitorResetDisarm.restart(); return }
-                            armed = false
-                            if (root.appController) root.appController.resetChamberMonitor()
-                        }
-                        Timer { id: monitorResetDisarm; interval: 4000; onTriggered: monitorResetButton.armed = false }
-                    }
-                    InfoMark {
-                        tip: "Монитор читает у каждой платы то, что считает сам прибор:<br>"
-                             + "- уровень (0x0018) - с сухой трубкой он должен быть около 0 % при любой температуре;<br>"
-                             + "- итог периода после температурной компенсации (0x0062) - у сухой трубки стоит на месте.<br><br>"
-                             + "Отклонение считается от опоры - показания этой же платы при +25 °C трубки. Это температурная "
-                             + "ошибка уровня, которую профиль не убрал. Требование ±1 %: до 0,5 п.п. - в норме, 0,5-1 - на грани, "
-                             + "больше 1 - вне допуска.<br><br>"
-                             + "Если холодные узлы завышены, а горячие нет - на трубке, похоже, осталась плёнка топлива: при нагреве она "
-                             + "стекает и испаряется (прогон 11-12.11.2026)."
-                    }
-                    Item { Layout.fillWidth: true }
-                }
+                          ? "худшее за прогон " + monitorSpoiler.monitor.worst + " %"
+                          : "все платы сразу, обновляется каждые пару секунд"
 
                 ResultsTable {
                     Layout.fillWidth: true
                     table: monitorSpoiler.monitor.now || ({})
                 }
-                ResultsTable {
+
+                Spoiler {
                     Layout.fillWidth: true
-                    table: monitorSpoiler.monitor.nodes || ({})
+                    expanded: false
+                    title: "Подробнее: по узлам, итог периода, кнопки"
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        SmallButton {
+                            Layout.preferredWidth: 200
+                            text: "Считать сдвиг от текущего"
+                            tone: "#0284c7"; toneHover: "#0369a1"; tonePressed: "#075985"
+                            toolTipText: "Сдвиг каждой платы будет считаться от её показания сейчас, а не при +25 °C. Нужно, только если трубка в этом прогоне не бывает при +25 °C"
+                            enabled: root.appController !== null
+                            onClicked: if (root.appController) root.appController.setChamberMonitorReference()
+                        }
+                        SmallButton {
+                            id: monitorResetButton
+                            property bool armed: false
+                            Layout.preferredWidth: 170
+                            text: armed ? "Точно? Ещё раз" : "Сбросить наблюдение"
+                            toolTipText: "Забыть историю и показание при +25 °C у всех плат. Журналы точек не трогаются"
+                            enabled: root.appController !== null
+                            onClicked: {
+                                if (!armed) { armed = true; monitorResetDisarm.restart(); return }
+                                armed = false
+                                if (root.appController) root.appController.resetChamberMonitor()
+                            }
+                            Timer { id: monitorResetDisarm; interval: 4000; onTriggered: monitorResetButton.armed = false }
+                        }
+                        InfoMark {
+                            tip: "Погрешность - уровень прибора минус настоящий: у сухой трубки («воздух») настоящий 0 %, "
+                                 + "в топливе («жидкость») 100 %.<br><br>"
+                                 + "Сдвиг от +25 °C - насколько уровень ушёл от показания этой же платы при +25 °C трубки. "
+                                 + "Это ошибка от температуры, которую профиль не убрал. Показание при +25 °C запоминается само.<br><br>"
+                                 + "Требование ±1 %: до 0,5 % - в норме, 0,5-1 % - на грани, больше 1 % - вне допуска.<br><br>"
+                                 + "Если холодные узлы завышены, а горячие нет - на трубке, похоже, осталась плёнка топлива: при нагреве она "
+                                 + "стекает и испаряется (прогон 11-12.11.2026)."
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    ResultsTable {
+                        Layout.fillWidth: true
+                        table: monitorSpoiler.monitor.nodes || ({})
+                    }
+                    ResultsTable {
+                        Layout.fillWidth: true
+                        table: monitorSpoiler.monitor.detail || ({})
+                    }
                 }
             }
 
@@ -1030,6 +1040,20 @@ Card {
                 hintText: (((root.appController ? root.appController.chamberResults : ({})).boards || []).length > 1
                            ? "сводка по платам, " : "")
                           + "узлы по этапам, ёмкость, уход от +25 °C, разброс"
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    SmallButton {
+                        Layout.preferredWidth: 190
+                        text: "Отчёт о прогоне PDF"
+                        tone: "#0284c7"; toneHover: "#0369a1"; tonePressed: "#075985"
+                        toolTipText: "Подробный отчёт одним файлом: итог по платам против ±1 %, погрешность и сдвиг по узлам, графики, таблицы и события. Сам делается в конце прогона"
+                        enabled: root.appController !== null
+                        onClicked: if (root.appController) root.appController.makeRunReportPdf()
+                    }
+                    Item { Layout.fillWidth: true }
+                }
 
                 ResultsPanel {
                     Layout.fillWidth: true

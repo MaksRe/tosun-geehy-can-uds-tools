@@ -114,7 +114,9 @@
   .tile .val { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; white-space: nowrap; }
   .tile .sub { font-size: 12px; color: var(--soft); font-variant-numeric: tabular-nums; white-space: nowrap;
                overflow: hidden; text-overflow: ellipsis; }
-  .tile .sub.ok { color: var(--ok); } .tile .sub.warn { color: var(--warn); }
+  .tile .sub.ok { color: var(--ok); } .tile .sub.warn { color: var(--warn); } .tile .sub.bad { color: var(--bad); }
+  /* Плитка уровня: подписи переносятся, а не обрезаются многоточием. */
+  .tile.level .sub { white-space: normal; overflow: visible; }
   .mark { flex: none; width: 10px; height: 10px; border-radius: 50%; }
   /* Карточки плат на вкладке «Платы»: на телефоне одна под другой, на мониторе - в несколько колонок. */
   .bcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 10px;
@@ -327,6 +329,12 @@
   <!-- Сейчас: проблемы, камера, платы, контуры, график; ниже - управление и команды камеры. -->
   <section class="tab on" id="tab-now">
     <div id="alerts"></div>
+    <!-- Уровень топлива у всех плат сразу: погрешность и сдвиг от +25 °C - то, ради чего проверка. -->
+    <div class="card wide" id="levelCard" hidden>
+      <h2>Уровень топлива <span id="levelHint"></span></h2>
+      <div class="tiles" id="levelTiles"></div>
+      <div id="levelMore"></div>
+    </div>
     <div class="card">
       <h2>Камера <span id="chamberName"></span></h2>
       <div id="chamber"></div>
@@ -346,7 +354,7 @@
       <div id="boardDetails" hidden></div>
       <div class="soft" id="device" style="margin-top:4px"></div>
     </div>
-    <div class="card">
+    <div class="card" id="channelsCard">
       <h2>Контуры <span id="window"></span></h2>
       <div class="grid">
         <div><small>Основной</small><span class="mid" id="mainNow">—</span>
@@ -409,7 +417,8 @@
     <div class="card wide" data-sub="results">
       <h2>Итоги прогона <span id="resultsTime"></span><details class="hint"><summary>i</summary><div class="hintbody">По журналам точек каждой платы: что снято в каждом узле на первом этапе (плата с эталонами) и втором (сухая трубка, погружение), показания контуров, ёмкость, изменение относительно +25 °C и разброс показаний. Цвет строки: зелёный - в порядке, жёлтый - точка вне допуска, красный - точки нет. Пояснения к столбцам - под каждой таблицей.</div></details></h2>
       <div id="results"></div>
-      <div class="buttons"><button class="light" data-bundle="1">🗜 Все файлы прогона одним архивом</button></div>
+      <div class="buttons"><button data-bundle="pdf">📑 Отчёт о прогоне PDF</button>
+        <button class="light" data-bundle="1">🗜 Все файлы прогона одним архивом</button></div>
     </div>
     <div class="card" id="resumeCard" data-sub="run" hidden>
       <h2>Прерванный прогон</h2>
@@ -508,7 +517,8 @@
     </div>
     <div class="card">
       <h2>Файлы <span id="filesHint">придут в чат с ботом</span><details class="hint"><summary>i</summary><div class="hintbody">Архив - всё для разбора прогона: журналы и профили всех плат, ход прогона и журнал камеры за 3 дня, отчёт диагностики, настройки и итоги прогона таблицами. Ниже - 25 самых свежих файлов по одному.</div></details></h2>
-      <div class="buttons" style="margin-top:0"><button data-bundle="1">🗜 Все файлы прогона одним архивом</button></div>
+      <div class="buttons" style="margin-top:0"><button data-bundle="pdf">📑 Отчёт PDF</button>
+        <button class="light" data-bundle="1">🗜 Все файлы прогона одним архивом</button></div>
       <ul class="list" id="files"></ul>
     </div>
   </section>
@@ -660,17 +670,40 @@
     const rows = (s.boards || {}).rows || [];
     return rows.find((b) => b.saText === boardPick) || rows.find((b) => b.active) || rows[0];
   }
-  // Для компактного наблюдения объединяет температуры, устойчивость и снятые узлы в одной плитке.
-  function boardTileHtml(b, i, selected) {
+  // Плитка платы - только главное: температура и устоялась ли; узлы, журнал и профиль - в подробностях платы.
+  // full - для вкладки «Журнал»: там к плитке добавляются снятые узлы и число точек.
+  function boardTileHtml(b, i, selected, full) {
     const tone = !b.fresh ? "bad" : b.stable ? "ok" : "warn";
-    const status = !b.fresh ? "нет связи" : b.stable ? "устойчива" : b.rateText;
+    const status = !b.fresh ? "нет связи" : b.stable ? "устоялась" : b.rateText;
     return `<div class="tile ${selected ? "shown" : ""}" role="button" tabindex="0" aria-pressed="${selected}" data-show-board="${esc(b.saText)}">` +
       `<div class="head"><span class="mark" style="background:${boardColor(i)}"></span><span class="name">${esc(b.name)}</span>` +
       `<span class="sa">${esc(b.saText)}</span></div>` +
       `<div class="val ${b.fresh ? "" : "warn"}">${esc(b.boardTemp)}</div>` +
-      `<div class="sub">топливо ${esc(b.fuelTemp)}</div><div class="sub ${tone}">${esc(status)}</div>` +
-      nodeRowsHtml(b) + `<div class="sub">${esc(b.points)} точек · ${b.tablesComplete ? "таблицы ✓" : "таблицы …"}</div>` +
-      `<div class="sub" title="Профиль платы">${esc(b.profileState || "профиль —")}</div></div>`;
+      `<div class="sub ${tone}">${esc(status)}</div>` +
+      (full ? nodeRowsHtml(b) + `<div class="sub">${esc(b.points)} точек · ${b.tablesComplete ? "таблицы ✓" : "таблицы …"}</div>` : "") +
+      `</div>`;
+  }
+  // Уровень топлива у всех плат сразу: крупно - погрешность (или сдвиг от +25 °C), мелко - остальное.
+  const LEVEL_TONE = { ok: "ok", warn: "warn", bad: "bad" };
+  function levelTileHtml(r) {
+    const known = r.err && r.err !== "—";
+    const main = known ? r.err : r.dev;
+    return `<div class="tile level"><div class="head"><span class="name">${esc(r.label)}</span></div>` +
+      `<div class="sub">${known ? "погрешность" : "сдвиг от +25 °C"}</div>` +
+      `<div class="val ${LEVEL_TONE[r.tone] || ""}">${esc(main && main !== "—" ? main + " %" : "—")}</div>` +
+      `<div class="sub ${LEVEL_TONE[r.tone] || ""}">${esc(r.status)}</div>` +
+      `<div class="sub">уровень ${esc(r.level)} %` + (known && r.dev !== "—" ? ` · от +25 °C ${esc(r.dev)}` : "") +
+      ` · трубка ${esc(r.tube)} °C</div></div>`;
+  }
+  function renderLevel(s) {
+    const monitor = s.monitor || {};
+    const rows = monitor.live || [];
+    $("levelCard").hidden = !rows.length;
+    if (!rows.length) return;
+    $("levelHint").innerHTML = (monitor.worst ? "худшее за прогон " + esc(monitor.worst) + " %" : "все платы") + hintHtml(monitor.tip);
+    $("levelTiles").innerHTML = rows.map(levelTileHtml).join("");
+    $("levelMore").innerHTML = `<details class="soft" data-key="level|more" style="margin-top:8px"><summary>По узлам и подробности</summary>` +
+      resultsTableHtml(monitor.nodes) + resultsTableHtml(monitor.detail) + `</details>`;
   }
   // Для оценки хода прогона показывает длительность и ожидаемое завершение с пояснением точности.
   function timingHtml(run) {
@@ -1201,17 +1234,31 @@
       $("mediaInfo").textContent = "";
     }
     $("window").textContent = (shown ? "«" + shown.name + "» · " : "") + (live.windowText ? "окно " + live.windowText + " с" : "");
+    // Несколько плат: контуры каждой платы - в её подробностях, отдельная карточка не нужна.
+    $("channelsCard").hidden = multi;
+    // Устойчивость: на виду - первая часть («устоялись k из n»), подробности по платам - под «i».
     const st = s.stability || {};
-    $("stability").innerHTML = `<span class="${st.ok ? "ok" : "warn"}">${st.ok ? "● " : "○ "}${esc(st.text)}</span>`;
+    const stText = String(st.text || "");
+    const stCut = stText.indexOf(";");
+    $("stability").innerHTML = `<span class="${st.ok ? "ok" : "warn"}">${st.ok ? "● " : "○ "}${esc(stCut > 0 ? stText.slice(0, stCut) : stText)}</span>` +
+      (stCut > 0 ? hintHtml(stText) : "");
     const currentRun = climate.run || {};
+    // Ход прогона: этап и короткий итог; полный текст - под «i».
+    const status = String(currentRun.status || "");
+    const statusCut = status.indexOf(":");
     $("runNow").innerHTML = currentRun.active
       ? `<b class="${currentRun.paused || currentRun.operator ? "warn" : ""}">${esc(currentRun.stage)}${currentRun.paused ? " · пауза" : ""}</b>` +
-        `<div>${esc(currentRun.status)}</div>`
-      : `<span class="soft">Автопрогон не идёт. ${esc(currentRun.status || "")}</span>`;
+        `<div>${esc(statusCut > 0 && status.length > 70 ? status.slice(0, statusCut) : status)}` +
+        `${statusCut > 0 && status.length > 70 ? hintHtml(status) : ""}</div>`
+      : `<span class="soft">Автопрогон не идёт.</span>${hintHtml(currentRun.status || "")}`;
     $("runTiming").innerHTML = timingHtml(currentRun);
-    $("device").innerHTML = `${device.connected ? "Адаптер подключён" : "<span class=bad>Адаптер не подключён</span>"} · ` +
-      `${esc(device.freshText)} · запись профиля ${device.writeOpen ? "открыта" : "закрыта"} ` +
-      hintHtml("Доступ к записи нужен для сохранения профиля в плату. Для опроса и снятия температурных точек открывать запись профиля не требуется.");
+    // Связь с платами: строка только при беде; когда всё в порядке - значок «i» с подробностями.
+    const deviceText = `${device.connected ? "Адаптер подключён" : "Адаптер не подключён"} · ${device.freshText || ""} · ` +
+      `запись профиля ${device.writeOpen ? "открыта" : "закрыта"}. Доступ к записи нужен только для сохранения профиля в плату.`;
+    $("device").innerHTML = device.connected && device.freshOk !== false
+      ? `CAN на связи ${hintHtml(deviceText)}`
+      : `<span class="bad">${esc(device.connected ? device.freshText || "Платы не отвечают" : "Адаптер CAN не подключён")}</span> ${hintHtml(deviceText)}`;
+    renderLevel(s);
     if ($("tab-now").classList.contains("on")) drawChart(s.history || {}, climate.history || {}, s.historyBoards || []);
     $("historyBoardName").textContent = (s.historyBoards || []).length ? "средняя плат" : "плата";
     $("historyBoardsLegend").innerHTML = (s.historyBoards || []).map((b, i) =>
@@ -1253,7 +1300,7 @@
     const tones = { ok: "ok", bad: "warn", run: "", normal: "" };
     $("boards").hidden = !boards.length;
     const picked = pickedBoard(s);
-    $("boards").innerHTML = boards.map((b, i) => boardTileHtml(b, i, picked && picked.saText === b.saText)).join("");
+    $("boards").innerHTML = boards.map((b, i) => boardTileHtml(b, i, picked && picked.saText === b.saText, true)).join("");
     $("run").innerHTML =
       (shownBoard ? `<div class="section" style="margin-top:4px">Показанная плата «${esc(shownBoard.name)}» ${esc(shownBoard.saText)}</div>` : "") +
       `<div class="soft">${esc(journal.file || "журнал ещё не сохранён")}</div>` +
@@ -1545,16 +1592,18 @@
         `<b>${esc(String(c.node).replace(" °C", ""))}</b><span>${esc(what)}</span></div>`;
     }).join("");
     const offline = view.offline || [];
+    // Выбранная плата: на виду - температуры и контуры; узлы, журнал, профиль - под раскрытием.
     $("boardDetails").innerHTML = `<div class="row"><b>${esc(b.name)} <span class="sa">${esc(b.saText)}</span></b>` +
-      hintHtml("Выбранная плата: температуры, средние контуров, снятые узлы, журнал и профиль. Щелчок по плитке выбирает плату; при праве управления она также открывается в программе.") + `</div>` +
+      hintHtml("Выбранная плата. Щелчок по плитке выбирает плату; при праве управления она также открывается в программе.") + `</div>` +
       `<div class="kv" style="margin-top:6px"><div><small>Плата / топливо</small>${esc(b.boardTemp)} / ${esc(b.fuelTemp)}</div>` +
-      `<div><small>Основной / вид, среднее</small>${esc(b.main)} / ${esc(b.media)}</div>` +
-      `<div><small>Скорость</small>${esc(b.rateText)}</div></div>` +
+      `<div><small>Основной / вид, среднее</small>${esc(b.main)} / ${esc(b.media)}</div></div>` +
+      `<details class="soft" data-key="board|more" style="margin-top:6px"><summary>Узлы, журнал, профиль</summary>` +
+      `<div class="soft" style="margin-top:4px">Скорость ${esc(b.rateText)}</div>` +
       `<div class="ncells" style="margin-top:6px">${cells}</div>` +
       `<div class="bfoot"><span>${esc(b.points)} точек</span><span>${b.tablesComplete ? "таблицы готовы" : "таблицы неполные"}</span>` +
       `<span>${esc(b.profileState || "профиль —")}</span>${b.lastPoint ? `<span>последняя: ${esc(b.lastPoint)}</span>` : ""}</div>` +
       (b.file ? `<div class="soft" style="margin-top:4px;overflow-wrap:anywhere">${esc(b.file)}</div>` : "") +
-      noticeHtml(b.tablesNotice, false) +
+      noticeHtml(b.tablesNotice, false) + `</details>` +
       (offline.length ? `<div class="soft">Без связи: ${esc(offline.join(", "))}</div>` : "");
   }
 
@@ -1584,11 +1633,13 @@
     }
   });
 
-  // Монитор отклонений: что выдаёт сам прибор по записанному профилю, в реальном времени.
+  // Уровень топлива по профилю: в итогах - таблица всех плат, по узлам и подробности - под раскрытием.
   function monitorHtml(s) {
     const monitor = s.monitor || {};
     if (!((monitor.now || {}).rows || []).length) return "";
-    return resultsTableHtml(monitor.now) + resultsTableHtml(monitor.nodes);
+    return resultsTableHtml(monitor.now) +
+      `<details class="soft" data-key="results|monitor-more" style="margin-top:6px"><summary>По узлам и подробности</summary>` +
+      resultsTableHtml(monitor.nodes) + resultsTableHtml(monitor.detail) + `</details>`;
   }
 
   // Итоги прогона: сводка по платам, выбор платы, итог, показатели и таблицы.
@@ -1610,8 +1661,14 @@
       b.summary.map((m) => `<tr><td class="k">${esc(m.label)} ${hintHtml(m.tip)}</td>` +
         `<td class="val ${m.tone === "warn" ? "warn" : m.tone === "ok" ? "ok" : ""}">${esc(m.value)}</td></tr>`).join("") +
       `</table>` : "";
-    $("results").innerHTML = monitorHtml(s) + resultsTableHtml(results.overview) + resultsTableHtml(results.combined) + chips + verdict + summary +
-      (b.tables || []).map(resultsTableHtml).join("");
+    // На виду - уровень, сводка по платам и итог выбранной платы; показатели и таблицы - под раскрытием.
+    const tables = (b.tables || []).map(resultsTableHtml).join("");
+    $("results").innerHTML = monitorHtml(s) + resultsTableHtml(results.overview) + chips + verdict +
+      `<details class="soft" data-key="results|more|${esc(b.sa || b.name)}" style="margin-top:6px"><summary>Показатели и таблицы платы</summary>` +
+      summary + tables + `</details>` +
+      (results.combined && (results.combined.rows || []).length
+        ? `<details class="soft" data-key="results|combined" style="margin-top:6px"><summary>Все платы одной таблицей</summary>` +
+          resultsTableHtml(results.combined) + `</details>` : "");
   }
 
   $("results").addEventListener("click", (event) => {
@@ -1627,10 +1684,11 @@
     if (!button) return;
     button.disabled = true;
     haptic("medium");
-    toast("Собираю архив...");
+    const pdf = button.dataset.bundle === "pdf";
+    toast(pdf ? "Собираю отчёт PDF..." : "Собираю архив...");
     try {
-      const answer = await api("api/control", { action: "send_file", which: "bundle" });
-      const name = (String(answer.text || "").match(/архив_прогона_\d+_\d+\.zip/) || [])[0];
+      const answer = await api("api/control", { action: "send_file", which: pdf ? "pdf" : "bundle" });
+      const name = (String(answer.text || "").match(pdf ? /отчёт_прогона_\d+_\d+\.pdf/ : /архив_прогона_\d+_\d+\.zip/) || [])[0];
       if (answer.ok && !inTelegram && name) {
         const link = document.createElement("a");
         link.href = "api/file?folder=" + encodeURIComponent("прогон") + "&name=" + encodeURIComponent(name);

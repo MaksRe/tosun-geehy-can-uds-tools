@@ -3756,6 +3756,18 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._append_log("Монитор отклонений: история и опора сброшены.", RowColor.blue)
 
     @Slot()
+    def makeRunReportPdf(self):
+        """Цель функции в отчёте о прогоне PDF по кнопке, затем файл открывается программой просмотра."""
+        path = self._run_report_write()
+        if not path:
+            self._append_log(str(getattr(self, "_climate_command_status", "") or "Отчёт PDF не собрался."), RowColor.red)
+            return
+        self._append_log(f"Отчёт о прогоне PDF: {path}", RowColor.blue)
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
+    @Slot()
     def recheckBoardProfiles(self):
         """Цель функции в повторном чтении профиля и калибровки плат перед проверкой профиля (после перезаписи)."""
         count = self._profile_audit_start(force=True)

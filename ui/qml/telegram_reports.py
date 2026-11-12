@@ -97,6 +97,9 @@ def status_report(snapshot: dict) -> str:
             ["плата", "°C", "осн", "точ"],
             [[("●" if row.get("fresh") else "○") + str(row.get("name", "")), str(row.get("boardTemp", "")).replace(" °C", ""),
               row.get("main", ""), row.get("points", 0)] for row in boards], right=(1, 2, 3)))
+    level = _level_table(snapshot)
+    if level:
+        text += "\n<b>Уровень топлива</b> (подробно - /level)\n" + level
     lines = []
     if stability.get("text"):
         lines.append(("✅ " if stability.get("ok") else "⏳ ") + str(stability["text"]))
@@ -106,6 +109,37 @@ def status_report(snapshot: dict) -> str:
         lines.append(("❌ " if alert.get("level") == "bad" else "⚠️ ") + str(alert.get("text", "")))
     if lines:
         text += "\n" + escape("\n".join(lines))
+    return _clip(text)
+
+
+LEVEL_MARK = {"ok": "✓", "warn": "!", "bad": "✗"}
+
+
+def _level_table(snapshot: dict) -> str:
+    """Уровень у всех плат: погрешность и сдвиг от +25 °C, коротко - для /status и /level."""
+    rows = ((snapshot.get("monitor") or {}).get("live")) or []
+    if not rows:
+        return ""
+    return pre(table(
+        ["плата", "погр,%", "+25,%", ""],
+        [[str(row.get("label", "")).split(" ", 1)[-1].strip("()") or row.get("label", ""),
+          row.get("err"), row.get("dev"), LEVEL_MARK.get(row.get("tone"), "·")] for row in rows], right=(1, 2)))
+
+
+def level_report(snapshot: dict) -> str:
+    """Уровень топлива у всех плат сразу: что выдаёт прибор по записанному профилю."""
+    monitor = snapshot.get("monitor") or {}
+    rows = monitor.get("live") or []
+    if not rows:
+        return ("<b>Уровень топлива</b>\nДанных пока нет: прибор ещё не отдал уровень, или прогон не идёт.")
+    text = "<b>Уровень топлива</b>" + (f" · худшее за прогон {escape(str(monitor['worst']))} %" if monitor.get("worst") else "")
+    text += "\n" + _level_table(snapshot)
+    details = [f"{row.get('label')}: уровень {row.get('level')} %, трубка {row.get('tube')} °C, худшее {row.get('worst')} - "
+               f"{row.get('status')}" for row in rows]
+    text += "\n" + escape("\n".join(details))
+    text += ("\n\n<i>Погрешность - уровень прибора минус настоящий (сухая трубка 0 %, в топливе 100 %). "
+             "+25 - сдвиг от показания этой же платы при +25 °C: ошибка от температуры. "
+             "Допуск ±1 %: до 0,5 - в норме, 0,5-1 - на грани, больше 1 - вне допуска.</i>")
     return _clip(text)
 
 

@@ -248,7 +248,7 @@ def test_monitor_tracks_level_deviation_by_node(tmp_path: Path):
         assert len(stub._chamber_monitor_history) == 3
     view = stub._chamber_monitor_view()
     rows = {row["cells"]["label"]: row for row in view["now"]["rows"]}
-    assert rows["0x80 (П1)"]["cells"]["worst"].startswith("+0,30 при −40,0 °C")
+    assert rows["0x80 (П1)"]["cells"]["worst"].startswith("+0,30 % при −40,0 °C")
     assert rows["0x80 (П1)"]["tone"] == "ok"
     assert rows["0x81 (П2)"]["tone"] == "bad" and rows["0x81 (П2)"]["cells"]["status"] == "вне допуска"
     assert rows["0x81 (П2)"]["cells"]["dev"] == "−1,40"
@@ -276,7 +276,7 @@ def test_monitor_names_missing_firmware_parameters(tmp_path: Path):
         stub._chamber_live_missing.add("level")
     view = stub._chamber_monitor_view()
     row = next(row for row in view["now"]["rows"] if row["cells"]["label"] == "0x80 (П1)")
-    assert row["cells"]["status"] == "прошивка не отдаёт уровень или итог периода" and row["tone"] == "bad"
+    assert row["cells"]["status"] == "прошивка не отдаёт уровень" and row["tone"] == "bad"
 
 
 def test_silent_boards_are_polled_rarely_outside_a_run(tmp_path: Path):

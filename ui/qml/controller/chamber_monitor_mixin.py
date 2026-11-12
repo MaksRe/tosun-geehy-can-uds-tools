@@ -13,11 +13,14 @@
 Оба параметра идут в общий круг опроса прогона (chamber_live_mixin): если прошивка их не знает,
 после двух отказов они больше не спрашиваются, и монитор пишет, что данных нет.
 
-ОТ ЧЕГО СЧИТАЕТСЯ ОТКЛОНЕНИЕ
-Опора - показание этой же платы при +25 °C трубки: берётся само, когда трубка впервые оказывается
-в узле +25 °C (±3 °C), или по кнопке «Опора - сейчас». Отклонение уровня от опоры в процентных
-пунктах - это температурная ошибка уровня, которую профиль не убрал. Требование к уровню ±1 %
-(10.11.2026): до 0,5 п.п. - в норме, 0,5-1 - на грани, больше 1 - вне допуска.
+ЧТО ПОКАЗЫВАЕТСЯ (13.11.2026 - простыми словами, все платы сразу)
+- погрешность уровня: уровень прибора минус настоящий уровень. Настоящий известен по пометке
+  точки: «воздух» (сухая трубка) - 0 %, «жидкость» (трубка в топливе) - 100 %;
+- сдвиг от +25 °C: уровень сейчас минус уровень этой же платы при +25 °C трубки - то, что внесла
+  температура и не убрал профиль. Уровень при +25 °C запоминается сам, когда трубка впервые
+  оказывается в узле +25 °C (±3 °C), или по кнопке «Считать сдвиг от текущего».
+Требование к уровню ±1 % (10.11.2026): до 0,5 % - в норме, 0,5-1 - на грани, больше 1 - вне допуска.
+В коде «ref» - это и есть запомненное показание при +25 °C.
 
 История - одна запись в 20 с у каждой платы, по ней таблица «по узлам»: среднее отклонение в
 каждом узле температуры трубки. Плата своя у каждой: поля монитора входят в BOARD_ATTRS.
@@ -84,7 +87,17 @@ class AppControllerChamberMonitorMixin(AppControllerContract):
             "tube": int(round(values["fuel_temp"])), "board": int(round(values["board_temp"])),
             "level": round(values["level"], 1), "comp": int(round(values["comp"])),
             "main": None if main is None else int(round(main["mean"])),
+            "truth": self._chamber_monitor_truth(),
         }
+
+    def _chamber_monitor_truth(self) -> float | None:
+        """Настоящий уровень, %, по пометке точек платы: сухая трубка - 0, в топливе - 100, иначе неизвестен."""
+        label = str(getattr(self, "_chamber_label", "") or "").strip().casefold()
+        if label == chamber_fit.AIR_NOTE:
+            return 0.0
+        if label == chamber_fit.LIQUID_NOTE:
+            return 100.0
+        return None
 
     def _chamber_monitor_sample_here(self, now: float, force: bool = False) -> dict | None:
         """Запись в историю монитора платы, поле которой сейчас на месте."""
@@ -98,7 +111,7 @@ class AppControllerChamberMonitorMixin(AppControllerContract):
         history.append(sample)
         self._chamber_monitor_history = history[-self.CHAMBER_MONITOR_KEEP:]
         if self._chamber_monitor_ref is None and chamber_fit.nearest_node(sample["tube"]) == chamber_fit.REFERENCE_X10:
-            # Опора берётся сама: первое показание при +25 °C трубки.
+            # Уровень при +25 °C запоминается сам: первое показание при +25 °C трубки.
             self._chamber_monitor_ref = dict(sample, auto=True)
         return sample
 
@@ -123,7 +136,7 @@ class AppControllerChamberMonitorMixin(AppControllerContract):
                 self._chamber_monitor_sample_here(now)
 
     def _chamber_monitor_set_reference(self) -> tuple[bool, str]:
-        """«Опора - сейчас»: текущее показание каждой платы становится опорой отклонений."""
+        """«Считать сдвиг от текущего»: сдвиг каждой платы считается от её показания сейчас, а не при +25 °C."""
         now = time.monotonic()
         done, missing = [], []
         for sa in self._chamber_monitor_boards():
@@ -143,14 +156,14 @@ class AppControllerChamberMonitorMixin(AppControllerContract):
             (done if ok else missing).append(who)
         self.chamberLiveChanged.emit()
         if not done:
-            return False, "опора не задана: прибор ещё не отдал уровень, итог периода и температуры"
-        text = "опора отклонений - текущее показание: " + ", ".join(done)
+            return False, "прибор ещё не отдал уровень, итог периода и температуры - считать сдвиг не от чего"
+        text = "сдвиг теперь считается от текущего показания: " + ", ".join(done)
         if missing:
             text += "; нет данных у " + ", ".join(missing)
         return True, text
 
     def _chamber_monitor_reset(self):
-        """«Сбросить наблюдение»: история и опора всех плат забываются."""
+        """«Сбросить наблюдение»: история и показание при +25 °C у всех плат забываются."""
         multi = getattr(self, "_mb_on", None)
         boards = [int(board["sa"]) for board in self._mb_boards] if multi is not None and multi() else [None]
         for sa in boards:
@@ -167,54 +180,78 @@ class AppControllerChamberMonitorMixin(AppControllerContract):
 
     # ------------------------------------------------------------------ показ
 
+    @staticmethod
+    def _chamber_monitor_error(sample: dict) -> float | None:
+        """Погрешность уровня записи, %: уровень прибора минус настоящий (если он известен)."""
+        truth = sample.get("truth")
+        return None if truth is None else sample["level"] / 10.0 - float(truth)
+
     def _chamber_monitor_board(self, label: str, now: float) -> dict:
-        """Сводка монитора одной платы (в её поле): строка таблицы «сейчас» и ячейки «по узлам»."""
+        """Сводка монитора одной платы (в её поле): уровень сейчас, погрешность, сдвиг от +25 °C, узлы."""
         missing = set(self._chamber_live_missing or set())
         current = self._chamber_monitor_current(now)
         ref = self._chamber_monitor_ref
         history = list(self._chamber_monitor_history or [])
-        nodes: dict[int, list[float]] = {}
-        worst = None
-        if ref is not None:
-            for sample in history:
-                deviation = (sample["level"] - ref["level"]) / 10.0
-                node = chamber_fit.nearest_node(sample["tube"])
-                if node is not None:
-                    nodes.setdefault(node, []).append(deviation)
-                if worst is None or abs(deviation) > abs(worst[0]):
-                    worst = (deviation, sample["tube"], sample["clock"])
-        deviation = None if current is None or ref is None else (current["level"] - ref["level"]) / 10.0
+        stats: dict[int, dict] = {}
+        worst_shift = worst_error = None
+        for sample in history:
+            node = chamber_fit.nearest_node(sample["tube"])
+            shift = None if ref is None else (sample["level"] - ref["level"]) / 10.0
+            error = self._chamber_monitor_error(sample)
+            if node is not None:
+                bucket = stats.setdefault(node, {"shift": [], "error": []})
+                if shift is not None:
+                    bucket["shift"].append(shift)
+                if error is not None:
+                    bucket["error"].append(error)
+            if shift is not None and (worst_shift is None or abs(shift) > abs(worst_shift[0])):
+                worst_shift = (shift, sample["tube"], sample["clock"])
+            if error is not None and (worst_error is None or abs(error) > abs(worst_error[0])):
+                worst_error = (error, sample["tube"], sample["clock"])
+        shift = None if current is None or ref is None else (current["level"] - ref["level"]) / 10.0
+        error = None if current is None else self._chamber_monitor_error(current)
         comp_shift = None if current is None or ref is None else current["comp"] - ref["comp"]
+        # Худшее за прогон - по погрешности, если настоящий уровень известен, иначе по сдвигу от +25 °C.
+        worst = worst_error or worst_shift
+        judged = [value for value in (error, shift, None if worst is None else worst[0]) if value is not None]
 
         if "level" in missing or "comp" in missing:
-            state, tone = "прошивка не отдаёт уровень или итог периода", "bad"
+            state, tone = "прошивка не отдаёт уровень", "bad"
         elif current is None:
             state, tone = "жду показания", "info"
-        elif ref is None:
-            state, tone = "опоры нет: трубка ещё не была при +25 °C", "info"
+        elif not judged:
+            state, tone = "ждём +25 °C трубки", "info"
         else:
-            tone = self._chamber_monitor_tone(deviation if worst is None or abs(worst[0]) < abs(deviation)
-                                              else worst[0])
+            tone = self._chamber_monitor_tone(max(judged, key=abs))
             state = {"ok": "в норме", "warn": "на грани", "bad": "вне допуска"}.get(tone, "")
 
-        row = {
+        def at(item):
+            return "—" if item is None else f"{_pp(item[0])} % при {_pp(item[1] / 10.0, 1)} °C"
+
+        live = {
             "label": label,
             "tube": "—" if current is None else _pp(current["tube"] / 10.0, 1),
             "level": "—" if current is None else _pp(current["level"] / 10.0, 2, sign=False),
-            "dev": _pp(deviation),
+            "err": _pp(error),
+            "dev": _pp(shift),
+            "worst": at(worst),
+            "status": state,
+        }
+        detail = {
+            "label": label,
             "comp": "—" if current is None else str(current["comp"]),
             "compDev": "—" if comp_shift is None else f"{comp_shift:+d}".replace("-", "−"),
-            "worst": "—" if worst is None else f"{_pp(worst[0])} при {_pp(worst[1] / 10.0, 1)} °C ({worst[2]})",
             "ref": "—" if ref is None else (f"{_pp(ref['level'] / 10.0, 2, sign=False)} % при "
                                             f"{_pp(ref['tube'] / 10.0, 1)} °C, {ref['clock']}"
-                                            + (" (сама)" if ref.get("auto") else " (кнопкой)")),
+                                            + ("" if ref.get("auto") else " (кнопкой)")),
+            "worstShift": "—" if worst_shift is None else f"{at(worst_shift)}, {worst_shift[2]}",
+            "worstErr": "—" if worst_error is None else f"{at(worst_error)}, {worst_error[2]}",
             "samples": str(len(history)),
-            "status": state,
         }
         cells, node_tone = {}, "info"
         rank = {"info": 0, "ok": 1, "warn": 2, "bad": 3}
         for node in chamber_fit.NODES_X10:
-            values = nodes.get(node)
+            values = (stats.get(node) or {}).get("shift") or []
             if not values:
                 cells[str(node)] = "—"
                 continue
@@ -222,11 +259,12 @@ class AppControllerChamberMonitorMixin(AppControllerContract):
             cells[str(node)] = f"{_pp(mean)} ({len(values)})"
             node_tone = max(node_tone, self._chamber_monitor_tone(mean), key=lambda item: rank[item])
         cells["label"] = label
-        return {"row": row, "tone": tone, "nodeCells": cells, "nodeTone": node_tone,
-                "deviation": deviation, "worst": None if worst is None else worst[0]}
+        return {"row": live, "detail": detail, "tone": tone, "nodeCells": cells, "nodeTone": node_tone,
+                "deviation": shift, "error": error, "worst": None if worst is None else worst[0],
+                "stats": stats, "history": history, "ref": ref, "label": label, "state": state}
 
-    def _chamber_monitor_view(self) -> dict:
-        """Монитор для окна, сайта и мини-приложения: таблица «сейчас» и таблица «по узлам»."""
+    def _chamber_monitor_collect(self) -> list[dict]:
+        """Сводки монитора всех плат (или одной)."""
         now = time.monotonic()
         boards = []
         multi = getattr(self, "_mb_on", None)
@@ -234,46 +272,69 @@ class AppControllerChamberMonitorMixin(AppControllerContract):
             for board in self._mb_working_boards(now) or self._mb_polled_boards():
                 sa = int(board["sa"])
                 with self._mb_context(sa, notify=False):
-                    boards.append(self._chamber_monitor_board(self._mb_label(sa), now))
+                    boards.append(dict(self._chamber_monitor_board(self._mb_label(sa), now), sa=sa))
         else:
             target = getattr(self, "_resolve_calibration_target_sa", None)
-            label = f"0x{int(target()) & 0xFF:02X}" if callable(target) else "плата"
-            boards.append(self._chamber_monitor_board(label, now))
+            sa = int(target()) & 0xFF if callable(target) else None
+            label = f"0x{sa:02X}" if sa is not None else "плата"
+            boards.append(dict(self._chamber_monitor_board(label, now), sa=sa))
+        return boards
+
+    TOLERANCE_TIP = "Требование к уровню ±1 %: до 0,5 % - в норме, 0,5-1 % - на грани, больше 1 % - вне допуска."
+
+    def _chamber_monitor_view(self) -> dict:
+        """Монитор для окна, сайта, мини-приложения и бота: все платы сразу, коротко; подробности - отдельно."""
+        boards = self._chamber_monitor_collect()
 
         def column(key, title, tip, width, align="right"):
             return {"key": key, "title": title, "tip": tip, "width": width, "align": align}
 
         now_table = {
             "id": "monitor-now",
-            "title": "Монитор отклонений: сейчас",
-            "tip": ("Уровень и итоговый период считает сам прибор по записанному профилю и отметкам 0/100 %. "
-                    "С сухой трубкой уровень должен быть около 0 % при любой температуре. Отклонение - от опоры: "
-                    "показания этой же платы при +25 °C трубки. Требование ±1 %: до 0,5 п.п. - в норме, "
-                    "0,5-1 - на грани, больше 1 - вне допуска."),
+            "title": "Уровень топлива сейчас",
+            "tip": ("Что выдаёт сам прибор по записанному профилю - у всех плат сразу, обновляется каждые пару "
+                    "секунд. Погрешность - уровень прибора минус настоящий: у сухой трубки («воздух») настоящий "
+                    "0 %, в топливе («жидкость») 100 %. Сдвиг от +25 °C - насколько уровень ушёл от показания этой "
+                    "же платы при +25 °C: это ошибка от температуры, которую профиль не убрал. " + self.TOLERANCE_TIP),
             "columns": [
                 column("label", "Плата", "Адрес узла на шине и подпись платы", 120, "left"),
-                column("tube", "Трубка, °C", "Температура топлива (датчик трубки), среднее за окно", 80),
-                column("level", "Уровень прибора, %", "Уровень, который выдаёт сам прибор (0x0018)", 100),
-                column("dev", "От опоры, п.п.", "Уровень сейчас минус уровень в опоре: температурная ошибка, "
-                       "которую профиль не убрал", 92),
-                column("comp", "Итог периода", "Период после температурной компенсации и подгонки нуля (0x0062): "
-                       "у сухой трубки при любой температуре должен стоять на месте", 92),
-                column("compDev", "От опоры, отсч.", "Итог периода сейчас минус итог в опоре", 90),
-                column("worst", "Наибольшее отклонение", "Наибольшее по модулю отклонение уровня от опоры за "
-                       "наблюдение, при какой температуре трубки и когда", 230, "left"),
-                column("ref", "Опора", "Уровень и температура трубки в опоре; «сама» - взята при первом "
-                       "попадании трубки в +25 °C, «кнопкой» - «Опора - сейчас»", 230, "left"),
-                column("samples", "Записей", "Записей в истории монитора: одна в 20 с", 64),
-                column("status", "Состояние", "В норме / на грани / вне допуска - по наибольшему отклонению", 150,
+                column("tube", "Трубка, °C", "Температура топлива (датчик трубки)", 76),
+                column("level", "Уровень, %", "Уровень, который выдаёт сам прибор", 80),
+                column("err", "Погрешность, %", "Уровень прибора минус настоящий (сухая трубка - 0 %, в топливе - "
+                       "100 %). «—» - настоящий уровень неизвестен", 96),
+                column("dev", "Сдвиг от +25 °C, %", "Уровень сейчас минус уровень этой же платы при +25 °C трубки", 100),
+                column("worst", "Худшее за прогон", "Наибольшая по модулю погрешность (или сдвиг от +25 °C, если "
+                       "настоящий уровень неизвестен) и при какой температуре трубки", 170, "left"),
+                column("status", "Итог", "В норме / на грани / вне допуска - по худшему из погрешности и сдвига", 100,
                        "center"),
             ],
             "rows": [{"tone": board["tone"], "cells": board["row"]} for board in boards],
         }
+        detail_table = {
+            "id": "monitor-detail",
+            "title": "Подробности",
+            "tip": "Для разбора: итоговый период прибора, показание при +25 °C, от которого считается сдвиг, и "
+                   "худшие значения со временем.",
+            "columns": [
+                column("label", "Плата", "Адрес узла на шине и подпись платы", 120, "left"),
+                column("comp", "Итог периода", "Период после температурной компенсации и подгонки нуля (0x0062): у "
+                       "сухой трубки должен стоять на месте при любой температуре", 90),
+                column("compDev", "Его сдвиг от +25 °C, отсч.", "Итог периода сейчас минус при +25 °C", 100),
+                column("ref", "Показание при +25 °C", "От него считается сдвиг: запоминается само при первом "
+                       "попадании трубки в +25 °C; «кнопкой» - задано кнопкой «Считать сдвиг от текущего»", 220, "left"),
+                column("worstErr", "Худшая погрешность", "Наибольшая по модулю погрешность, температура и время", 220,
+                       "left"),
+                column("worstShift", "Худший сдвиг", "Наибольший по модулю сдвиг от +25 °C, температура и время", 220,
+                       "left"),
+                column("samples", "Записей", "Записей в истории: одна в 20 с", 64),
+            ],
+            "rows": [{"tone": board["tone"], "cells": board["detail"]} for board in boards],
+        }
         nodes_table = {
             "id": "monitor-nodes",
-            "title": "Монитор отклонений: по узлам",
-            "tip": ("Среднее отклонение уровня от опоры (п.п.) по записям, когда трубка была в узле (±3 °C); "
-                    "в скобках - сколько записей. По этой таблице видно, где профиль не дотягивает."),
+            "title": "Сдвиг от +25 °C по узлам",
+            "tip": ("Средний сдвиг уровня от показания при +25 °C, %, пока трубка была в узле (±3 °C); в скобках - "
+                    "сколько записей. Видно, при какой температуре профиль не дотягивает."),
             "columns": [column("label", "Плата", "Адрес узла на шине и подпись платы", 120, "left")]
                        + [column(str(node), chamber_fit.node_text(node),
                                  f"Трубка в узле {chamber_fit.node_text(node)} ±3 °C", 96, "center")
@@ -281,7 +342,8 @@ class AppControllerChamberMonitorMixin(AppControllerContract):
             "rows": [{"tone": board["nodeTone"], "cells": board["nodeCells"]} for board in boards],
         }
         worst = max((abs(board["worst"]) for board in boards if board["worst"] is not None), default=None)
-        return {"now": now_table, "nodes": nodes_table,
+        live = [{"label": board["label"], "tone": board["tone"], **board["row"]} for board in boards]
+        return {"now": now_table, "detail": detail_table, "nodes": nodes_table, "live": live,
                 "worst": None if worst is None else _pp(worst, 2, sign=False),
                 "tone": self._chamber_monitor_tone(worst) if worst is not None else "info",
-                "everyS": int(self.CHAMBER_MONITOR_EVERY_S)}
+                "everyS": int(self.CHAMBER_MONITOR_EVERY_S), "tip": now_table["tip"]}

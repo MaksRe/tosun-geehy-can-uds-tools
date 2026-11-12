@@ -30,6 +30,7 @@ from .profile_mixin import AppControllerProfileMixin
 from .remote_monitor_mixin import AppControllerRemoteMonitorMixin
 from .properties_mixin import AppControllerPropertiesMixin
 from .public_slots_mixin import AppControllerPublicSlotsMixin
+from .run_report_mixin import AppControllerRunReportMixin
 from .runtime_mixin import AppControllerRuntimeMixin
 from .workers import FirmwareLoadWorker, UdsOptionProxy
 
@@ -66,6 +67,7 @@ __all__ = [
     "AppControllerRemoteMonitorMixin",
     "AppControllerPropertiesMixin",
     "AppControllerPublicSlotsMixin",
+    "AppControllerRunReportMixin",
     "AppControllerRuntimeMixin",
     "FirmwareLoadWorker",
     "UdsOptionProxy",

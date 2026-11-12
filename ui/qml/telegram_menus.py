@@ -48,6 +48,7 @@ KB_SETTINGS = "⚙️ Уведомления"
 # Отчёты: имя - (заголовок кнопки, функция снимок -> текст).
 VIEWS = {
     "status": ("📊 Статус", reports.status_report),
+    "level": ("📏 Уровень", reports.level_report),
     "steps": ("🪜 Шаги", reports.steps_report),
     "points": ("📍 Точки", reports.points_report),
     "events": ("🔔 События", reports.events_report),
@@ -189,8 +190,8 @@ def view(name: str, snapshot: dict, can_control: bool) -> tuple[str, list[list[t
 
 def _main(snapshot: dict, _arg, can_control: bool):
     text = "<b>Меню</b>\n" + escape(_camera_line(snapshot)) + "\n" + escape(_run_line(snapshot))
-    rows = [[("📊 Статус", _view("status")), ("🪜 Шаги", _view("steps")), ("📍 Точки", _view("points"))],
-            [("🔔 События", _view("events")), ("📑 Все отчёты", _menu("reports"))]]
+    rows = [[("📊 Статус", _view("status")), ("📏 Уровень", _view("level")), ("🪜 Шаги", _view("steps"))],
+            [("📍 Точки", _view("points")), ("🔔 События", _view("events")), ("📑 Все отчёты", _menu("reports"))]]
     if can_control:
         espec = bool(_control(snapshot).get("espec"))
         rows += [[("🌡 Камера", _menu("camera")), ("▶️ Прогон", _menu("run"))],
@@ -506,14 +507,16 @@ def _espec_cmd(snapshot: dict, key, _can):
 
 
 def _files(_snapshot: dict, _arg, _can):
-    rows = [[("🗜 Все файлы прогона архивом", _act("send_file", {"which": "bundle"}))],
+    rows = [[("📑 Отчёт о прогоне PDF", _act("send_file", {"which": "pdf"}))],
+            [("🗜 Все файлы прогона архивом", _act("send_file", {"which": "bundle"}))],
             [("📄 Отчёт диагностики", _act("send_file", {"which": "report"}))],
             [("📒 Журнал точек", _act("send_file", {"which": "journal"}))],
             [("📈 Ход прогона (CSV)", _act("send_file", {"which": "trace"}))],
             [("🗒 Журнал камеры: сегодня", _act("send_file", {"which": "daylog", "day": "сегодня"})),
              ("🗒 вчера", _act("send_file", {"which": "daylog", "day": "вчера"}))],
             [_home()]]
-    return ("<b>Файлы в этот чат</b>\n🗜 <b>Архив</b> - всё для разбора прогона: журналы и профили всех плат, "
+    return ("<b>Файлы в этот чат</b>\n📑 <b>Отчёт PDF</b> - итог по платам против ±1 %, погрешность по узлам, "
+            "графики, таблицы и события (/pdf).\n🗜 <b>Архив</b> - всё для разбора прогона: журналы и профили всех плат, "
             "ход прогона и журнал камеры за 3 дня, отчёт, настройки и итоги прогона таблицами (/all).\n"
             "По одному: отчёт диагностики, журнал показанной платы, ход прогона, журнал камеры за день "
             "(другой день: /daylog 02.11)."), rows

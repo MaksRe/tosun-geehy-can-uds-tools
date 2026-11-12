@@ -421,7 +421,7 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             # 12.11.2026: проверке профиля журналы первого этапа не нужны - по ней ничего не считается.
             add("stage2", True, "Проверка профиля: журналы первого этапа не нужны - у каждой платы будет свой журнал "
                                 "проверки, таблицы не считаются, профиль в платах не меняется. Отклонения - на "
-                                "вкладке «Монитор»")
+                                "вкладке «Уровень»")
             # 12.11.2026: проверять есть что, только если в платах полный профиль и калибровка 0 %/100 % -
             # программа читает их из каждой платы на шине и без них старт не даёт.
             audit = getattr(self, "_profile_audit_checks", None)
@@ -603,6 +603,8 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         if done:
             self._climate_event(f"до остановки пройдено узлов: {done} из {len(self._climate_run_nodes)} - "
                                 f"{self._climate_auto_nodes_text()}.", "info")
+            # Отчёт PDF и об остановленном прогоне: что успели - тоже результат.
+            self._climate_hook("_run_report_finish", "прогон остановлен")
         self._climate_auto_alerts.clear()
 
     # ------------------------------------------------------------------ такт
@@ -1025,6 +1027,8 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         self._climate_event(text, "ok" if not problems and getattr(self, "_chamber_tables_complete", False) else "warn")
         if problems:
             self._climate_auto_send_report()
+        # 13.11.2026: подробный отчёт PDF - сам в конце прогона (run_report_mixin).
+        self._climate_hook("_run_report_finish", "конец прогона")
 
     def _climate_auto_send_report(self):
         """Были проблемы: отчёт диагностики файлом - в Telegram тем, у кого включены «файлы»."""

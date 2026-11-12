@@ -94,7 +94,7 @@ OPTIONS = {"points": "Каждая точка", "summaries": "Сводки", "fi
 VIEW_COMMANDS = {"/status": reports.status_report, "/steps": reports.steps_report, "/points": reports.points_report,
                  "/events": reports.events_report, "/log": reports.actions_report, "/rules": reports.rules_report,
                  "/scenarios": reports.scenarios_report, "/commands": reports.commands_report,
-                 "/answers": reports.answers_report}
+                 "/answers": reports.answers_report, "/level": reports.level_report}
 # Команды управления текстом (только для назначенных): без параметров - действие и подтверждение.
 SIMPLE_CONTROL = {"/pause": ("run_pause", None), "/resume": ("run_resume", None),
                   "/start_run": ("run_start", "Запустить автопрогон по текущему сценарию?"),
@@ -102,7 +102,7 @@ SIMPLE_CONTROL = {"/pause": ("run_pause", None), "/resume": ("run_resume", None)
                   "/next": ("step_next", "Перейти к следующему шагу, не дожидаясь точек текущего?"),
                   "/capture": ("capture", "Записать точку сейчас по текущим средним прибора?"),
                   "/save": ("scenario_save", None), "/operator": ("run_operator", None)}
-FILE_COMMANDS = {"/report": "report", "/journal": "journal", "/trace": "trace", "/all": "bundle"}
+FILE_COMMANDS = {"/report": "report", "/journal": "journal", "/trace": "trace", "/all": "bundle", "/pdf": "pdf"}
 CONTROL_COMMANDS = set(SIMPLE_CONTROL) | set(FILE_COMMANDS) | {
     "/setpoint", "/mode", "/goto", "/label", "/limits", "/step", "/addstep", "/delstep", "/rule", "/load", "/new",
     "/cmd", "/quiet", "/daylog"}
@@ -1066,6 +1066,7 @@ class TelegramBot:
     def _help_text(user: dict | None = None) -> str:
         lines = ["Всё есть на кнопках внизу экрана и в меню (☰ Меню, /menu) - команды набирать не нужно.",
                  "", "Команды, если удобнее:", "/status - что сейчас с прогоном",
+                 "/level - уровень топлива у всех плат: погрешность и сдвиг от +25 °C",
                  "/settings - что присылать", "/app - мини-приложение и сайт с подробностями",
                  "/stop - отписаться"]
         lines += ["", "Отчёты: /steps /points /events /log /rules /scenarios /answers - полный список: /help"]
@@ -1083,6 +1084,7 @@ class TelegramBot:
         lines = ["Всё ниже есть и на кнопках: внизу экрана и в меню (/menu).", "",
                  "Просмотр (всем):",
                  "/status - камера, плата, контуры, прогон, проблемы",
+                 "/level - уровень топлива у всех плат: погрешность и сдвиг от +25 °C",
                  "/steps - шаги сценария: пройдено, идёт, впереди",
                  "/points - последние точки журнала",
                  "/events - последние события",
@@ -1107,6 +1109,7 @@ class TelegramBot:
                       "/load 1, /save, /new цикл|добор|изделие|проверка|пустой - сценарии",
                       "/cmd ключ имя=значение - команда ESPEC",
                       "/report, /journal, /trace - файлы в этот чат",
+                      "/pdf - подробный отчёт о прогоне в PDF, /all - все файлы прогона архивом",
                       "/all - все файлы прогона одним архивом (журналы всех плат, ход, журнал камеры)",
             "/daylog [вчера | 02.11] - полный журнал камеры за день",
                       "/control - кнопки, /login - вход на сайт"]
@@ -1152,6 +1155,7 @@ class TelegramBot:
             self._menu_url_sent = url
         commands = [{"command": "menu", "description": "меню кнопками: отчёты и управление"},
                     {"command": "status", "description": "что сейчас с прогоном"},
+                    {"command": "level", "description": "уровень топлива у всех плат"},
                     {"command": "settings", "description": "что присылать"},
                     {"command": "app", "description": "мини-приложение и сайт"},
                     {"command": "steps", "description": "шаги сценария"},

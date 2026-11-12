@@ -602,10 +602,15 @@ class AppControllerClimateControlMixin(AppControllerContract):
             which = f"daylog {day.isoformat()}"
         elif which == "bundle":
             path, title = self._control_run_bundle(), "все файлы прогона одним архивом"
+        elif which == "pdf":
+            writer = getattr(self, "_run_report_write", None)
+            path, title = (writer() if writer is not None else ""), "отчёт о прогоне PDF"
+            if not path:
+                return False, getattr(self, "_climate_command_status", "") or "отчёт PDF не собрался", which
         else:
-            return False, "какой файл: report, journal, trace, daylog или bundle", which
+            return False, "какой файл: report, journal, trace, daylog, bundle или pdf", which
         telegram = getattr(self, "_remote_telegram", None)
-        if which == "bundle" and path and (telegram is None or not actor.get("id")):
+        if which in ("bundle", "pdf") and path and (telegram is None or not actor.get("id")):
             # С сайта без Telegram: архив готов, страница скачает его по имени из списка файлов.
             return True, f"{title} готов: {pathlib.Path(path).name}", pathlib.Path(path).name
         if not path or not pathlib.Path(path).is_file():
@@ -678,6 +683,11 @@ class AppControllerClimateControlMixin(AppControllerContract):
             view["monitor"] = monitor() if monitor is not None else {}
             results = results_text(view)
             folder.mkdir(parents=True, exist_ok=True)
+            # Свежий отчёт PDF - рядом с итогами текстом (13.11.2026).
+            writer = getattr(self, "_run_report_write", None)
+            pdf = writer() if writer is not None else ""
+            if pdf:
+                add(pdf, "отчёт")
             with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
                 archive.writestr("итоги_прогона.txt", results.encode("utf-8-sig"))
                 for path, name in files:

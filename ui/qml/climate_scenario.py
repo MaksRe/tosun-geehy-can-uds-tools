@@ -213,7 +213,7 @@ def check_scenario() -> dict:
     scenario = empty_scenario(CHECK_NAME)
     scenario["description"] = ("Проверка после калибровки и записи профиля: изделие в сборе, сухая трубка во всех 7 "
                                "узлах. Журналы первого этапа не нужны, профиль не считается и не пишется - "
-                               "отклонения смотрите на вкладке «Монитор».")
+                               "погрешность уровня смотрите на вкладке «Уровень».")
     scenario["board_only"] = False
     scenario["labels"] = [AIR_LABEL]
     scenario["auto_write"] = False
