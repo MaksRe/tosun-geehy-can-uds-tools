@@ -172,6 +172,9 @@ class AppControllerChamberMixin(AppControllerContract):
         self._chamber_extend_liquid = False
         self._chamber_span_main: int | None = None
         self._chamber_span_media: int | None = None
+        # Проверка профиля (сценарий «Проверка профиля»): таблицы не считаются, профиль не пишется,
+        # журнал каждой платы - свой журнал проверки (в имени «_проверка»).
+        self._chamber_check_only = False
         # Откуда взят открытый журнал: кнопка первого этапа, список, прогон (для таблицы журналов плат).
         self._chamber_journal_origin: dict | None = None
         # Монитор отклонений (chamber_monitor_mixin): опора, история по узлам, время последней записи.
@@ -856,7 +859,8 @@ class AppControllerChamberMixin(AppControllerContract):
             # Несколько плат: у каждой свой файл - имя и адрес платы в хвосте имени.
             suffix_fn = getattr(self, "_mb_journal_suffix", None)
             suffix = suffix_fn() if suffix_fn is not None else ""
-            path = str(folder / f"chamber_{datetime.now().strftime('%Y%m%d_%H%M%S')}{suffix}.csv")
+            tag = "_проверка" if getattr(self, "_chamber_check_only", False) else ""
+            path = str(folder / f"chamber_{datetime.now().strftime('%Y%m%d_%H%M%S')}{tag}{suffix}.csv")
         if self._chamber_write_csv(path) is not None:
             return ""
         self._chamber_file_path = path
@@ -1012,6 +1016,14 @@ class AppControllerChamberMixin(AppControllerContract):
         if not self._chamber_points:
             self._chamber_set_tables_state("Считать нечего: не снято ни одной точки.", "#64748b")
             report_status("Считать нечего: не снято ни одной точки.", "#dc2626")
+            return False
+
+        if getattr(self, "_chamber_check_only", False):
+            # Проверка профиля: по её точкам профиль не считается - в профиле остаётся записанное в плату.
+            self._chamber_set_tables_state(
+                "Проверка профиля: таблицы не считаются, профиль в платах не меняется. Отклонения - на вкладке "
+                "«Монитор».", "#0f6ab4")
+            report_status("Проверка профиля: таблицы по этим точкам не считаются.", "#0f6ab4")
             return False
 
         # Таблицы на экране и есть то, что сейчас уходит в прибор. Менять их посреди записи нельзя.
@@ -1222,13 +1234,15 @@ class AppControllerChamberMixin(AppControllerContract):
                 sa = int(board["sa"])
                 with self._mb_context(sa, notify=False):
                     result = board_results(self._chamber_points, str(board["name"]), f"0x{sa:02X}",
-                                           span_known=self._chamber_span_known())
+                                           span_known=self._chamber_span_known(),
+                                           check=bool(getattr(self, "_chamber_check_only", False)))
                 result["shown"] = sa == shown
                 boards.append(result)
         else:
             target = getattr(self, "_resolve_calibration_target_sa", None)
             sa_text = f"0x{int(target()) & 0xFF:02X}" if callable(target) else ""
-            result = board_results(self._chamber_points, "Плата", sa_text, span_known=self._chamber_span_known())
+            result = board_results(self._chamber_points, "Плата", sa_text, span_known=self._chamber_span_known(),
+                                   check=bool(getattr(self, "_chamber_check_only", False)))
             result["shown"] = True
             boards.append(result)
         file = pathlib.Path(self._chamber_file_path).name if self._chamber_file_path else ""
@@ -1237,8 +1251,33 @@ class AppControllerChamberMixin(AppControllerContract):
                 "file": file, "time": datetime.now().strftime("%d.%m.%Y %H:%M")}
 
     def _chamber_span_known(self) -> bool:
-        """Строки «в жидкости» достраиваются по размаху, заданному вручную: погружение в камере не нужно."""
+        """Погружение в камере не нужно: размах задан вручную или идёт проверка профиля."""
+        if getattr(self, "_chamber_check_only", False):
+            return True
         return bool(getattr(self, "_chamber_extend_liquid", False)) and getattr(self, "_chamber_span_main", None) is not None
+
+    def _chamber_check_begin(self):
+        """Старт проверки профиля: у каждой платы новый журнал проверки и монитор с чистого листа.
+
+        Точки проверки не должны дописываться ни в журнал первого этапа, ни в журнал прошлого прогона:
+        по ним ничего не считается, а в чужом журнале они усреднились бы с чужими точками.
+        """
+        if not getattr(self, "_chamber_check_only", False):
+            return
+        multi = getattr(self, "_mb_on", None)
+        if multi is not None and multi():
+            for board in self._mb_working_boards():
+                with self._mb_context(board["sa"], notify=False):
+                    self._chamber_clear_points()
+                    self._chamber_journal_origin = {"how": "журнал проверки профиля",
+                                                    "at": datetime.now().strftime("%d.%m %H:%M")}
+        else:
+            self._chamber_clear_points()
+            self._chamber_journal_origin = {"how": "журнал проверки профиля",
+                                            "at": datetime.now().strftime("%d.%m %H:%M")}
+        reset = getattr(self, "_chamber_monitor_reset", None)
+        if reset is not None:
+            reset()
 
     def _chamber_coverage_rows(self) -> list:
         """Показывает, чего не хватает: по каждому узлу сетки что уже снято."""

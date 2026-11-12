@@ -160,6 +160,10 @@ class AppControllerClimateScenarioMixin(AppControllerContract):
             self._climate_scenario_set(climate_scenario.assembly_scenario(),
                                        status=f"Новый сценарий «{climate_scenario.ASSEMBLY_NAME}». Перед стартом у "
                                               "каждой платы откройте журнал первого этапа: точки допишутся к нему.")
+        elif kind == "check":
+            self._climate_scenario_set(climate_scenario.check_scenario(),
+                                       status=f"Новый сценарий «{climate_scenario.CHECK_NAME}». Журналы первого этапа "
+                                              "не нужны: у каждой платы будет свой журнал проверки, профиль не пишется.")
         elif kind == "board_cycle":
             self._climate_scenario_set(climate_scenario.board_cycle_scenario(),
                                        status=f"Новый сценарий «{climate_scenario.BOARD_CYCLE_NAME}». "
@@ -219,6 +223,7 @@ class AppControllerClimateScenarioMixin(AppControllerContract):
         if labels:
             self._chamber_label = labels[0]
         self._chamber_auto_write = bool(scenario["auto_write"])
+        self._chamber_check_only = bool(scenario.get("check_only", False))
         changed = getattr(self, "chamberChanged", None)
         if changed is not None:
             changed.emit()

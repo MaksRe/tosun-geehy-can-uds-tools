@@ -288,3 +288,57 @@ def test_silent_boards_are_polled_rarely_outside_a_run(tmp_path: Path):
     later = now + stub.MB_PRESENT_S + 5.0
     asked = [not stub._mb_skip_silent(0x82, later) for _turn in range(3 * stub.MB_SILENT_EVERY)]
     assert asked.count(True) == 3 and asked[0], asked
+
+
+# ------------------------------------------------------------------ проверка профиля
+
+def test_check_scenario_never_writes_a_profile():
+    from ui.qml import climate_scenario as cs
+
+    scenario = cs.check_scenario()
+    clean, problems = cs.normalize(scenario)
+    assert problems == [] and clean["check_only"] is True and clean["auto_write"] is False
+    assert clean["labels"] == ["воздух"] and clean["board_only"] is False and len(clean["steps"]) == 7
+    assert "проверка профиля" in cs.summary(clean)
+    # Даже если в файле автозапись включена, проверка профиль не пишет.
+    clean, _problems = cs.normalize(dict(scenario, auto_write=True, board_only=True))
+    assert clean["auto_write"] is False and clean["board_only"] is False
+
+
+def test_check_run_starts_without_stage1_journals(tmp_path: Path):
+    stub = _with_control(_stub(tmp_path))
+    assert stub._climate_scenario_new("check")
+    stub._climate_scenario_apply_chamber()
+    assert stub._chamber_check_only is True and stub._chamber_auto_write is False
+    checks = {item["key"]: item for item in stub._climate_auto_checks()}
+    assert checks["stage2"]["ok"] and "журналы первого этапа не нужны" in checks["stage2"]["text"]
+    assert checks["auto_write"]["ok"] and "не пишется" in checks["auto_write"]["text"]
+    assert not any("журнал первого этапа" in text.lower() for text in stub._climate_auto_blockers())
+
+    # Обычный второй этап без журналов по-прежнему не стартует.
+    assert stub._climate_scenario_new("assembly")
+    stub._climate_scenario_apply_chamber()
+    assert stub._chamber_check_only is False
+    assert any("Журналы первого этапа всем платам" in text for text in stub._climate_auto_blockers())
+
+
+def test_check_run_gets_its_own_journals_and_no_tables(tmp_path: Path):
+    stub = _with_control(_stub(tmp_path))
+    own = stub._chamber_autosave_directory()
+    stage1 = _journal(stub, own / "chamber_20261028_114806_П1_0x80.csv", ALL, time.time())
+    before = stage1.read_bytes()
+    assert stub._chamber_open_journal(str(stage1))[0]
+    stub._chamber_check_only = True
+    stub._chamber_check_begin()
+    with stub._mb_context(0x80):
+        assert stub._chamber_points == [] and stub._chamber_file_path == ""
+        assert stub._chamber_journal_origin["how"] == "журнал проверки профиля"
+        stub._chamber_label = "воздух"
+        stub._chamber_append_point({"main": 15480, "media": 10724, "fuel_temp_x10": 255, "board_temp_x10": 268})
+        name = Path(stub._chamber_file_path).name
+        assert "_проверка_" in name and name.endswith("_0x80.csv"), name
+        assert "Проверка профиля: таблицы не считаются" in stub._chamber_tables_text
+        assert stub._chamber_tables_complete is False
+    assert stage1.read_bytes() == before, "журнал первого этапа не тронут"
+    result = board_results([_pt("воздух", 15480, 10724, node) for node in chamber_fit.NODES_X10], check=True)
+    assert result["tone"] == "ok" and result["verdict"].startswith("Проверка профиля")

@@ -359,7 +359,7 @@ def combined_table(boards: list[dict]) -> dict:
                                  "Для каждой платы изменения рассчитаны относительно её собственной опорной точки."}
 
 
-def board_results(points, name: str = "", sa_text: str = "", span_known: bool = False) -> dict:
+def board_results(points, name: str = "", sa_text: str = "", span_known: bool = False, check: bool = False) -> dict:
     """Итоги прогона одной платы: сводные показатели и таблицы.
 
     span_known - строки «в жидкости» достраиваются по размаху, заданному вручную: погружение в
@@ -367,6 +367,8 @@ def board_results(points, name: str = "", sa_text: str = "", span_known: bool = 
     трубками после записи профиля выдавал «Данных не хватает: погружение не снято»).
     """
     points = [p for p in points or [] if p.get("main") is not None]
+    # Проверка профиля: погружение не нужно - таблицы по ней не считаются.
+    span_known = span_known or check
     stage1, stage1_nodes, worst1, has_stage1 = _stage1_table(points)
     stage2, counted, worst2, has_air = _stage2_table(points)
     liquid, has_liquid = _liquid_table(points, counted)
@@ -415,6 +417,9 @@ def board_results(points, name: str = "", sa_text: str = "", span_known: bool = 
         if has_air and not has_liquid and not span_known:
             parts.append("погружение не снято")
         verdict = ("warn", "Данных не хватает: " + "; ".join(parts))
+    elif check:
+        # Проверка профиля: таблицы по ней не считаются - итог про то, что снято, а оценка - в мониторе.
+        verdict = ("ok", "Проверка профиля: сухая трубка снята во всех узлах - отклонения на вкладке «Монитор»")
     else:
         verdict = ("ok", "Все узлы сняты: таблицы можно считать полными")
 

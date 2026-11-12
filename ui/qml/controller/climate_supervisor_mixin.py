@@ -236,6 +236,7 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
                 "label": str(getattr(self, "_chamber_label", "")),
                 "journal": str(getattr(self, "_chamber_file_path", "") or ""),
                 "auto_write": bool(getattr(self, "_chamber_auto_write", False)),
+                "check_only": bool(getattr(self, "_chamber_check_only", False)),
                 # Несколько плат: журнал каждой платы по её адресу.
                 "boards": self._mb_journals() if callable(getattr(self, "_mb_journals", None)) else [],
             },
@@ -410,12 +411,21 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             add("labels", True, f"Пометка «{labels[0]}»: оператор не нужен")
         if getattr(self, "_chamber_board_only", False) and labels and labels != ["0/0"]:
             add("board_label", False, "В режиме «только плата» пометка должна быть «0/0»", "warn")
-        if stage2:
+        check_only = bool(getattr(self, "_chamber_check_only", False))
+        if check_only:
+            # 12.11.2026: проверке профиля журналы первого этапа не нужны - по ней ничего не считается.
+            add("stage2", True, "Проверка профиля: журналы первого этапа не нужны - у каждой платы будет свой журнал "
+                                "проверки, таблицы не считаются, профиль в платах не меняется. Отклонения - на "
+                                "вкладке «Монитор»")
+        elif stage2:
             self._climate_auto_stage2_checks(add, getattr(self, "_chamber_board_only", False))
 
         auto_write = bool(getattr(self, "_chamber_auto_write", False))
-        add("auto_write", auto_write, "Профиль запишется в прибор сам, когда данных хватит во всех узлах"
-            if auto_write else "Автозапись профиля выключена: в конце профиль придётся записать вручную", "warn")
+        if check_only:
+            add("auto_write", True, "Проверка профиля: профиль в платы не пишется")
+        else:
+            add("auto_write", auto_write, "Профиль запишется в прибор сам, когда данных хватит во всех узлах"
+                if auto_write else "Автозапись профиля выключена: в конце профиль придётся записать вручную", "warn")
 
         remote = getattr(self, "_remote_settings", {}) or {}
         users = getattr(self, "_remote_users", None)
@@ -437,7 +447,11 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         boards = list(getattr(self, "_mb_boards", []) or [])
         multi_on = getattr(self, "_mb_on", None)
         if len(boards) >= 2:
-            if multi_on is not None and multi_on():
+            if multi_on is not None and multi_on() and check_only:
+                count = len(self._mb_working_boards()) or len(boards)
+                add("boards", True, f"Несколько плат: {count} на шине - у каждой свой журнал проверки, "
+                                    "профили в платах не меняются")
+            elif multi_on is not None and multi_on():
                 auto_write = bool(getattr(self, "_chamber_auto_write", False))
                 count = len(self._mb_working_boards()) or len(boards)
                 add("boards", auto_write,
@@ -1102,6 +1116,7 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             self._chamber_label = str(chamber["label"])
         if "auto_write" in chamber:
             self._chamber_auto_write = bool(chamber["auto_write"])
+        self._chamber_check_only = bool(chamber.get("check_only", False))
         boards = chamber.get("boards") or []
         restore_boards = getattr(self, "_mb_restore_journals", None)
         multi = getattr(self, "_mb_on", None)

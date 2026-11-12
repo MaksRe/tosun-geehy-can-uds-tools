@@ -980,7 +980,8 @@ class TelegramBot:
             word = words[0].lower() if words else ""
             kind = ("empty" if word.startswith(("пуст", "empty")) else
                     "refill" if word.startswith(("добор", "refill")) else
-                    "assembly" if word.startswith(("издел", "сбор", "трубк", "assembly")) else "board_cycle")
+                    "assembly" if word.startswith(("издел", "сбор", "трубк", "assembly")) else
+                    "check" if word.startswith(("провер", "check")) else "board_cycle")
             return "scenario_new", {"kind": kind}, "Создать новый сценарий? Несохранённые изменения текущего пропадут."
         if command == "/cmd":
             if not words:
@@ -1103,7 +1104,7 @@ class TelegramBot:
                       "/step 2 -40 15 - шаг 2: -40 °C, выдержка 15 мин",
                       "/addstep -40 15 - новый шаг в конце, /delstep 3 - удалить шаг 3",
                       "/rule ключ значение - правило сценария",
-                      "/load 1, /save, /new цикл|добор|пустой - сценарии",
+                      "/load 1, /save, /new цикл|добор|изделие|проверка|пустой - сценарии",
                       "/cmd ключ имя=значение - команда ESPEC",
                       "/report, /journal, /trace - файлы в этот чат",
                       "/all - все файлы прогона одним архивом (журналы всех плат, ход, журнал камеры)",

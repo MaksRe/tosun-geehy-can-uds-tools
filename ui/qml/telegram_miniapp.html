@@ -1451,7 +1451,7 @@
       (edit && !run.active ? `<button class="light" data-load="${esc(f.file)}">Загрузить</button>` : "") + `</li>`).join("")
       || `<li class="soft">Сохранённых сценариев нет.</li>`;
     $("scenarioButtons").innerHTML = !edit ? "" :
-      (run.active ? "" : `<button class="light" data-scn="board_cycle">Новый: цикл платы</button><button class="light" data-scn="refill">Добор точек</button><button class="light" data-scn="empty">Пустой</button>`) +
+      (run.active ? "" : `<button class="light" data-scn="board_cycle">Новый: цикл платы</button><button class="light" data-scn="refill">Добор точек</button><button class="light" data-scn="assembly">Изделие в сборе</button><button class="light" data-scn="check">Проверка профиля</button><button class="light" data-scn="empty">Пустой</button>`) +
       `<button data-scn="save">Сохранить</button>`;
     const auto = run.auto || {};
     $("resumeCard").hidden = !auto.resume;

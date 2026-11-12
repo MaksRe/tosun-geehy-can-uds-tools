@@ -1967,6 +1967,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             self._climate_trace_path = folder / f"run_{datetime.now():%Y%m%d_%H%M%S}.csv"
         except OSError:
             self._climate_trace_path = None
+        # Проверка профиля: у каждой платы - новый журнал проверки и свежий монитор (chamber_mixin).
+        self._climate_hook("_chamber_check_begin")
         # Сколько точек было в журнале до прогона: новые точки этого прогона - после них.
         self._climate_run_journal_base = len(self._chamber_points)
         self._climate_run_repeat_retries = {}

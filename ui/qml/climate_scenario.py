@@ -124,6 +124,8 @@ def empty_scenario(name: str = "Новый сценарий") -> dict:
         "single_model": SINGLE_MODELS[0],
         "labels": [],
         "auto_write": True,
+        # Проверка профиля: точки только для монитора и итогов, профиль не считается и не пишется.
+        "check_only": False,
         **DEFAULTS,
         "finish_setpoint": 25.0,
         "finish_stop": False,
@@ -192,6 +194,30 @@ def assembly_scenario() -> dict:
                                "жидкости». Погружение - пометка «жидкость» вне камеры при комнатной температуре.")
     scenario["board_only"] = False
     scenario["labels"] = [AIR_LABEL]
+    scenario["steps"] = _board_cycle_steps()
+    scenario["warm_ramp_c_min"] = ASSEMBLY_WARM_RAMP_C_MIN
+    return scenario
+
+
+CHECK_NAME = "Проверка профиля: сухая трубка"
+
+
+def check_scenario() -> dict:
+    """Проверочный прогон после калибровки и записи профиля: изделие в сборе, сухая трубка, 7 узлов.
+
+    12.11.2026: проверочный прогон требовал журналы первого этапа, хотя профиль по нему не
+    считается. Здесь они не нужны: у каждой платы заводится свой журнал проверки, таблицы не
+    считаются, профиль в платы не пишется. Отклонения показывает монитор: уровень и итог периода,
+    которые выдаёт сам прибор по уже записанному профилю.
+    """
+    scenario = empty_scenario(CHECK_NAME)
+    scenario["description"] = ("Проверка после калибровки и записи профиля: изделие в сборе, сухая трубка во всех 7 "
+                               "узлах. Журналы первого этапа не нужны, профиль не считается и не пишется - "
+                               "отклонения смотрите на вкладке «Монитор».")
+    scenario["board_only"] = False
+    scenario["labels"] = [AIR_LABEL]
+    scenario["auto_write"] = False
+    scenario["check_only"] = True
     scenario["steps"] = _board_cycle_steps()
     scenario["warm_ramp_c_min"] = ASSEMBLY_WARM_RAMP_C_MIN
     return scenario
@@ -297,6 +323,11 @@ def normalize(data) -> tuple[dict, list[str]]:
         # Одна плата на своих ёмкостях: к входам ничего не подключено, пометка всегда одна - «0/0».
         scenario["labels"] = [BOARD_LABEL]
     scenario["auto_write"] = bool(data.get("auto_write", True))
+    scenario["check_only"] = bool(data.get("check_only", False))
+    if scenario["check_only"]:
+        # Проверка профиля: профиль по ней не пишется, а плата - в корпусе с трубкой.
+        scenario["auto_write"] = False
+        scenario["board_only"] = False
     for key, (low, high) in GENERAL_LIMITS.items():
         scenario[key] = _number(data.get(key, DEFAULTS[key]), low, high, key, problems, DEFAULTS[key])
     scenario["finish_setpoint"] = _number(data.get("finish_setpoint", 25.0), *TEMP_LIMITS, "в конце, °C", problems,
@@ -376,7 +407,8 @@ def summary(scenario: dict) -> str:
     steps = scenario.get("steps") or []
     temps = " → ".join(f"{step['temp']:+g}" for step in steps)
     points = sum(1 for step in steps if step.get("capture"))
-    mode = "только плата" if scenario.get("board_only") else "эталоны и трубка"
+    mode = ("проверка профиля" if scenario.get("check_only") else
+            "только плата" if scenario.get("board_only") else "эталоны и трубка")
     return f"{len(steps)} шагов ({temps} °C), точки в {points}, {mode}"
 
 
@@ -387,6 +419,7 @@ DIFF_GENERAL = (
     ("single_model", "уход платы", ""),
     ("labels", "пометки", ""),
     ("auto_write", "запись профиля", ""),
+    ("check_only", "проверка профиля (без расчёта и записи)", ""),
     ("reach_tolerance_c", "допуск выхода на уставку", " °C"),
     ("settle_min", "окно устойчивости", " мин"),
     ("settle_rate", "скорость устойчивости", " °C/мин"),

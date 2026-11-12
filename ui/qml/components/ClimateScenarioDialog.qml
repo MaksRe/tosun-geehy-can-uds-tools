@@ -412,6 +412,13 @@ Popup {
                         onClicked: if (dialog.appController) dialog.appController.newClimateScenario("assembly")
                     }
                     SmallButton {
+                        Layout.preferredWidth: 160
+                        text: "Проверка профиля"
+                        toolTipText: "После калибровки и записи профиля: изделие в сборе, сухая трубка во всех 7 узлах. Журналы первого этапа не нужны, профиль не считается и не пишется - отклонения на вкладке «Монитор»"
+                        enabled: !dialog.locked
+                        onClicked: if (dialog.appController) dialog.appController.newClimateScenario("check")
+                    }
+                    SmallButton {
                         Layout.preferredWidth: 110
                         text: "Пустой"
                         enabled: !dialog.locked
