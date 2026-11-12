@@ -3743,6 +3743,23 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         """Цель функции в открытии журнала из списка, затем новые точки допишутся к нему; действие в журнале."""
         self._control_gui("journal_open", {"path": str(path)})
 
+    @Slot()
+    def setChamberMonitorReference(self):
+        """Цель функции в опоре монитора отклонений, затем текущее показание каждой платы - точка отсчёта."""
+        ok, text = self._chamber_monitor_set_reference()
+        self._append_log("Монитор отклонений: " + text, RowColor.blue if ok else RowColor.red)
+
+    @Slot()
+    def resetChamberMonitor(self):
+        """Цель функции в сбросе монитора отклонений, затем история и опора всех плат начинаются заново."""
+        self._chamber_monitor_reset()
+        self._append_log("Монитор отклонений: история и опора сброшены.", RowColor.blue)
+
+    @Slot(str, str)
+    def openChamberJournalFor(self, path, sa):
+        """Цель функции в открытии журнала у заданной платы (адрес «0x82»), затем её показывать в ленте не нужно."""
+        self._control_gui("journal_open", {"path": str(path), "sa": str(sa)})
+
     @Slot(str, str, str, str, result="QVariantMap")
     def noticeFor(self, text, tone, kind, title):
         """Сообщение карточкой для окна: уровень, заголовок, что произошло, почему, что сделать (notices.py)."""

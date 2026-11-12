@@ -30,12 +30,13 @@ import json
 import pathlib
 import time
 from contextlib import contextmanager
+from datetime import datetime
 
 import chamber_fit
 from uds.uds_identifiers import UdsIdentifiers
 
 from .bus_guard import note_background_request
-from .chamber_mixin import stage1_nodes
+from .chamber_mixin import is_stage1_point, journal_makeup, journal_sa, stage1_nodes
 from .contract import AppControllerContract
 
 # Поля одной платы: всё, что прогон в камере хранит о приборе. Подставляются целиком.
@@ -50,6 +51,12 @@ BOARD_ATTRS = (
     "_chamber_points", "_chamber_file_path", "_chamber_report", "_chamber_status", "_chamber_status_color",
     "_chamber_tables_text", "_chamber_tables_color", "_chamber_tables_complete", "_chamber_tables_deferred",
     "_chamber_repeat_last",
+    # 12.11.2026: откуда взят журнал платы (кнопка первого этапа, открыт из списка) - для таблицы журналов.
+    "_chamber_journal_origin",
+    # Размах «жидкость − воздух» у каждой платы свой: общее поле приходилось вписывать заново перед каждой.
+    "_chamber_span_main", "_chamber_span_media",
+    # Монитор отклонений: опора и история по узлам у каждой платы своя.
+    "_chamber_monitor_ref", "_chamber_monitor_history", "_chamber_monitor_last_s",
     # Запись профиля одной операцией.
     "_chamber_chain_stage", "_chamber_chain_steps", "_chamber_chain_status", "_chamber_chain_color",
     "_chamber_chain_deadline", "_chamber_chain_crc", "_chamber_written_crc",
@@ -101,6 +108,11 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         self._mb_profile_results: dict[int, str] = {}
         self._mb_switch_since: float | None = None
         self._mb_status = ""
+        # Отчёт последнего нажатия «Журналы первого этапа всем платам»: строка на плату.
+        # Сколько очередей опроса подряд пропущено у плат, которых нет на шине.
+        self._mb_silent_turns: dict[int, int] = {}
+        self._mb_stage1_report: list[dict] = []
+        self._mb_stage1_at = ""
         # Лента плат над разделами калибровки видна: опрос всех плат нужен и вне раздела прогона.
         self._mb_strip_visible = False
         # Почему не удалось переключить показанную плату - строка в ленте, видна 8 с.
@@ -133,7 +145,16 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             except (TypeError, ValueError, AttributeError):
                 continue
             if sa not in [board["sa"] for board in boards]:
-                boards.append({"sa": sa, "name": str(item.get("name") or f"0x{sa:02X}")[:24]})
+                board = {"sa": sa, "name": str(item.get("name") or f"0x{sa:02X}")[:24]}
+                # Размах платы помнится между запусками: его меряют на столе один раз.
+                for key in ("span_main", "span_media"):
+                    try:
+                        value = item.get(key)
+                        if value is not None and int(value) > 0:
+                            board[key] = int(value)
+                    except (TypeError, ValueError):
+                        pass
+                boards.append(board)
         self._mb_boards = boards
         self._mb_enabled = bool(payload.get("enabled", False)) and len(boards) >= 2
         self._mb_quiet_bus = bool(payload.get("quiet_bus", True))
@@ -182,9 +203,27 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         context = self._mb_contexts.get(int(sa))
         if context is None:
             context = copy.deepcopy(self._mb_template)
+            board = self._mb_board(sa) or {}
+            context["_chamber_span_main"] = board.get("span_main")
+            context["_chamber_span_media"] = board.get("span_media")
             self._mb_contexts[int(sa)] = context
         for name, value in context.items():
             setattr(self, name, value)
+
+    def _mb_remember_spans(self):
+        """Размах показанной платы - в список плат на диске: его меряют на столе один раз."""
+        if not self._mb_on() or self._mb_active_sa is None:
+            return
+        board = self._mb_board(self._mb_active_sa)
+        if board is None:
+            return
+        for key, value in (("span_main", getattr(self, "_chamber_span_main", None)),
+                           ("span_media", getattr(self, "_chamber_span_media", None))):
+            if value is None:
+                board.pop(key, None)
+            else:
+                board[key] = int(value)
+        self._mb_save()
 
     def _mb_busy(self) -> bool:
         """Идёт обмен, который держит поля текущей платы: подменять их нельзя."""
@@ -469,6 +508,8 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         for _attempt in range(len(boards)):
             sa = boards[self._mb_poll_index % len(boards)]
             self._mb_poll_index += 1
+            if self._mb_skip_silent(sa, now):
+                continue
             with self._mb_context(sa, notify=False):
                 picked = self._chamber_live_next_request()
                 if picked is None:
@@ -483,6 +524,19 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                     self._chamber_live_pending = None
                     self._mb_pending_sa = None
             return
+
+    # Плату, которой нет на шине, вне прогона спрашивать раз в столько её очередей: она ищется,
+    # но не удлиняет круг опроса живых плат (11.11.2026: три платы на шине из шести в списке).
+    MB_SILENT_EVERY = 8
+
+    def _mb_skip_silent(self, sa: int, now: float) -> bool:
+        """Пропустить очередь платы, которой нет на шине: в прогоне - никогда, иначе 7 очередей из 8."""
+        if self._mb_run_active() or self._mb_on_bus(sa, now):
+            self._mb_silent_turns.pop(int(sa), None)
+            return False
+        turns = self._mb_silent_turns.get(int(sa), 0) + 1
+        self._mb_silent_turns[int(sa)] = turns
+        return turns % self.MB_SILENT_EVERY != 1
 
     def _mb_handle_live_frame(self, identifier: int, payload) -> bool:
         """Ответ одной из плат: в её средние. True - кадр от платы из списка (разобран)."""
@@ -860,6 +914,65 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                 found.append({"sa": sa, "journal": str(newest["path"])})
         return found
 
+    def _mb_open_journal_paths(self) -> dict[str, list[int]]:
+        """Какой файл журнала у какой платы открыт сейчас: полный путь -> адреса плат."""
+        result: dict[str, list[int]] = {}
+        for board in self._mb_boards:
+            sa = int(board["sa"])
+            path = str(self._mb_context_value(sa, "_chamber_file_path") or "")
+            if not path:
+                continue
+            try:
+                key = str(pathlib.Path(path).resolve())
+            except OSError:
+                key = path
+            result.setdefault(key, []).append(sa)
+        return result
+
+    def _mb_journals_table(self) -> dict:
+        """Таблица назначения журналов для окна (вид таблицы итогов: ResultsTable.qml)."""
+        rows = self._mb_journal_assignments()
+
+        def column(key, title, tip, width, align="left"):
+            return {"key": key, "title": title, "tip": tip, "width": width, "align": align}
+
+        return {
+            "title": "Какой журнал у какой платы",
+            "tip": ("Журнал, в который пишутся точки каждой платы, - по её адресу. Строка жёлтая, если в журнале "
+                    "что-то не так: точки трубки разных дней (усреднятся в одном узле), неполный первый этап, "
+                    "тот же файл у другой платы, в имени файла адрес другой платы."),
+            "columns": [
+                column("label", "Плата", "Адрес узла на шине и подпись платы. Привязка журнала - по адресу", 120),
+                column("file", "Журнал", "Файл, в который допишутся новые точки этой платы", 300),
+                column("stage1", "Этап 1", "Узлов первого этапа (плата с эталонами) из 7", 70, "center"),
+                column("air", "Сухая трубка", "Точек «воздух» в журнале (второй этап)", 80, "center"),
+                column("liquid", "Жидкость", "Точек «жидкость» в журнале", 74, "center"),
+                column("days", "Дни трубки", "Даты точек трубки: больше одной даты - точки разных прогонов", 110),
+                column("span", "Размах осн. / вид", "Размах «жидкость − воздух» этой платы, заданный вручную", 120, "center"),
+                column("origin", "Откуда взят", "Как журнал попал к плате: кнопкой первого этапа (по адресу или по "
+                       "сумме профиля), из списка, заведён прогоном", 320),
+                column("status", "Состояние", "В порядке / проверьте / журнала нет", 110, "center"),
+                column("warnings", "Что не так", "Почему строка жёлтая", 360),
+            ],
+            "rows": [{"tone": row["tone"], "cells": {
+                "label": row["label"] + (" ●" if row["shown"] else "") + ("" if row["working"] else " (нет на шине)"),
+                "file": row["file"], "stage1": row["stage1"], "air": str(row["air"]),
+                "liquid": str(row["liquid"]), "days": row["days"] or "—", "span": row["span"],
+                "origin": row["origin"], "status": row["state"], "warnings": row["warnings"] or "—"}}
+                for row in rows],
+        }
+
+    def _mb_context_value(self, sa: int, name: str):
+        """Поле платы без переключения на неё: у показанной - текущее, у остальных - из её контекста."""
+        if int(sa) == self._mb_active_sa:
+            return getattr(self, name, None)
+        context = self._mb_contexts.get(int(sa))
+        if context is None:
+            board = self._mb_board(sa) or {}
+            return {"_chamber_span_main": board.get("span_main"),
+                    "_chamber_span_media": board.get("span_media")}.get(name)
+        return context.get(name)
+
     def _mb_open_stage1_journals(self) -> tuple[bool, str]:
         """Каждой плате на шине - её журнал первого этапа одной кнопкой (перед вторым этапом).
 
@@ -868,7 +981,12 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         первой платы, снятый, когда она была одна и адреса в имени ещё не было. Ищется в любой папке
         списка, в том числе прошлых версий. Из них берётся тот, где больше узлов первого этапа (при
         равенстве - журнал профиля платы, потом свежий): копия «на 3 точки» не перебьёт полный журнал.
-        Плата, у которой уже открыт журнал со всеми узлами, не трогается.
+
+        12.11.2026: если в журнале кроме первого этапа есть другие точки (второй этап прошлого прогона,
+        стендовые «воздух» и «жидкость»), плате заводится НОВЫЙ журнал только с точками первого этапа.
+        Раньше открывался сам файл: точки нового прогона усреднялись в узле со старыми, а прогон
+        дописывал в файл прошлого прогона. Исходный файл не меняется. Плата, у которой уже открыт
+        журнал ровно с первым этапом на все узлы, не трогается.
         """
         if not self._mb_on():
             return False, "кнопка - для нескольких плат в камере: у одной платы откройте журнал из списка"
@@ -877,54 +995,161 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         if self._mb_busy():
             return False, "дождитесь конца обмена с прибором"
         journals = self._chamber_journal_index(fresh=True)
-        total = len(chamber_fit.NODES_X10)
         working = self._mb_working_boards() or list(self._mb_boards)
-        parts, all_ok = [], True
+        report, all_ok = [], True
         for board in working:
-            sa, name = int(board["sa"]), board["name"]
+            sa = int(board["sa"])
             with self._mb_context(sa, notify=False):
-                have = len(stage1_nodes(self._chamber_points))
-                crc = ((getattr(self, "_addr_info", {}) or {}).get(sa, {}) or {}).get("profileCrc")
-                crc = None if crc is None else int(crc) & 0xFFFF
-
-                def own_profile(item) -> bool:
-                    return crc not in (None, 0) and item.get("profile_crc") == crc
-
-                candidates = [item for item in journals if item.get("sa") == sa
-                              or (item.get("sa") is None and own_profile(item))]
-                best = max(candidates, key=lambda item: (int(item.get("nodes", 0)), own_profile(item),
-                                                         float(item.get("stamp", 0.0))), default=None)
-                if have == total:
-                    current = pathlib.Path(self._chamber_file_path).name if self._chamber_file_path else ""
-                    parts.append(f"«{name}»: уже открыт {current} - {total} из {total} узлов")
-                    continue
-                if best is None or int(best.get("nodes", 0)) == 0:
-                    all_ok = False
-                    why = ("" if crc is not None else
-                           ", а профиль в плате ещё не прочитан (по нему узнаётся журнал без адреса в имени)")
-                    parts.append(f"«{name}»: журнала первого этапа с адресом 0x{sa:02X} на диске нет{why} - первый этап "
-                                 "для этой платы не проходил или журнал лежит в другой папке (откройте его "
-                                 "кнопкой «Загрузить журнал», показав плату в ленте)")
-                    continue
-                if int(best["nodes"]) <= have:
-                    all_ok = False
-                    parts.append(f"«{name}»: лучшего журнала нет, открыт с {have} из {total} узлов")
-                    continue
-                ok, text = self._chamber_open_journal(best["path"])
-                nodes = len(stage1_nodes(self._chamber_points)) if ok else 0
-                if not ok or nodes < total:
-                    all_ok = False
-                why = " - по нему посчитан профиль в плате" if best.get("sa") is None else ""
-                parts.append(f"«{name}»: {text}" if not ok else
-                             f"«{name}»: открыт {pathlib.Path(self._chamber_file_path).name}{why} - {nodes} из {total} узлов"
-                             + ("" if nodes == total else " (журнал неполный)"))
+                entry = self._mb_assign_stage1(sa, journals)
+            all_ok = all_ok and entry["ok"]
+            report.append(entry)
         self._chamber_journals_cache = None
+        self._mb_stage1_report = report
+        self._mb_stage1_at = datetime.now().strftime("%d.%m %H:%M")
+        parts = [f"«{self._mb_name(entry['sa'])}»: {entry['text']}" for entry in report]
         self._mb_status = "Журналы первого этапа: " + "; ".join(parts) + "."
         self._mb_changed()
         signal = getattr(self, "chamberLiveChanged", None)
         if signal is not None:
             signal.emit()
         return all_ok, "журналы первого этапа: " + "; ".join(parts)
+
+    def _mb_assign_stage1(self, sa: int, journals: list[dict]) -> dict:
+        """Журнал первого этапа одной плате (вызывается в её поле). Итог - строка отчёта кнопки."""
+        total = len(chamber_fit.NODES_X10)
+        current = pathlib.Path(self._chamber_file_path).name if self._chamber_file_path else ""
+        makeup = journal_makeup(self._chamber_points)
+        entry = {"sa": sa, "label": self._mb_label(sa), "ok": False, "tone": "bad", "source": "",
+                 "journal": current, "nodes": makeup["stage1"], "dropped": 0, "how": "", "text": ""}
+        if makeup["stage1"] == total and makeup["air"] + makeup["liquid"] + makeup["other"] == 0:
+            entry.update(ok=True, tone="ok", how="уже был открыт", source=current,
+                         text=f"уже открыт {current} - {total} из {total} узлов, других точек нет")
+            return entry
+
+        crc = ((getattr(self, "_addr_info", {}) or {}).get(sa, {}) or {}).get("profileCrc")
+        crc = None if crc is None else int(crc) & 0xFFFF
+
+        def own_profile(item) -> bool:
+            return crc not in (None, 0) and item.get("profile_crc") == crc
+
+        candidates = [item for item in journals if item.get("sa") == sa
+                      or (item.get("sa") is None and own_profile(item))]
+        best = max(candidates, key=lambda item: (int(item.get("nodes", 0)), own_profile(item),
+                                                 float(item.get("stamp", 0.0))), default=None)
+        # Открытый журнал платы годится в источник, если он не хуже найденного на диске.
+        use_current = makeup["stage1"] > 0 and (best is None or int(best.get("nodes", 0)) <= makeup["stage1"])
+        if not use_current and (best is None or int(best.get("nodes", 0)) == 0):
+            why = ("" if crc is not None else
+                   ", а профиль в плате ещё не прочитан (по нему узнаётся журнал без адреса в имени)")
+            entry.update(how="не найден", text=(
+                f"журнала первого этапа с адресом 0x{sa:02X} на диске нет{why} - первый этап для этой "
+                "платы не проходил или журнал лежит в другой папке (откройте его кнопкой «Открыть» в списке)"))
+            return entry
+
+        if use_current:
+            source_name, source_points = current, list(self._chamber_points)
+            how = "из открытого журнала платы"
+        else:
+            source_name = str(best["name"])
+            how = "по сумме профиля в плате" if best.get("sa") is None else "по адресу в имени файла"
+            try:
+                text = pathlib.Path(best["path"]).read_text(encoding="utf-8-sig")
+            except OSError as error:
+                entry.update(how="не прочитан", text=f"журнал {source_name} не прочитан: {error}")
+                return entry
+            source_points = self._chamber_parse_journal(text) or []
+        source = journal_makeup(source_points)
+        extra = source["air"] + source["liquid"] + source["other"]
+        if extra == 0 and not use_current:
+            # Чистый журнал первого этапа: открывается как есть (журнал прошлой версии - копией).
+            ok, text = self._chamber_open_journal(best["path"])
+            if not ok:
+                entry.update(how="не открыт", text=text)
+                return entry
+        else:
+            # В журнале есть точки прошлых прогонов или стендовые: новый журнал только с первым этапом.
+            self._chamber_points = [dict(point) for point in source_points if is_stage1_point(point)]
+            self._chamber_file_path = ""
+            self._chamber_after_change()
+        self._chamber_journal_origin = {"how": how, "source": source_name, "dropped": extra,
+                                        "at": datetime.now().strftime("%d.%m %H:%M")}
+        nodes = len(stage1_nodes(self._chamber_points))
+        journal = pathlib.Path(self._chamber_file_path).name if self._chamber_file_path else ""
+        full = nodes == total
+        tail = "" if full else " (журнал неполный)"
+        if extra:
+            text = (f"новый журнал {journal} - первый этап из {source_name} ({how}), {nodes} из {total} узлов"
+                    f"{tail}; не перенесено точек прошлых прогонов и стендовых: {extra}, исходный файл не изменён")
+        else:
+            why = " - по нему посчитан профиль в плате" if how == "по сумме профиля в плате" else ""
+            text = f"открыт {journal}{why} - {nodes} из {total} узлов{tail}"
+        entry.update(ok=full, tone="ok" if full else "warn", source=source_name, journal=journal,
+                     nodes=nodes, dropped=extra, how=how, text=text)
+        return entry
+
+    def _mb_journal_assignments(self) -> list[dict]:
+        """Таблица «какой журнал у какой платы»: файл, состав, откуда взят и что в нём не так.
+
+        Считается по полям каждой платы при показе - не по кэшу списка журналов.
+        """
+        holders = self._mb_open_journal_paths()
+        working = {int(board["sa"]) for board in self._mb_working_boards()}
+        total = len(chamber_fit.NODES_X10)
+        rows = []
+        for board in self._mb_boards:
+            sa = int(board["sa"])
+            path = str(self._mb_context_value(sa, "_chamber_file_path") or "")
+            points = list(self._mb_context_value(sa, "_chamber_points") or [])
+            makeup = journal_makeup(points)
+            origin = dict(self._mb_context_value(sa, "_chamber_journal_origin") or {})
+            try:
+                key = str(pathlib.Path(path).resolve()) if path else ""
+            except OSError:
+                key = path
+            name = pathlib.Path(path).name if path else ""
+            warnings = []
+            shared = [other for other in holders.get(key, []) if other != sa] if key else []
+            if shared:
+                warnings.append("тот же файл открыт у " + ", ".join(self._mb_label(other) for other in shared))
+            if points and makeup["stage1"] < total:
+                warnings.append(f"первый этап неполный: {makeup['stage1']} из {total} узлов")
+            if len(makeup["days"]) > 1:
+                warnings.append("точки трубки разных дней (" + ", ".join(makeup["days"])
+                                + ") - в одном узле они усреднятся")
+            owner = journal_sa(name) if name else None
+            if owner is not None and owner != sa:
+                warnings.append(f"в имени файла адрес другой платы: 0x{owner:02X}")
+            if not points:
+                state, tone = "журнала нет", "bad"
+            elif not path:
+                state, tone = "файл заведётся с первой точкой", "warn"
+            elif warnings:
+                state, tone = "проверьте", "warn"
+            else:
+                state, tone = "в порядке", "ok"
+            if origin.get("how"):
+                how = origin["how"]
+                if origin.get("source") and origin["source"] != name:
+                    how += f": {origin['source']}"
+                if origin.get("dropped"):
+                    how += f", не перенесено точек: {origin['dropped']}"
+                if origin.get("at"):
+                    how += f" ({origin['at']})"
+            else:
+                how = "заведён прогоном" if path else "—"
+            span_main = self._mb_context_value(sa, "_chamber_span_main")
+            span_media = self._mb_context_value(sa, "_chamber_span_media")
+            rows.append({
+                "sa": f"0x{sa:02X}", "label": self._mb_label(sa), "working": sa in working,
+                "shown": sa == self._mb_active_sa,
+                "file": name or "—", "points": len(points),
+                "stage1": f"{makeup['stage1']} из {total}", "stage1Ok": makeup["stage1"] == total,
+                "air": makeup["air"], "liquid": makeup["liquid"], "days": ", ".join(makeup["days"]),
+                "origin": how, "state": state, "tone": tone, "warnings": "; ".join(warnings),
+                "span": ("—" if span_main is None and span_media is None else
+                         f"{'—' if span_main is None else span_main} / {'—' if span_media is None else span_media}"),
+            })
+        return rows
 
     def _mb_restore_journals(self, boards) -> list[str]:
         """Цель функции в загрузке журнала каждой платы в её же поля, затем точки до перезапуска войдут в её таблицы."""
@@ -1005,6 +1230,9 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                 "workingCount": len(working), "runBoards": self._mb_run_active(),
                 "offline": [str(row["name"]) for row in rows if not row["working"]],
                 "status": self._mb_status,
+                # 12.11.2026: какой журнал у какой платы - таблицей, а не строкой статуса.
+                "journals": self._mb_journals_table() if self._mb_on() else {},
+                "stage1Report": list(self._mb_stage1_report), "stage1At": self._mb_stage1_at,
                 "shownName": "" if shown_board is None else str(shown_board["name"]),
                 "switchNote": self._mb_switch_note if now - self._mb_switch_note_s < 8.0 else "",
                 "shownSa": "" if shown is None else f"0x{int(shown):02X}"}

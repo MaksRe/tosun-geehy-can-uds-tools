@@ -58,12 +58,31 @@ def journal_sa(name: str) -> int | None:
     return int(match.group(1), 16) if match else None
 
 
+def is_stage1_point(point) -> bool:
+    """Точка первого этапа: не репетиция и с пометкой эталонов («150/47», «0/0»)."""
+    return not point.get("rehearsal") and any(
+        value is not None for value in chamber_fit.parse_references(point["note"]).values())
+
+
 def stage1_nodes(points) -> list[int]:
     """Узлы, в которых есть точка первого этапа: не репетиция и с пометкой того, что подключено."""
-    covered = {chamber_fit.nearest_node(point["board_temp_x10"]) for point in points or []
-               if not point.get("rehearsal")
-               and any(value is not None for value in chamber_fit.parse_references(point["note"]).values())}
+    covered = {chamber_fit.nearest_node(point["board_temp_x10"]) for point in points or [] if is_stage1_point(point)}
     return [node for node in chamber_fit.NODES_X10 if node in covered]
+
+
+def journal_makeup(points) -> dict:
+    """Из чего состоит журнал: узлы первого этапа, точки «воздух» и «жидкость», прочие, дни второго этапа.
+
+    По этому видно, годится ли журнал под новый прогон: в нём не должно быть точек прошлых прогонов
+    и стендовых точек - они усреднятся с новыми в одном узле (12.11.2026).
+    """
+    air = [point for point in points or [] if str(point["note"]).strip().casefold() == chamber_fit.AIR_NOTE]
+    liquid = [point for point in points or [] if str(point["note"]).strip().casefold() == chamber_fit.LIQUID_NOTE]
+    stage1 = [point for point in points or [] if is_stage1_point(point)]
+    other = len(points or []) - len(air) - len(liquid) - len(stage1)
+    days = sorted({str(point.get("date") or "") for point in air + liquid} - {""})
+    return {"stage1": len(stage1_nodes(points)), "stage1Points": len(stage1), "air": len(air),
+            "liquid": len(liquid), "other": max(0, other), "days": days}
 
 
 class AppControllerChamberMixin(AppControllerContract):
@@ -153,6 +172,12 @@ class AppControllerChamberMixin(AppControllerContract):
         self._chamber_extend_liquid = False
         self._chamber_span_main: int | None = None
         self._chamber_span_media: int | None = None
+        # Откуда взят открытый журнал: кнопка первого этапа, список, прогон (для таблицы журналов плат).
+        self._chamber_journal_origin: dict | None = None
+        # Монитор отклонений (chamber_monitor_mixin): опора, история по узлам, время последней записи.
+        self._chamber_monitor_ref: dict | None = None
+        self._chamber_monitor_history: list[dict] = []
+        self._chamber_monitor_last_s = 0.0
 
         # Прогон одной платы без эталонов и без трубки: в каждом узле снимается
         # только своя ёмкость платы («0/0»). Таблица платы тогда считается по одной
@@ -589,8 +614,34 @@ class AppControllerChamberMixin(AppControllerContract):
         return "\\".join(folder.parts[-2:])
 
     def _chamber_journals(self, fresh: bool = False) -> list[dict]:
-        """Журналы точек для списка в окне, на сайте и в боте: новые сверху, не больше 40."""
-        return self._chamber_journal_index(fresh)[:self.CHAMBER_JOURNALS_SHOWN]
+        """Журналы точек для списка в окне, на сайте и в боте: новые сверху, не больше 40.
+
+        У каждого - у каких плат он открыт сейчас (openBy, opened). 12.11.2026: признак «открыт» брался
+        из кэша списка, посчитанного в поле той платы, с которой работали последней, - после кнопки
+        «Журналы первого этапа всем платам» он стоял не у того журнала. Теперь считается при показе.
+        Журналы, открытые у плат, идут первыми, даже если они старше 40-го в списке.
+        """
+        index = self._chamber_journal_index(fresh)
+        holders_of = getattr(self, "_mb_open_journal_paths", None)
+        multi = getattr(self, "_mb_on", None)
+        if multi is not None and multi() and holders_of is not None:
+            holders = holders_of()
+        else:
+            current = str(pathlib.Path(self._chamber_file_path).resolve()) if self._chamber_file_path else ""
+            holders = {current: [None]} if current else {}
+        shown = getattr(self, "_mb_active_sa", None)
+        label = getattr(self, "_mb_label", None)
+        opened = [item for item in index if item["path"] in holders]
+        rest = [item for item in index if item["path"] not in holders]
+        result = []
+        for item in (opened + rest)[:max(self.CHAMBER_JOURNALS_SHOWN, len(opened))]:
+            sas = [sa for sa in holders.get(item["path"], [])]
+            entry = dict(item)
+            entry["current"] = bool(sas) and (shown in sas or sas == [None])
+            entry["openSa"] = [f"0x{int(sa):02X}" for sa in sas if sa is not None]
+            entry["openBy"] = ", ".join(label(sa) for sa in sas if sa is not None) if label is not None else ""
+            result.append(entry)
+        return result
 
     def _chamber_journal_index(self, fresh: bool = False) -> list[dict]:
         """Все журналы точек (chamber_*.csv): своя папка, подпапки и прошлые версии, новые сверху.
@@ -673,6 +724,13 @@ class AppControllerChamberMixin(AppControllerContract):
         multi = getattr(self, "_mb_on", None)
         shown = getattr(self, "_mb_active_sa", None)
         owner = item.get("sa")
+        holders = getattr(self, "_mb_open_journal_paths", None)
+        if multi is not None and multi() and holders is not None:
+            # 12.11.2026: один файл у двух плат - обе дописывали бы в него свои точки.
+            others = [sa for sa in holders().get(item["path"], []) if sa != shown]
+            if others:
+                return False, (f"этот журнал уже открыт у платы {self._mb_label(others[0])}: у одной платы - "
+                               "свой файл. Откройте этой плате её журнал или нажмите «Журналы первого этапа всем платам»")
         if multi is not None and multi() and shown is not None and owner is not None and owner != shown \
                 and self._mb_board(owner) is not None:
             # Несколько плат: журнал другой платы из списка в поля показанной - её точки в чужой профиль.
@@ -707,6 +765,8 @@ class AppControllerChamberMixin(AppControllerContract):
             if event is not None:
                 event(f"в журнале {target.name} есть точки при упоре датчиков в край старой шкалы: {times}. "
                       "Они недостоверны - уберите их, иначе таблица исказится.", "warn")
+        self._chamber_journal_origin = {"how": "открыт из списка", "source": source.name,
+                                        "at": datetime.now().strftime("%d.%m %H:%M")}
         return True, (f"открыт журнал {target.name}{copied}: точек {len(self._chamber_points)}. "
                       f"Новые точки допишутся к нему.{warning}")
 
@@ -751,6 +811,7 @@ class AppControllerChamberMixin(AppControllerContract):
         self._chamber_points = []
         self._chamber_report = []
         self._chamber_file_path = ""
+        self._chamber_journal_origin = None
         self._chamber_journals_cache = None
         self._chamber_tables_complete = False
         self._chamber_tables_text = "Таблицы посчитаются сами, когда появятся точки."
@@ -1111,6 +1172,10 @@ class AppControllerChamberMixin(AppControllerContract):
             self._chamber_span_media = value
         else:
             self._chamber_span_main = value
+        # Несколько плат: размах свой у каждой платы и помнится между запусками.
+        remember = getattr(self, "_mb_remember_spans", None)
+        if remember is not None:
+            remember()
         # Размах меняет строки «в жидкости», поэтому таблицы сразу пересчитываются.
         if self._chamber_extend_liquid:
             self._chamber_auto_compute()
@@ -1156,19 +1221,24 @@ class AppControllerChamberMixin(AppControllerContract):
             for board in self._mb_boards:
                 sa = int(board["sa"])
                 with self._mb_context(sa, notify=False):
-                    result = board_results(self._chamber_points, str(board["name"]), f"0x{sa:02X}")
+                    result = board_results(self._chamber_points, str(board["name"]), f"0x{sa:02X}",
+                                           span_known=self._chamber_span_known())
                 result["shown"] = sa == shown
                 boards.append(result)
         else:
             target = getattr(self, "_resolve_calibration_target_sa", None)
             sa_text = f"0x{int(target()) & 0xFF:02X}" if callable(target) else ""
-            result = board_results(self._chamber_points, "Плата", sa_text)
+            result = board_results(self._chamber_points, "Плата", sa_text, span_known=self._chamber_span_known())
             result["shown"] = True
             boards.append(result)
         file = pathlib.Path(self._chamber_file_path).name if self._chamber_file_path else ""
         return {"boards": boards, "overview": overview_table(boards) if len(boards) > 1 else None,
                 "combined": combined_table(boards),
                 "file": file, "time": datetime.now().strftime("%d.%m.%Y %H:%M")}
+
+    def _chamber_span_known(self) -> bool:
+        """Строки «в жидкости» достраиваются по размаху, заданному вручную: погружение в камере не нужно."""
+        return bool(getattr(self, "_chamber_extend_liquid", False)) and getattr(self, "_chamber_span_main", None) is not None
 
     def _chamber_coverage_rows(self) -> list:
         """Показывает, чего не хватает: по каждому узлу сетки что уже снято."""

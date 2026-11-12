@@ -1056,6 +1056,11 @@ class AppControllerPropertiesMixin(AppControllerContract):
         """Цель функции в списке плат в камере с их показаниями, точками и профилем, затем окно показывает все платы."""
         return self._mb_view()
 
+    @Property("QVariantMap", notify=chamberLiveChanged)
+    def chamberMonitor(self):
+        """Цель функции в мониторе отклонений прибора в камере, затем окно показывает их таблицами в реальном времени."""
+        return self._chamber_monitor_view()
+
     @Property("QVariantMap", notify=chamberChanged)
     def chamberResults(self):
         """Цель функции в итогах прогона по платам и этапам, затем окно показывает их таблицами с подсказками."""

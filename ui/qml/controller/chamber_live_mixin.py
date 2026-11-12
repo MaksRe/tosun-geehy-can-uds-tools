@@ -44,7 +44,9 @@ class AppControllerChamberLiveMixin(AppControllerContract):
     # Сколько ждать ответа, прежде чем считать запрос потерянным, с.
     CHAMBER_LIVE_PENDING_S = 0.7
     # Порядок опроса: контуры спрашиваются чаще температур, те меняются медленно.
-    CHAMBER_LIVE_ORDER = ("main", "media", "main", "media", "fuel_temp", "board_temp")
+    # 12.11.2026: в круг добавлены уровень и итог периода самого прибора - для монитора отклонений
+    # (chamber_monitor_mixin). Прошивка без них после двух отказов их больше не спрашивает.
+    CHAMBER_LIVE_ORDER = ("main", "media", "main", "media", "fuel_temp", "board_temp", "comp", "level")
     # После стольких отказов подряд параметр считается отсутствующим в прошивке.
     CHAMBER_LIVE_REFUSAL_LIMIT = 2
 
@@ -72,6 +74,11 @@ class AppControllerChamberLiveMixin(AppControllerContract):
 
     # ------------------------------------------------------------------ состояние
 
+    def _chamber_live_vars(self):
+        """Всё, что спрашивает живой опрос: величины точки и, если есть монитор, его величины."""
+        extra = getattr(self, "_chamber_monitor_vars", None)
+        return tuple(self._chamber_vars()) + (tuple(extra()) if extra is not None else ())
+
     def _init_chamber_live_state(self):
         """Готовит живой опрос раздела. Вызывается один раз при создании контроллера."""
         self._chamber_live_read = ServiceReadDataById()
@@ -93,7 +100,7 @@ class AppControllerChamberLiveMixin(AppControllerContract):
 
     def _chamber_live_reset(self):
         """Забывает все накопленные показания: новый прибор или новое подключение."""
-        keys = [key for key, _var, _signed in self._chamber_vars()]
+        keys = [key for key, _var, _signed in self._chamber_live_vars()]
         self._chamber_live_last = {key: None for key in keys}
         self._chamber_live_seen = {key: 0.0 for key in keys}
         self._chamber_live_recent = {key: [] for key in keys}
@@ -314,7 +321,7 @@ class AppControllerChamberLiveMixin(AppControllerContract):
 
     def _chamber_live_next_request(self):
         """Следующая величина по кругу опроса, пропуская те, которых нет в прошивке."""
-        variables = {key: (var, signed) for key, var, signed in self._chamber_vars()}
+        variables = {key: (var, signed) for key, var, signed in self._chamber_live_vars()}
         for _attempt in range(len(self.CHAMBER_LIVE_ORDER)):
             key = self.CHAMBER_LIVE_ORDER[self._chamber_live_index % len(self.CHAMBER_LIVE_ORDER)]
             self._chamber_live_index += 1
@@ -336,6 +343,10 @@ class AppControllerChamberLiveMixin(AppControllerContract):
         if not self._chamber_live_wanted:
             return
         now = time.monotonic()
+        # Монитор отклонений: раз в 20 с у каждой платы - запись в его историю.
+        monitor_tick = getattr(self, "_chamber_monitor_tick", None)
+        if monitor_tick is not None:
+            monitor_tick(now)
         # Возраст показаний меняется и без ответов, поэтому показ обновляется каждый такт.
         self.chamberLiveChanged.emit()
         self._chamber_live_check_waiting(now)
@@ -426,7 +437,7 @@ class AppControllerChamberLiveMixin(AppControllerContract):
             return
 
         answered = {(body[1] << 8) | body[2], (body[2] << 8) | body[1]}
-        for key, var, signed in self._chamber_vars():
+        for key, var, signed in self._chamber_live_vars():
             if (int(var.pid) & 0xFFFF) not in answered:
                 continue
             self._chamber_live_note(key, self._chamber_live_decode(body[3:], var, signed), now)

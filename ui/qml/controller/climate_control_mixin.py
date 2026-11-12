@@ -453,7 +453,23 @@ class AppControllerClimateControlMixin(AppControllerContract):
     def _control_do_journal_open(self, actor: dict, params: dict):
         """Открыть журнал из списка (в том числе прошлого прогона из папки прежней версии)."""
         path = str(params.get("path", ""))
-        ok, text = self._chamber_open_journal(path)
+        sa = params.get("sa")
+        board_of = getattr(self, "_mb_board", None)
+        target = None
+        if sa not in (None, "") and board_of is not None:
+            try:
+                target = int(str(sa), 0) & 0xFF
+            except ValueError:
+                return False, "адрес платы не понят", pathlib.Path(path).name
+            if board_of(target) is None:
+                return False, f"платы 0x{target:02X} нет в списке", pathlib.Path(path).name
+        if target is not None and target != getattr(self, "_mb_active_sa", None):
+            # 12.11.2026: журнал открывается своей плате без показа её в ленте.
+            with self._mb_context(target):
+                ok, text = self._chamber_open_journal(path)
+            text = f"{self._mb_label(target)}: {text}"
+        else:
+            ok, text = self._chamber_open_journal(path)
         self.chamberChanged.emit()
         return ok, text, pathlib.Path(path).name
 
@@ -656,7 +672,11 @@ class AppControllerClimateControlMixin(AppControllerContract):
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         target = folder / f"архив_прогона_{stamp}.zip"
         try:
-            results = results_text(self._chamber_results_view())
+            view = dict(self._chamber_results_view())
+            monitor = getattr(self, "_chamber_monitor_view", None)
+            # Монитор отклонений - в итоги архива: по нему видно, что выдавал сам прибор по профилю.
+            view["monitor"] = monitor() if monitor is not None else {}
+            results = results_text(view)
             folder.mkdir(parents=True, exist_ok=True)
             with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
                 archive.writestr("итоги_прогона.txt", results.encode("utf-8-sig"))

@@ -923,6 +923,8 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         snapshot["notices"] = self._remote_notices(snapshot)
         # Итоги прогона по платам и этапам - те же таблицы, что в окне программы.
         snapshot["results"] = self._chamber_results_view()
+        monitor = getattr(self, "_chamber_monitor_view", None)
+        snapshot["monitor"] = monitor() if monitor is not None else {}
         return snapshot
 
     @staticmethod

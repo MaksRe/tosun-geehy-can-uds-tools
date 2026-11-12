@@ -68,6 +68,17 @@ SINGLE_MODELS = (SINGLE_GAIN, SINGLE_OFFSET)
 # То же число задано в прошивке как FUEL_TUBE_MIN_SPAN.
 TUBE_MIN_SPAN = 100
 
+# Точки одного состояния трубки в одном узле, снятые в одних условиях, расходятся на 1-2 отсчёта.
+# Больше этого (отсчёты основного и вида топлива) - точки из разных условий: стол и камера, разные
+# прогоны. По испытаниям 11-12.11.2026: стол и камера расходились на 25-160 отсчётов.
+TUBE_MIX_MAIN_COUNTS = 10
+TUBE_MIX_MEDIA_COUNTS = 20
+
+# Снятая «жидкость» в узле при заданном вручную размахе: насколько её размах может отличаться
+# от заданного, чтобы строка осталась снятой (доля размаха и не меньше стольких отсчётов).
+LIQUID_MISMATCH_SHARE = 0.01
+LIQUID_MISMATCH_MIN_COUNTS = 20
+
 # Пометки состояний трубки по умолчанию.
 AIR_NOTE = "воздух"
 LIQUID_NOTE = "жидкость"
@@ -379,6 +390,25 @@ def build_tube_tables(records, board_tables, air_note: str, liquid_note: str, re
     missing_air = []
     missing_liquid = []
 
+    # 12.11.2026: стендовая точка «воздух» (трубка вне камеры) попала в узел +25 °C вместе с
+    # камерной и усреднилась с ней - в строке трубки появился излом. Точки одного состояния
+    # в узле, снятые в одних условиях, расходятся на 1-2 отсчёта; больший разброс - разные
+    # условия (стол и камера, разные прогоны), и молча усреднять их нельзя.
+    for bucket, title in ((air_note, "«воздух»"), (liquid_note, "«жидкость»")):
+        for node in NODES_X10:
+            values = collected[bucket].get(node)
+            if values is None:
+                continue
+            for channel, limit, word in (("main", TUBE_MIX_MAIN_COUNTS, "основной"),
+                                         ("media", TUBE_MIX_MEDIA_COUNTS, "вид топлива")):
+                samples = values[channel]
+                if len(samples) >= 2 and max(samples) - min(samples) > limit:
+                    report.append(
+                        f"в узле {node_text(node)} точки {title} расходятся: {word} на "
+                        f"{int(round(max(samples) - min(samples)))} отсчётов ({int(round(min(samples)))}…"
+                        f"{int(round(max(samples)))}) - сняты в разных условиях (стол и камера, разные "
+                        "прогоны) и усреднятся с изломом в таблице. Оставьте точки одного прогона")
+
     for node in NODES_X10:
         air = collected[air_note].get(node)
         liquid = collected[liquid_note].get(node)
@@ -470,11 +500,29 @@ def extend_liquid_rows(rows, report: list[str], span_main=None, span_media=None)
             continue
 
         built = []
+        replaced = []
+        measured_everywhere = all(rows[key_full][index] != 0 for index in range(len(NODES_X10)))
+        tolerance = max(LIQUID_MISMATCH_MIN_COUNTS, value * LIQUID_MISMATCH_SHARE)
         for index, node in enumerate(NODES_X10):
-            if rows[key_air][index] == 0 or rows[key_full][index] != 0:
+            if rows[key_air][index] == 0:
                 continue
+            if rows[key_full][index] != 0:
+                # 12.11.2026: «жидкость», снятая на столе при +25 °C, встала в строку камерного
+                # «воздуха» +25 °C: размах в этом узле вышел меньше заданного на 90-160 отсчётов,
+                # и прибор при отходе от +25 °C занижал коэффициент среды до 4 %. При заданном
+                # вручную размахе и неполном погружении такая строка достраивается, как соседние.
+                own = rows[key_full][index] - rows[key_air][index]
+                if span is None or measured_everywhere or abs(own - value) <= tolerance:
+                    continue
+                replaced.append(f"{node_text(node)} ({int(own)} против {int(value)})")
             rows[key_full][index] = int(round(rows[key_air][index] + value))
             built.append(node)
+
+        if replaced:
+            report.append(
+                f"строки «в жидкости» для {title} заменены на воздух + размах: снятое погружение даёт "
+                "другой размах, чем задан вручную, - " + ", ".join(replaced) + ". Скорее всего, оно "
+                "снято в других условиях (на столе); в таблице был бы излом")
 
         if built:
             report.append(
@@ -549,7 +597,8 @@ def compute_tables(records, air_note: str = AIR_NOTE, liquid_note: str = LIQUID_
         tube = extend_liquid_rows(tube, extended, span_main=span_main, span_media=span_media)
         # Достроенный узел погружением уже не пуст: недостатком остаётся только то, что не достроено.
         for item in extended:
-            (notes if "достроены по размаху" in item else report).append(item)
+            informative = "достроены по размаху" in item or "заменены на воздух + размах" in item
+            (notes if informative else report).append(item)
         tube_report = [item for item in tube_report if not item.startswith("нет замера погружённой")]
         still = [node for index, node in enumerate(NODES_X10) if tube["full_main"][index] == 0]
         if still:

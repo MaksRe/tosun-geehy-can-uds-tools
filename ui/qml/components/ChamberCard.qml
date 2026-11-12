@@ -37,6 +37,7 @@ Card {
     readonly property var pages: [
         { "key": "points", "title": "Точки", "tip": "Запись точки, полнота по узлам, замечания расчёта и журнал точек" },
         { "key": "results", "title": "Итоги", "tip": "Итоги прогона: таблицы по узлам и этапам, ёмкость, уход от +25 °C, разброс" },
+        { "key": "monitor", "title": "Монитор", "tip": "Монитор отклонений в реальном времени: уровень и итог периода, которые считает сам прибор по записанному профилю" },
         { "key": "profile", "title": "Расчёт и профиль", "tip": "Режим прогона, расчёт таблиц и запись профиля в прибор" },
         { "key": "journals", "title": "Журналы", "tip": "Журналы на диске: открыть, сохранить, журналы первого этапа всем платам" },
         { "key": "boards", "title": "Платы", "tip": "Несколько плат в камере: список плат, адреса, у каждой свой журнал" },
@@ -960,6 +961,66 @@ Card {
                 }
             }
 
+            // --- Монитор отклонений: что выдаёт сам прибор по записанному профилю, прямо во время прогона ---
+            Spoiler {
+                id: monitorSpoiler
+                visible: root.page === "monitor"
+                expanded: true
+                title: "Монитор отклонений"
+                readonly property var monitor: root.appController ? root.appController.chamberMonitor : ({})
+                hintText: monitorSpoiler.monitor.worst
+                          ? "наибольшее отклонение от опоры " + monitorSpoiler.monitor.worst + " п.п."
+                          : "уровень прибора от опоры при +25 °C, запись раз в " + (monitorSpoiler.monitor.everyS || 20) + " с"
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    SmallButton {
+                        Layout.preferredWidth: 150
+                        text: "Опора - сейчас"
+                        tone: "#0284c7"; toneHover: "#0369a1"; tonePressed: "#075985"
+                        toolTipText: "Текущее показание каждой платы становится опорой: от него считаются отклонения. Сама опора берётся при первом попадании трубки в +25 °C"
+                        enabled: root.appController !== null
+                        onClicked: if (root.appController) root.appController.setChamberMonitorReference()
+                    }
+                    SmallButton {
+                        id: monitorResetButton
+                        property bool armed: false
+                        Layout.preferredWidth: 170
+                        text: armed ? "Точно? Ещё раз" : "Сбросить наблюдение"
+                        toolTipText: "Забыть историю и опору монитора у всех плат. Журналы точек не трогаются"
+                        enabled: root.appController !== null
+                        onClicked: {
+                            if (!armed) { armed = true; monitorResetDisarm.restart(); return }
+                            armed = false
+                            if (root.appController) root.appController.resetChamberMonitor()
+                        }
+                        Timer { id: monitorResetDisarm; interval: 4000; onTriggered: monitorResetButton.armed = false }
+                    }
+                    InfoMark {
+                        tip: "Монитор читает у каждой платы то, что считает сам прибор:<br>"
+                             + "- уровень (0x0018) - с сухой трубкой он должен быть около 0 % при любой температуре;<br>"
+                             + "- итог периода после температурной компенсации (0x0062) - у сухой трубки стоит на месте.<br><br>"
+                             + "Отклонение считается от опоры - показания этой же платы при +25 °C трубки. Это температурная "
+                             + "ошибка уровня, которую профиль не убрал. Требование ±1 %: до 0,5 п.п. - в норме, 0,5-1 - на грани, "
+                             + "больше 1 - вне допуска.<br><br>"
+                             + "Если холодные узлы завышены, а горячие нет - на трубке, похоже, осталась плёнка топлива: при нагреве она "
+                             + "стекает и испаряется (прогон 11-12.11.2026)."
+                    }
+                    Item { Layout.fillWidth: true }
+                }
+
+                ResultsTable {
+                    Layout.fillWidth: true
+                    table: monitorSpoiler.monitor.now || ({})
+                }
+                ResultsTable {
+                    Layout.fillWidth: true
+                    table: monitorSpoiler.monitor.nodes || ({})
+                }
+            }
+
             // --- Итоги прогона: таблицы по узлам и этапам, по ним видно, удался ли прогон ---
             Spoiler {
                 id: resultsSpoiler
@@ -1039,25 +1100,41 @@ Card {
                         Layout.preferredWidth: 270
                         text: "Журналы первого этапа всем платам"
                         tone: "#0284c7"; toneHover: "#0369a1"; tonePressed: "#075985"
-                        toolTipText: "Каждой плате на шине откроется её журнал (адрес платы в имени файла, …_0x82.csv) с наибольшим числом узлов первого этапа - из любой папки, в том числе прошлой версии программы. Новые точки второго этапа допишутся к нему"
+                        toolTipText: "Каждой плате на шине - её первый этап: журнал с адресом платы в имени (…_0x82.csv) и наибольшим числом узлов первого этапа, из любой папки. Если в нём есть точки прошлых прогонов или стендовые, плате заводится новый журнал только с первым этапом - исходный файл не меняется"
                         enabled: root.appController !== null && !root.busy
                         onClicked: if (root.appController) root.appController.openStage1Journals()
                     }
                     InfoMark {
-                        tip: "Кнопка «Открыть» ниже открывает журнал только показанной плате"
-                             + (journalsSpoiler.mb.shownName ? " - «" + journalsSpoiler.mb.shownName + "»" : "")
-                             + ".<br>Журнал другой платы не откроется: покажите её в ленте."
+                        tip: "Что делает кнопка:<br>"
+                             + "1. Журнал платы ищется по её адресу в имени файла, у журнала без адреса - по сумме профиля, записанного в плату.<br>"
+                             + "2. Если в журнале только первый этап - он открывается как есть.<br>"
+                             + "3. Если в нём есть «воздух» и «жидкость» прошлых прогонов или стендовые точки - плате заводится новый журнал "
+                             + "только с первым этапом: иначе новые точки усреднятся со старыми в одном узле.<br><br>"
+                             + "Кнопка «Открыть у 0x..» в списке ниже открывает журнал плате с адресом из имени файла, "
+                             + "показывать её в ленте не нужно. Журнал без адреса в имени откроется показанной плате"
+                             + (journalsSpoiler.mb.shownName ? " - «" + journalsSpoiler.mb.shownName + "»" : "") + "."
                     }
 
                     Item { Layout.fillWidth: true }
                 }
 
+                // Итог последнего нажатия кнопки: по строке на плату - что открыто и откуда.
                 NoticeLine {
                     appController: root.appController
-                    text: journalsSpoiler.multi && (journalsSpoiler.mb.status || "").indexOf("Журналы первого этапа") === 0
-                          ? journalsSpoiler.mb.status : ""
-                    tone: (journalsSpoiler.mb.status || "").indexOf("нет") >= 0 ? "warn" : "ok"
+                    text: journalsSpoiler.multi && (journalsSpoiler.mb.stage1Report || []).length > 0
+                          ? "Журналы первого этапа (" + (journalsSpoiler.mb.stage1At || "") + "): "
+                            + (journalsSpoiler.mb.stage1Report || []).map(function (entry) {
+                                return entry.label + " - " + entry.text }).join("; ") + "."
+                          : ""
+                    tone: (journalsSpoiler.mb.stage1Report || []).some(function (entry) { return !entry.ok }) ? "warn" : "ok"
                     kind: "Журналы"
+                }
+
+                // Какой журнал у какой платы сейчас: считается по самим платам, а не по списку файлов.
+                ResultsTable {
+                    Layout.fillWidth: true
+                    visible: journalsSpoiler.multi && ((journalsSpoiler.mb.journals || {}).rows || []).length > 0
+                    table: journalsSpoiler.mb.journals || ({})
                 }
 
                 Repeater {
@@ -1072,15 +1149,21 @@ Card {
                         readonly property var owner: journalsSpoiler.multi && journalRow.modelData.sa !== null
                                                      && journalRow.modelData.sa !== undefined
                                                      ? journalsSpoiler.boardOf(journalRow.modelData.sa) : null
-                        // Журнал другой платы списка: показанной плате его не открыть.
-                        readonly property bool foreign: journalRow.owner !== null
-                                                        && ("0x" + ("0" + journalRow.owner.sa.toString(16).toUpperCase()).slice(-2))
-                                                        !== journalsSpoiler.mb.shownSa
+                        // Кому откроется журнал: плате с адресом в имени файла, иначе показанной.
+                        readonly property string targetSa: journalRow.owner !== null
+                                                           ? "0x" + ("0" + journalRow.owner.sa.toString(16).toUpperCase()).slice(-2)
+                                                           : (journalsSpoiler.mb.shownSa || "")
+                        readonly property bool foreign: journalRow.owner !== null && journalRow.targetSa !== journalsSpoiler.mb.shownSa
+                        // У каких плат этот файл открыт сейчас (считается при показе, не из кэша).
+                        readonly property string openBy: journalRow.modelData.openBy || ""
+                        readonly property bool opened: (journalRow.modelData.openSa || []).length > 0
+                                                       || journalRow.modelData.current === true
 
                         Text {
-                            Layout.preferredWidth: 46
+                            Layout.preferredWidth: 50
                             visible: journalsSpoiler.multi
-                            text: journalRow.owner ? journalRow.owner.name : ""
+                            // Привязка - по адресу узла в имени файла, а не по подписи платы.
+                            text: journalRow.owner ? journalRow.targetSa : ""
                             color: journalRow.foreign ? "#94a3b8" : "#0f6ab4"
                             font.pixelSize: 12
                             font.bold: !journalRow.foreign
@@ -1089,11 +1172,11 @@ Card {
                         }
                         Text {
                             Layout.fillWidth: true
-                            text: (journalRow.modelData.current ? "● " : "") + journalRow.modelData.name
+                            text: (journalRow.opened ? "● " : "") + journalRow.modelData.name
                                   + (journalRow.modelData.folder ? "   ·   " + journalRow.modelData.folder : "")
-                            color: journalRow.modelData.current ? "#0f6ab4" : (journalRow.foreign ? "#94a3b8" : root.textMain)
+                            color: journalRow.opened ? "#0f6ab4" : root.textMain
                             font.pixelSize: 12
-                            font.bold: journalRow.modelData.current === true
+                            font.bold: journalRow.opened
                             font.family: "Bahnschrift"
                             elide: Text.ElideMiddle
                         }
@@ -1102,13 +1185,43 @@ Card {
                                   + (journalRow.modelData.nodes ? "  ·  узлов " + journalRow.modelData.nodes + " из 7" : "")
                                   + "  ·  " + journalRow.modelData.modified
                         }
+                        // Плашка «открыт у платы»: видно, чей это журнал сейчас, у всех плат сразу.
+                        Rectangle {
+                            visible: journalsSpoiler.multi && journalRow.openBy.length > 0
+                            Layout.preferredHeight: 22
+                            Layout.preferredWidth: openByText.implicitWidth + 14
+                            radius: 11
+                            color: "#e0f2fe"
+                            border.width: 1
+                            border.color: "#0284c7"
+                            Text {
+                                id: openByText
+                                anchors.centerIn: parent
+                                text: "открыт у " + journalRow.openBy
+                                color: "#075985"
+                                font.pixelSize: 11
+                                font.bold: true
+                                font.family: "Bahnschrift"
+                            }
+                        }
                         SmallButton {
-                            Layout.preferredWidth: 100
-                            text: journalRow.modelData.current ? "Открыт" : "Открыть"
-                            toolTipText: "Новые точки допишутся к этому журналу. Журнал прошлой версии откроется копией в своей папке"
-                            enabled: root.appController !== null && !root.busy && journalRow.modelData.current !== true
-                                     && !journalRow.foreign
-                            onClicked: if (root.appController) root.appController.openChamberJournal(journalRow.modelData.path)
+                            Layout.preferredWidth: journalsSpoiler.multi ? 150 : 100
+                            text: journalRow.opened ? "Открыт"
+                                  : (journalsSpoiler.multi && journalRow.targetSa ? "Открыть у " + journalRow.targetSa : "Открыть")
+                            toolTipText: journalsSpoiler.multi
+                                         ? "Журнал откроется у платы " + journalRow.targetSa
+                                           + (journalRow.owner !== null ? " (адрес в имени файла)" : " (показанная плата: в имени файла адреса нет)")
+                                           + ". Новые точки этой платы допишутся к нему. Журнал прошлой версии откроется копией в своей папке"
+                                         : "Новые точки допишутся к этому журналу. Журнал прошлой версии откроется копией в своей папке"
+                            enabled: root.appController !== null && !root.busy && !journalRow.opened
+                            onClicked: {
+                                if (!root.appController)
+                                    return
+                                if (journalsSpoiler.multi && journalRow.targetSa)
+                                    root.appController.openChamberJournalFor(journalRow.modelData.path, journalRow.targetSa)
+                                else
+                                    root.appController.openChamberJournal(journalRow.modelData.path)
+                            }
                         }
                     }
                 }

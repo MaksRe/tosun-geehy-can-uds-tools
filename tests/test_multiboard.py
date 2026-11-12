@@ -296,8 +296,9 @@ def test_every_board_gets_every_value_for_any_board_count(tmp_path: Path):
 
 def test_stale_limit_grows_with_the_polling_round(tmp_path: Path):
     stub = _stub(tmp_path)
-    # 3 платы: круг одной величины 6 x 3 x 90 мс = 1,62 с, порог - 2,5 круга.
-    assert abs(stub._chamber_live_stale_s() - 4.05) < 1e-6
+    # 3 платы: круг одной величины (8 величин с монитором) x 3 x 90 мс = 2,16 с, порог - 2,5 круга.
+    expected = 2.5 * len(stub.CHAMBER_LIVE_ORDER) * 3 * 0.09
+    assert abs(stub._chamber_live_stale_s() - expected) < 1e-6
     assert stub._mb_set_enabled(False)[0]
     assert stub._chamber_live_stale_s() == stub.CHAMBER_LIVE_STALE_S
 

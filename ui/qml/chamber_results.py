@@ -359,8 +359,13 @@ def combined_table(boards: list[dict]) -> dict:
                                  "Для каждой платы изменения рассчитаны относительно её собственной опорной точки."}
 
 
-def board_results(points, name: str = "", sa_text: str = "") -> dict:
-    """Итоги прогона одной платы: сводные показатели и таблицы."""
+def board_results(points, name: str = "", sa_text: str = "", span_known: bool = False) -> dict:
+    """Итоги прогона одной платы: сводные показатели и таблицы.
+
+    span_known - строки «в жидкости» достраиваются по размаху, заданному вручную: погружение в
+    камере тогда не нужно, и его отсутствие не недостаток (12.11.2026: проверочный прогон с сухими
+    трубками после записи профиля выдавал «Данных не хватает: погружение не снято»).
+    """
     points = [p for p in points or [] if p.get("main") is not None]
     stage1, stage1_nodes, worst1, has_stage1 = _stage1_table(points)
     stage2, counted, worst2, has_air = _stage2_table(points)
@@ -390,8 +395,9 @@ def board_results(points, name: str = "", sa_text: str = "") -> dict:
                                  f"{_fmt(change / COUNTS_PER_PF, 1)} пФ) при трубке {_fmt(tube / 10)} °C",
                         "tone": "info", "tip": TIPS["pct"] + " " + TIPS["change_pf"]})
     if has_air or has_liquid:
-        summary.append({"label": "Погружение в топливо", "value": "снято" if has_liquid else "не снято",
-                        "tone": "ok" if has_liquid else "warn", "tip": TIPS["liquid"]})
+        summary.append({"label": "Погружение в топливо",
+                        "value": "снято" if has_liquid else ("не нужно: размах задан" if span_known else "не снято"),
+                        "tone": "ok" if has_liquid or span_known else "warn", "tip": TIPS["liquid"]})
     summary.append({"label": "Наибольший разброс в окне усреднения",
                     "value": f"{max(spreads)} отсч." if spreads else "нет данных (журнал до 09.11.2026)",
                     "tone": "info", "tip": TIPS["spread"]})
@@ -400,13 +406,13 @@ def board_results(points, name: str = "", sa_text: str = "") -> dict:
     missing2 = [n for n in chamber_fit.NODES_X10 if n not in counted] if has_air else []
     if not points:
         verdict = ("info", "Точек ещё нет")
-    elif missing1 or missing2 or (has_air and not has_liquid):
+    elif missing1 or missing2 or (has_air and not has_liquid and not span_known):
         parts = []
         if missing1:
             parts.append("этап 1 - нет узлов " + ", ".join(chamber_fit.node_text(n) for n in missing1))
         if missing2:
             parts.append("сухая трубка - нет узлов " + ", ".join(chamber_fit.node_text(n) for n in missing2))
-        if has_air and not has_liquid:
+        if has_air and not has_liquid and not span_known:
             parts.append("погружение не снято")
         verdict = ("warn", "Данных не хватает: " + "; ".join(parts))
     else:
@@ -468,6 +474,10 @@ def results_text(view: dict) -> str:
         lines += _text_table(view["overview"]) + [""]
     if view.get("combined"):
         lines += _text_table(view["combined"]) + [""]
+    monitor = view.get("monitor") or {}
+    for key in ("now", "nodes"):
+        if (monitor.get(key) or {}).get("rows"):
+            lines += _text_table(monitor[key]) + [""]
     for board in view.get("boards") or []:
         lines += [f"=== {board['sa']} ({board['name']})" if board["sa"] else f"=== {board['name']}",
                   f"Итог: {board['verdict']}"]

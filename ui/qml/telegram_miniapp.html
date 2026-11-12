@@ -1584,12 +1584,19 @@
     }
   });
 
+  // Монитор отклонений: что выдаёт сам прибор по записанному профилю, в реальном времени.
+  function monitorHtml(s) {
+    const monitor = s.monitor || {};
+    if (!((monitor.now || {}).rows || []).length) return "";
+    return resultsTableHtml(monitor.now) + resultsTableHtml(monitor.nodes);
+  }
+
   // Итоги прогона: сводка по платам, выбор платы, итог, показатели и таблицы.
   function renderResults(s) {
     const results = s.results || {};
     const boards = results.boards || [];
     $("resultsTime").textContent = results.time ? "посчитано " + results.time : "";
-    if (!boards.length) { $("results").innerHTML = `<div class="soft">Точек пока нет.</div>`; return; }
+    if (!boards.length) { $("results").innerHTML = monitorHtml(s) + `<div class="soft">Точек пока нет.</div>`; return; }
     let index = resultsPick >= 0 && resultsPick < boards.length ? resultsPick : boards.findIndex((b) => b.shown);
     if (index < 0) index = 0;
     const b = boards[index];
@@ -1603,7 +1610,7 @@
       b.summary.map((m) => `<tr><td class="k">${esc(m.label)} ${hintHtml(m.tip)}</td>` +
         `<td class="val ${m.tone === "warn" ? "warn" : m.tone === "ok" ? "ok" : ""}">${esc(m.value)}</td></tr>`).join("") +
       `</table>` : "";
-    $("results").innerHTML = resultsTableHtml(results.overview) + resultsTableHtml(results.combined) + chips + verdict + summary +
+    $("results").innerHTML = monitorHtml(s) + resultsTableHtml(results.overview) + resultsTableHtml(results.combined) + chips + verdict + summary +
       (b.tables || []).map(resultsTableHtml).join("");
   }
 
