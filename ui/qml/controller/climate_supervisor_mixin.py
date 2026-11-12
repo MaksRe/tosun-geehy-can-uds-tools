@@ -422,6 +422,11 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             add("stage2", True, "Проверка профиля: журналы первого этапа не нужны - у каждой платы будет свой журнал "
                                 "проверки, таблицы не считаются, профиль в платах не меняется. Отклонения - на "
                                 "вкладке «Монитор»")
+            # 12.11.2026: проверять есть что, только если в платах полный профиль и калибровка 0 %/100 % -
+            # программа читает их из каждой платы на шине и без них старт не даёт.
+            audit = getattr(self, "_profile_audit_checks", None)
+            if audit is not None:
+                audit(add)
         elif stage2:
             self._climate_auto_stage2_checks(add, getattr(self, "_chamber_board_only", False))
 
@@ -1265,4 +1270,13 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             "pausedBy": self._climate_auto_paused_by,
             # Как плата отстаёт от воздуха в этом прогоне: по ней упреждение и доводка.
             "boardModel": self._climate_run_board_model_text() if hasattr(self, "_climate_run_board_model_text") else "",
+            # Проверка профиля: кнопка «Перечитать профили плат» и идёт ли чтение.
+            "profileAudit": self._climate_profile_audit_view(active),
         }
+
+    def _climate_profile_audit_view(self, active: bool) -> dict:
+        view = getattr(self, "_profile_audit_view", None)
+        if view is None or active:
+            return {"visible": False, "busy": False}
+        scenario = getattr(self, "_climate_scenario", None) or {}
+        return view(bool(scenario.get("check_only", getattr(self, "_chamber_check_only", False))))

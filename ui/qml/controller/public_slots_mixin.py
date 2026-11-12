@@ -3755,6 +3755,12 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         self._chamber_monitor_reset()
         self._append_log("Монитор отклонений: история и опора сброшены.", RowColor.blue)
 
+    @Slot()
+    def recheckBoardProfiles(self):
+        """Цель функции в повторном чтении профиля и калибровки плат перед проверкой профиля (после перезаписи)."""
+        count = self._profile_audit_start(force=True)
+        self._append_log(f"Проверка профиля: читаю профиль и калибровку плат ({count}).", RowColor.blue)
+
     @Slot(str, str)
     def openChamberJournalFor(self, path, sa):
         """Цель функции в открытии журнала у заданной платы (адрес «0x82»), затем её показывать в ленте не нужно."""

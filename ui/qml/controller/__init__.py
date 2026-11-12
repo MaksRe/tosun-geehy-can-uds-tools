@@ -25,6 +25,7 @@ from .multiboard_mixin import AppControllerMultiBoardMixin
 from .node_live_mixin import AppControllerNodeLiveMixin
 from .node_trend_mixin import AppControllerNodeTrendMixin
 from .options_mixin import AppControllerOptionsMixin
+from .profile_audit_mixin import AppControllerProfileAuditMixin
 from .profile_mixin import AppControllerProfileMixin
 from .remote_monitor_mixin import AppControllerRemoteMonitorMixin
 from .properties_mixin import AppControllerPropertiesMixin
@@ -60,6 +61,7 @@ __all__ = [
     "AppControllerNodeLiveMixin",
     "AppControllerNodeTrendMixin",
     "AppControllerOptionsMixin",
+    "AppControllerProfileAuditMixin",
     "AppControllerProfileMixin",
     "AppControllerRemoteMonitorMixin",
     "AppControllerPropertiesMixin",

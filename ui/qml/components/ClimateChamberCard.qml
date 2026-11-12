@@ -804,6 +804,33 @@ Card {
                         }
                     }
 
+                    // Проверка профиля: профиль и калибровка плат читаются сами; после перезаписи профиля - заново.
+                    RowLayout {
+                        Layout.fillWidth: true
+                        visible: !root.run.active && ((root.auto.profileAudit || {}).visible === true)
+                        spacing: 8
+
+                        FancyButton {
+                            Layout.preferredWidth: 210
+                            Layout.preferredHeight: 30
+                            fontPixelSize: 12
+                            text: (root.auto.profileAudit || {}).busy ? "Читаю профили плат…" : "Перечитать профили плат"
+                            enabled: !((root.auto.profileAudit || {}).busy)
+                            tone: "#0284c7"; toneHover: "#0369a1"; tonePressed: "#075985"
+                            onClicked: if (root.appController) root.appController.recheckBoardProfiles()
+                        }
+
+                        InfoMark {
+                            tip: "Перед проверкой профиля программа сама читает из каждой платы на шине состояние профиля, "
+                                 + "его таблицы (плата и трубка) и калибровку 0 %/100 %, а также поправку по виду топлива "
+                                 + "и модель по двум контурам. Пока у какой-нибудь платы профиль пустой, не применяется, "
+                                 + "без строк трубки или без калибровки - старт не даётся. Прочитанное помнится 15 минут; "
+                                 + "переписали профиль или калибровку - нажмите «Перечитать профили плат»."
+                        }
+
+                        Item { Layout.fillWidth: true }
+                    }
+
                     // Сценарий, по которому пойдёт прогон: название, кратко, файл; форма - по кнопке.
                     RowLayout {
                         Layout.fillWidth: true

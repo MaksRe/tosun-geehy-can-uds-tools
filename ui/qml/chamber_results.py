@@ -408,6 +408,11 @@ def board_results(points, name: str = "", sa_text: str = "", span_known: bool = 
     missing2 = [n for n in chamber_fit.NODES_X10 if n not in counted] if has_air else []
     if not points:
         verdict = ("info", "Точек ещё нет")
+    elif check and missing2 and not missing1:
+        # Проверка профиля идёт по узлам: недостающие узлы - ход прогона, а не нехватка данных
+        # (12.11.2026: на первом узле сводка горела оранжевым «Данных не хватает»).
+        verdict = ("info", f"Проверка профиля: сухая трубка снята в {len(counted)} из {total} узлов; "
+                           "впереди " + ", ".join(chamber_fit.node_text(n) for n in missing2))
     elif missing1 or missing2 or (has_air and not has_liquid and not span_known):
         parts = []
         if missing1:
@@ -431,11 +436,25 @@ def board_results(points, name: str = "", sa_text: str = "", span_known: bool = 
     if has_liquid:
         tables.append(liquid)
     tables.append(_measurements_table(points))
+    # Сводка показывает, что снято в журнале этого прогона, а не что записано в профиле платы:
+    # проверке профиля первый этап и погружение не нужны - так и пишем, а не «—» и «не снято».
+    if has_liquid:
+        liquid_text = "снято"
+    elif not points:
+        liquid_text = "—"
+    elif span_known:
+        liquid_text = "не нужно"
+    else:
+        liquid_text = "не снято"
+    if has_stage1:
+        stage1_text = f"{len(stage1_nodes)}/{total}"
+    else:
+        stage1_text = "не нужно" if check and points else "—"
     return {"name": name, "sa": sa_text, "points": len(points), "verdict": verdict[1], "tone": verdict[0],
             "summary": summary, "tables": tables,
-            "stage1": f"{len(stage1_nodes)}/{total}" if has_stage1 else "—",
+            "stage1": stage1_text,
             "stage2": f"{len(counted)}/{total}" if has_air else "—",
-            "liquid": has_liquid}
+            "liquid": has_liquid, "liquidText": liquid_text}
 
 
 def overview_table(boards: list[dict]) -> dict:
@@ -444,7 +463,8 @@ def overview_table(boards: list[dict]) -> dict:
         # Плата - по адресу узла, имя - пометка: имена бывают одинаковыми, адрес на шине - нет.
         "board": f"{board['sa']} ({board['name']})" if board["sa"] else board["name"], "points": str(board["points"]),
         "stage1": board["stage1"], "stage2": board["stage2"],
-        "liquid": "снято" if board["liquid"] else "не снято", "verdict": board["verdict"]}} for board in boards]
+        "liquid": board.get("liquidText") or ("снято" if board["liquid"] else "не снято"),
+        "verdict": board["verdict"]}} for board in boards]
     columns = [
         _column("board", "Плата", align="left"), _column("points", "Точек"),
         _column("stage1", "Этап 1, узлов", "stage1", "center"),
@@ -453,7 +473,8 @@ def overview_table(boards: list[dict]) -> dict:
         _column("verdict", "Итог", align="left", width=520),
     ]
     return {"id": "overview", "title": "Сводка по платам",
-            "tip": "Одна строка на плату: сколько узлов снято на каждом этапе и чего не хватает.",
+            "tip": "Одна строка на плату: сколько узлов снято в журнале этого прогона на каждом этапе и чего "
+                   "не хватает. Это не содержимое профиля в плате: записанный профиль здесь не виден.",
             "columns": columns, "rows": rows}
 
 

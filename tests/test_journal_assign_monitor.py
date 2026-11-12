@@ -350,3 +350,20 @@ def test_check_run_gets_its_own_journals_and_no_tables(tmp_path: Path):
     assert stage1.read_bytes() == before, "журнал первого этапа не тронут"
     result = board_results([_pt("воздух", 15480, 10724, node) for node in chamber_fit.NODES_X10], check=True)
     assert result["tone"] == "ok" and result["verdict"].startswith("Проверка профиля")
+
+
+def test_check_overview_says_not_needed_instead_of_missing():
+    """Сводка по платам на проверке профиля (12.11.2026): после первого узла у плат горело
+    «Этап 1 —», «Погружение не снято» и оранжевое «Данных не хватает», хотя профиль записан."""
+    from ui.qml.chamber_results import overview_table
+
+    first = board_results([_pt("воздух", 15480, 10724, 250)], "П2", "0x82", check=True)
+    idle = board_results([], "П3", "0x83", check=True)
+    assert first["tone"] == "info" and "в 1 из 7 узлов" in first["verdict"]
+    rows = overview_table([first, idle])["rows"]
+    assert rows[0]["cells"]["stage1"] == "не нужно" and rows[0]["cells"]["liquid"] == "не нужно"
+    assert rows[0]["cells"]["stage2"] == "1/7"
+    assert rows[1]["cells"]["stage1"] == "—" and rows[1]["cells"]["liquid"] == "—"
+    # Обычный второй этап без размаха: погружения не хватает по-прежнему.
+    plain = board_results([_pt("воздух", 15480, 10724, node) for node in chamber_fit.NODES_X10])
+    assert overview_table([plain, plain])["rows"][0]["cells"]["liquid"] == "не снято"

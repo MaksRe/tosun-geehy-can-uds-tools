@@ -340,6 +340,10 @@ class AppControllerChamberLiveMixin(AppControllerContract):
         capture_tick = getattr(self, "_mb_manual_capture_tick", None)
         if capture_tick is not None:
             capture_tick(time.monotonic())
+        # Чтение профиля и калибровки плат перед проверочным прогоном - и при закрытом разделе.
+        audit_tick = getattr(self, "_profile_audit_tick", None)
+        if audit_tick is not None:
+            audit_tick(time.monotonic())
         if not self._chamber_live_wanted:
             return
         now = time.monotonic()

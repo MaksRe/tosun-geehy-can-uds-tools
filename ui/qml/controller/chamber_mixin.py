@@ -1278,6 +1278,12 @@ class AppControllerChamberMixin(AppControllerContract):
         reset = getattr(self, "_chamber_monitor_reset", None)
         if reset is not None:
             reset()
+        # Что было в платах на старте (сумма профиля, 0 %/100 %) - в журнал событий прогона и в архив.
+        lines = getattr(self, "_profile_audit_log_lines", None)
+        event = getattr(self, "_climate_event", None)
+        if lines is not None and event is not None:
+            for line in lines():
+                event(line, "info")
 
     def _chamber_coverage_rows(self) -> list:
         """Показывает, чего не хватает: по каждому узлу сетки что уже снято."""
