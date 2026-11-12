@@ -35,6 +35,7 @@ import re
 import shutil
 import time
 from collections import deque
+from datetime import datetime, timedelta
 
 import chamber_fit
 from ui.qml import climate_scenario
@@ -572,6 +573,7 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
 
     def _climate_auto_on_stop(self, reason: str):
         """Прогон остановлен: файл состояния больше не нужен, итог - что успели."""
+        self._climate_auto_finish_elapsed = self._climate_auto_elapsed(time.monotonic())
         self._climate_auto_clear_file()
         done = len(self._climate_auto_durations)
         if done:
@@ -1200,6 +1202,11 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         nodes = self._climate_run_nodes
         done = len(self._climate_auto_durations)
         eta = self._climate_auto_eta(now) if active else None
+        elapsed = self._climate_auto_elapsed(now) if active else (
+            getattr(self, "_climate_auto_finish_elapsed", None) or self._climate_auto_elapsed_before)
+        # Чтобы оценка совпадала с часами оператора, переводим модельное время имитатора в реальное.
+        finish = (datetime.now() + timedelta(seconds=eta / self._climate_speed())).strftime("%d.%m %H:%M") \
+            if eta is not None and not self._climate_run_paused and self._climate_run_stage != "finish" else ""
         resume = self._climate_auto_resume
         resume_view = None
         if resume is not None:
@@ -1218,6 +1225,14 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             "canStart": not blockers,
             "blockers": [item["text"] for item in blockers],
             "progress": (done / len(nodes)) if active and nodes else 0.0,
+            "hasRun": active or elapsed > 0,
+            "elapsedText": duration_text(elapsed),
+            "remainingText": duration_text(eta),
+            "totalText": duration_text(elapsed + eta) if eta is not None else (
+                duration_text(elapsed) if not active and elapsed > 0 else "—"),
+            "finishText": finish,
+            "timingTip": "Время в формате часы:минуты. Оценка по среднему времени пройденных узлов; "
+                         "возврат камеры и запись профиля могут увеличить длительность. На паузе срок не прогнозируется.",
             "progressText": (f"Узел {min(self._climate_run_index + 1, len(nodes))} из {len(nodes)}  ·  прошло "
                              f"{duration_text(self._climate_auto_elapsed(now))}"
                              + (f"  ·  осталось ≈ {duration_text(eta)}" if eta is not None else

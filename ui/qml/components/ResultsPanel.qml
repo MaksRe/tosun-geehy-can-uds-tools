@@ -37,6 +37,11 @@ ColumnLayout {
         table: panel.results.overview || ({})
     }
 
+    ResultsTable {
+        visible: !!panel.results.combined
+        table: panel.results.combined || ({})
+    }
+
     // Выбор платы: точка - итог платы (зелёная - всё снято, жёлтая - не хватает данных).
     Flow {
         Layout.fillWidth: true
@@ -191,11 +196,12 @@ ColumnLayout {
     }
 
     Repeater {
-        model: panel.board.tables || []
+        // Чтобы прокрутка сохранялась при опросе, обновляем данные существующих таблиц по индексу.
+        model: (panel.board.tables || []).length
 
         ResultsTable {
-            required property var modelData
-            table: modelData
+            required property int index
+            table: (panel.board.tables || [])[index] || ({})
         }
     }
 

@@ -578,6 +578,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             self._mb_captured = set()
         wanted = None if node is None else chamber_fit.nearest_node(int(round(float(node) * 10)))
         boards = [board for board in self._mb_working_boards(now) if only is None or board["sa"] in only]
+        waiting = []
         for board in boards:
             sa = board["sa"]
             if sa in self._mb_captured:
@@ -585,6 +586,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             with self._mb_context(sa, notify=False):
                 point, detail = self._chamber_live_point(now)
                 if point is None:
+                    waiting.append(f"{self._mb_label(sa)}: {detail or 'среднее ещё не готово'}")
                     continue
                 self._chamber_append_point(point, detail)
                 self._mb_captured.add(sa)
@@ -597,6 +599,10 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                     self._climate_event(f"плата {self._mb_label(sa)}: точка при {point[field] / 10:+.1f} °C ({what}) - "
                                         f"не в узле {chamber_fit.node_text(wanted)} (±3 °C), в таблицу узла не "
                                         "попадёт.", "warn")
+        left = max(0, int(self.MB_CAPTURE_WAIT_S - (now - self._mb_capture_stage_since)))
+        self._mb_status = (f"Точки записаны у {sum(board['sa'] in self._mb_captured for board in boards)} "
+                           f"из {len(boards)} плат."
+                           + (f" Жду до {left} с: " + "; ".join(waiting) if waiting else ""))
         self._mb_changed()
         missing = [board for board in boards if board["sa"] not in self._mb_captured]
         if not missing:
@@ -979,6 +985,11 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                     "boardTemp": "—" if temp is None else f"{temp['mean'] / 10.0:+.1f} °C".replace(".", ","),
                     "main": "—" if main is None else str(int(round(main["mean"]))),
                     "media": "—" if media is None else str(int(round(media["mean"]))),
+                    # Для различения скачка и усреднения передаём последние измерения отдельно от средних.
+                    "mainNow": "—" if self._chamber_live_last.get("main") is None
+                               else str(int(self._chamber_live_last["main"])),
+                    "mediaNow": "—" if self._chamber_live_last.get("media") is None
+                                else str(int(self._chamber_live_last["media"])),
                     "points": len(self._chamber_points),
                     "file": pathlib.Path(self._chamber_file_path).name if self._chamber_file_path else "",
                     "tables": str(self._chamber_tables_text or ""),

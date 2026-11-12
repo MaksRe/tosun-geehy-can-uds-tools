@@ -37,6 +37,10 @@ TIPS = {
                 f"отклонение не больше ±{TOLERANCE_C:.0f} °C.",
     "status": f"«Засчитана» - точка в допуске ±{TOLERANCE_C:.0f} °C и вошла в расчёт строки узла. "
               "«Вне допуска» - точка записана в журнал, но в расчёт не вошла: узел остаётся без данных.",
+    "measurement_status": "Состояние отдельной записи: температура распознанной рабочей точки попала в допуск "
+                          "±3 °C к узлу или находится вне него. Попадание в допуск не подтверждает готовность "
+                          "таблиц и использование точки в расчёте. Пробы и неизвестные пометки не подтверждают "
+                          "рабочую калибровку.",
     "note": "Что было подключено к входам прибора: номинал эталона основного контура / контура вида топлива, "
             "пФ. «0/0» - к входам ничего не подключено (своя ёмкость платы).",
     "counts": "Период контура - число отсчётов таймера 72 МГц за время перезаряда датчика, среднее за окно "
@@ -291,6 +295,70 @@ def _coverage_table(points, stage1_nodes, counted, has_stage1, has_air):
             "columns": columns, "rows": rows}
 
 
+def _measurements_table(points: list[dict]) -> dict:
+    """Для проверки фактических температур сохраняет все измерения, включая точки вне допуска и пробы."""
+    bases = {}
+    for point in points:
+        tube = _note(point) in (chamber_fit.AIR_NOTE, chamber_fit.LIQUID_NOTE)
+        field = "fuel_temp_x10" if tube else "board_temp_x10"
+        if (tube or _is_stage1(point)) and not point.get("rehearsal") \
+                and chamber_fit.nearest_node(point[field]) == chamber_fit.REFERENCE_X10:
+            bases[_note(point)] = point
+    rows = []
+    for point in points:
+        tube = _note(point) in (chamber_fit.AIR_NOTE, chamber_fit.LIQUID_NOTE)
+        field = "fuel_temp_x10" if tube else "board_temp_x10"
+        node = chamber_fit.nearest_node(point[field])
+        base = bases.get(_note(point))
+        rehearsal = bool(point.get("rehearsal"))
+        recognized = tube or _is_stage1(point)
+        # Чтобы не обещать участие в расчёте, показываем только распознавание точки и допуск температуры.
+        status = ("проба" if rehearsal else "пометка не распознана" if not recognized
+                  else "в допуске ±3 °C" if node is not None else "вне допуска ±3 °C")
+        cells = {"when": _when(point), "note": point.get("note", ""),
+                 "node": chamber_fit.node_text(node) if node is not None else "—",
+                 "status": status,
+                 "air": _fmt(None if point.get("chamber_temp_x10") is None else point["chamber_temp_x10"] / 10),
+                 "board": _fmt(point["board_temp_x10"] / 10), "tube": _fmt(point["fuel_temp_x10"] / 10),
+                 "samples": _int(point.get("samples")), "spread": _spread(point)}
+        for key in ("main", "media"):
+            cells |= _channel_cells(key, point.get(key), None if base is None or rehearsal else base.get(key),
+                                    point is base)
+        rows.append({"tone": "info" if rehearsal else "ok" if recognized and node is not None else "warn",
+                     "cells": cells})
+    columns = [_column("when", "Дата, время", align="center"), _column("note", "Пометка", "note", "left"),
+               _column("node", "Узел", align="center"),
+               _column("status", "Состояние точки", "measurement_status", "left"),
+               _column("board", "Плата, °C"), _column("tube", "Топливо, °C"), _column("air", "Камера, °C"),
+               _column("main", "Осн., отсч.", "counts"), _column("media", "Вид, отсч.", "counts"),
+               _column("mainPf", "Осн., пФ", "pf"), _column("mediaPf", "Вид, пФ", "pf"),
+               _column("mainChange", "Δ осн., отсч.", "change"), _column("mainPct", "Δ осн., %", "pct"),
+               _column("mediaChange", "Δ вида, отсч.", "change"), _column("mediaPct", "Δ вида, %", "pct"),
+               _column("samples", "Показаний"), _column("spread", "Разброс осн./вид", "spread")]
+    return {"id": "measurements", "title": "Все зафиксированные точки", "columns": columns, "rows": rows,
+            "tip": "Все записи журнала с фактическими температурами. Узел первого этапа определяется по плате, "
+                   "сухой трубки и погружения — по топливу. Пробы в рабочие результаты не входят. "
+                   "Изменения рассчитаны от последней распознанной рабочей точки +25 °C с той же пометкой. "
+                   "Состояние строки показывает допуск температуры, а готовность калибровки проверяется отдельно."}
+
+
+def combined_table(boards: list[dict]) -> dict:
+    """Для сравнения плат объединяет их измерения и рассчитанные изменения с отдельным столбцом CAN-адреса."""
+    rows, columns = [], []
+    for board in boards:
+        table = next((item for item in board.get("tables", []) if item["id"] == "measurements"), None)
+        if table is None:
+            continue
+        columns = table["columns"]
+        for row in table["rows"]:
+            rows.append({"tone": row["tone"], "cells": dict(row["cells"], sa=board["sa"], name=board["name"])})
+    identity = [{"key": "sa", "title": "CAN-адрес", "tip": "Адрес SA платы на шине CAN.", "align": "left"},
+                {"key": "name", "title": "Плата", "tip": "Имя платы в списке камеры.", "align": "left"}]
+    return {"id": "combined", "title": "Все платы: измерения и результаты", "columns": identity + columns,
+            "rows": rows, "tip": "Все записи всех плат по CAN-адресам, включая точки вне допуска. "
+                                 "Для каждой платы изменения рассчитаны относительно её собственной опорной точки."}
+
+
 def board_results(points, name: str = "", sa_text: str = "") -> dict:
     """Итоги прогона одной платы: сводные показатели и таблицы."""
     points = [p for p in points or [] if p.get("main") is not None]
@@ -351,6 +419,7 @@ def board_results(points, name: str = "", sa_text: str = "") -> dict:
         tables.append(stage2)
     if has_liquid:
         tables.append(liquid)
+    tables.append(_measurements_table(points))
     return {"name": name, "sa": sa_text, "points": len(points), "verdict": verdict[1], "tone": verdict[0],
             "summary": summary, "tables": tables,
             "stage1": f"{len(stage1_nodes)}/{total}" if has_stage1 else "—",
@@ -397,6 +466,8 @@ def results_text(view: dict) -> str:
     lines = [f"ИТОГИ ПРОГОНА В КАМЕРЕ - {view.get('time', '')}", ""]
     if view.get("overview"):
         lines += _text_table(view["overview"]) + [""]
+    if view.get("combined"):
+        lines += _text_table(view["combined"]) + [""]
     for board in view.get("boards") or []:
         lines += [f"=== {board['sa']} ({board['name']})" if board["sa"] else f"=== {board['name']}",
                   f"Итог: {board['verdict']}"]

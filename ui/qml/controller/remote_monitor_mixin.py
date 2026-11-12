@@ -524,15 +524,31 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             self._remote_incoming.append((channel, str(text), bool(ok)))
 
     def _remote_note_point(self, point: dict):
-        """Точка записана: событие для страницы и, по желанию, сообщение."""
-        node = chamber_fit.nearest_node(point["board_temp_x10"])
+        """Для проверки точки записывает адрес, фактические температуры и зачёт в узел в события и диагностику."""
+        tube = str(point.get("note", "")).strip().casefold() in (chamber_fit.AIR_NOTE, chamber_fit.LIQUID_NOTE)
+        node = chamber_fit.nearest_node(point["fuel_temp_x10"] if tube else point["board_temp_x10"])
         where = chamber_fit.node_text(node) if node is not None else "вне допуска ±3 °C"
         media = "-" if point.get("media") is None else point["media"]
         trial = " (проба)" if point.get("rehearsal") else ""
-        self._remote_event(
-            f"{self._remote_board_prefix()}точка «{point['note']}»{trial} записана: узел {where}, основной "
-            f"{point['main']}, вид топлива {media}. Всего точек: {len(self._chamber_points)}.",
-            "ok", kind="point")
+        prefix = self._remote_board_prefix()
+        if not prefix:
+            target = getattr(self, "_resolve_calibration_target_sa", None)
+            prefix = f"0x{int(target()) & 0xFF:02X}: " if callable(target) else "Плата: "
+        air = point.get("chamber_temp_x10")
+        temperatures = (f"плата {point['board_temp_x10'] / 10:+.1f} °C, "
+                        f"топливо {point['fuel_temp_x10'] / 10:+.1f} °C, "
+                        + (f"камера {air / 10:+.1f} °C" if air is not None else "камера —"))
+        expected = ""
+        stage = getattr(self, "_climate_run_stage", "")
+        if stage and stage != "finish":
+            expected = f"шаг {self._climate_run_node():+.1f} °C; "
+        text = (f"{prefix}точка «{point['note']}»{trial} записана: {expected}узел {where}; "
+                f"{temperatures.replace('.', ',')}; основной {point['main']}, вид топлива {media}. "
+                f"Всего точек: {len(self._chamber_points)}.")
+        self._remote_event(text, "ok" if node is not None else "warn", kind="point")
+        diag = getattr(self, "_climate_diag_event", None)
+        if callable(diag):
+            diag("point", text, "INFO" if node is not None else "WARN")
 
     def _remote_multi(self) -> bool:
         """Цель функции в признаке работы с несколькими платами для сайта и бота."""
@@ -731,7 +747,7 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         board = self._remote_history[-1][1]
 
         if stable:
-            self._remote_stable_text = f"Плата устоялась: {rate_text} за {window_s / 60:g} мин. Можно снимать точки."
+            self._remote_stable_text = f"Температура платы устойчива: {rate_text} за {window_s / 60:g} мин."
             self._remote_stable_ok = True
             if not self._remote_stable_announced:
                 self._remote_stable_announced = True
@@ -739,7 +755,7 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
                 where = f"узел {chamber_fit.node_text(node)}" if node is not None else "вне узлов сетки"
                 board_text = "?" if board is None else f"{board:+.1f}".replace(".", ",")
                 who = "средняя температура плат" if self._remote_multi() else "плата"
-                self._remote_event(f"{who} устоялась при {board_text} °C ({where}). Можно снимать точки.", "ok")
+                self._remote_event(f"{who} устоялась при {board_text} °C ({where}).", "ok")
             return
 
         self._remote_stable_ok = False
@@ -754,11 +770,13 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         """Цель функции в устойчивости каждой платы по правилу сценария, затем общий итог «устоялись N из M»."""
         window_s, rate_limit = self._remote_stable_rule()
         result = {}
+        temperatures = self._mb_board_temps(now)
         for board in self._mb_working_boards(now):
             sa = int(board["sa"])
             series = ((stamp, temps.get(sa)) for stamp, temps in self._remote_boards_history if temps.get(sa) is not None)
             rate = rate_and_spread(series, now, window_s)
-            stable = rate is not None and is_stable(rate, window_s, rate_limit, self.REMOTE_STABLE_SPREAD_C)
+            stable = (rate is not None and temperatures.get(sa, (None, None))[0] is not None
+                      and is_stable(rate, window_s, rate_limit, self.REMOTE_STABLE_SPREAD_C))
             result[sa] = (None if rate is None else rate[0], bool(stable))
         self._remote_boards_stability = result
         total = len(result)
@@ -768,7 +786,7 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         avg = self._remote_history[-1][1] if self._remote_history else None
         avg_text = "" if avg is None else f" (средняя {avg:+.1f} °C)".replace(".", ",")
         if stable_count == total:
-            self._remote_stable_text = f"Все платы устоялись: {total} из {total}{avg_text}. Можно снимать точки."
+            self._remote_stable_text = f"Температура устойчива у {total} из {total} плат{avg_text}."
             self._remote_stable_ok = True
             return
         moving = [f"{self._mb_label(sa)} " + ("истории мало" if rate is None
@@ -800,6 +818,7 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
                 "fuelTemp": "—" if fuel_c is None else f"{fuel_c:+.1f} °C".replace(".", ","),
                 "rateText": "—" if rate is None else f"{rate:+.3f} °C/мин".replace(".", ","),
                 "stable": bool(stable), "main": row["main"], "media": row["media"],
+                "mainNow": row.get("mainNow", "—"), "mediaNow": row.get("mediaNow", "—"),
                 "points": row["points"], "tablesComplete": row["tablesComplete"],
                 "profileState": row.get("profileState", ""), "profileTone": row.get("profileTone", "normal"),
                 "nodes": row.get("nodes", []), "stages": row.get("stages", {}),

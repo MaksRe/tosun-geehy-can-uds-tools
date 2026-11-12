@@ -2135,7 +2135,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                                f"текущему среднему {_c(board)}.")
                         final = None
                     self._climate_event(why, "info" if quiet_long else "warn")
-                decision = self._climate_run_board_ok(now, board, final)
+                # Чтобы прогноз не удерживал прогон бесконечно, после тайм-аута решаем по измеренной температуре.
+                decision = self._climate_run_board_ok(now, board, None if overdue else final)
                 if decision is False:
                     return
                 if decision is None:
@@ -2216,7 +2217,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                     self._climate_run_label_index += 1
                     self._climate_run_enter("points", now)
                 else:
-                    self._climate_run_set(f"Узел {where}: записываю точки плат «{label}»...")
+                    self._climate_run_set(f"Узел {where}, «{label}»: {self._mb_status}")
                 return
             self._climate_run_points = len(self._chamber_points)
             if self._chamber_capture_from_average():

@@ -40,7 +40,7 @@ from PySide6.QtCore import QTimer
 
 import chamber_fit
 from ui.qml.app_paths import previous_version_roots
-from ui.qml.chamber_results import board_results, overview_table
+from ui.qml.chamber_results import board_results, combined_table, overview_table
 from uds.data_identifiers import UdsData
 from uds.services.read_data_by_id import ServiceReadDataById
 
@@ -1152,18 +1152,22 @@ class AppControllerChamberMixin(AppControllerContract):
         multi = getattr(self, "_mb_on", None)
         if multi is not None and multi():
             shown = getattr(self, "_mb_active_sa", None)
-            for board in self._mb_working_boards():
+            # Чтобы отключённая плата не теряла свои итоги, включаем все сохранённые контексты списка.
+            for board in self._mb_boards:
                 sa = int(board["sa"])
                 with self._mb_context(sa, notify=False):
                     result = board_results(self._chamber_points, str(board["name"]), f"0x{sa:02X}")
                 result["shown"] = sa == shown
                 boards.append(result)
         else:
-            result = board_results(self._chamber_points, "Плата", "")
+            target = getattr(self, "_resolve_calibration_target_sa", None)
+            sa_text = f"0x{int(target()) & 0xFF:02X}" if callable(target) else ""
+            result = board_results(self._chamber_points, "Плата", sa_text)
             result["shown"] = True
             boards.append(result)
         file = pathlib.Path(self._chamber_file_path).name if self._chamber_file_path else ""
         return {"boards": boards, "overview": overview_table(boards) if len(boards) > 1 else None,
+                "combined": combined_table(boards),
                 "file": file, "time": datetime.now().strftime("%d.%m.%Y %H:%M")}
 
     def _chamber_coverage_rows(self) -> list:
