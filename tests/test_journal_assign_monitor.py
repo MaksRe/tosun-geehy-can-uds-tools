@@ -307,7 +307,15 @@ def test_check_scenario_never_writes_a_profile():
 
 def test_check_run_starts_without_stage1_journals(tmp_path: Path):
     stub = _with_control(_stub(tmp_path))
+    stub._chamber_auto_write = True
     assert stub._climate_scenario_new("check")
+    # До старта сценарий в «Прогон в камере» ещё не перенесён, а проверки уже видят проверку профиля:
+    # иначе «Старт» неактивен (12.11.2026).
+    assert not getattr(stub, "_chamber_check_only", False)
+    checks = {item["key"]: item for item in stub._climate_auto_checks()}
+    assert checks["stage2"]["ok"] and checks["auto_write"]["ok"], checks
+    assert "stage2_liquid" not in checks
+    assert not stub._climate_auto_blockers()
     stub._climate_scenario_apply_chamber()
     assert stub._chamber_check_only is True and stub._chamber_auto_write is False
     checks = {item["key"]: item for item in stub._climate_auto_checks()}

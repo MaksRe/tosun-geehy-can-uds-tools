@@ -461,7 +461,8 @@ def test_run_check_warns_when_several_boards_but_mode_off(tmp_path: Path):
     checks = {item["key"]: item for item in stub._climate_auto_checks()}
     assert not checks["boards"]["ok"] and "выключено" in checks["boards"]["text"]
     assert stub._mb_set_enabled(True)[0]
-    stub._chamber_auto_write = True
+    # Автозапись в проверке - из сценария: при старте он перенесёт её в «Прогон в камере».
+    stub._climate_scenario["auto_write"] = True
     checks = {item["key"]: item for item in stub._climate_auto_checks()}
     assert checks["boards"]["ok"] and "по очереди" in checks["boards"]["text"]
 

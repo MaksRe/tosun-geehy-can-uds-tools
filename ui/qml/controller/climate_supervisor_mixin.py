@@ -411,7 +411,12 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             add("labels", True, f"Пометка «{labels[0]}»: оператор не нужен")
         if getattr(self, "_chamber_board_only", False) and labels and labels != ["0/0"]:
             add("board_label", False, "В режиме «только плата» пометка должна быть «0/0»", "warn")
-        check_only = bool(getattr(self, "_chamber_check_only", False))
+        # Проверка профиля и автозапись - из выбранного сценария: в «Прогон в камере» он переносится только при
+        # старте, а список проверок рисуется раньше (12.11.2026: «Проверка профиля» показывала красный «Второй
+        # этап» и не давала нажать «Старт», хотя старт сам перенёс бы признак проверки).
+        scenario = getattr(self, "_climate_scenario", None) or {}
+        check_only = bool(scenario.get("check_only", getattr(self, "_chamber_check_only", False)))
+        planned_write = bool(scenario.get("auto_write", getattr(self, "_chamber_auto_write", False))) and not check_only
         if check_only:
             # 12.11.2026: проверке профиля журналы первого этапа не нужны - по ней ничего не считается.
             add("stage2", True, "Проверка профиля: журналы первого этапа не нужны - у каждой платы будет свой журнал "
@@ -420,7 +425,7 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         elif stage2:
             self._climate_auto_stage2_checks(add, getattr(self, "_chamber_board_only", False))
 
-        auto_write = bool(getattr(self, "_chamber_auto_write", False))
+        auto_write = planned_write
         if check_only:
             add("auto_write", True, "Проверка профиля: профиль в платы не пишется")
         else:
@@ -452,7 +457,7 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
                 add("boards", True, f"Несколько плат: {count} на шине - у каждой свой журнал проверки, "
                                     "профили в платах не меняются")
             elif multi_on is not None and multi_on():
-                auto_write = bool(getattr(self, "_chamber_auto_write", False))
+                auto_write = planned_write
                 count = len(self._mb_working_boards()) or len(boards)
                 add("boards", auto_write,
                     f"Несколько плат: {count} на шине - у каждой свой журнал и таблицы; профили запишутся в каждую плату "
