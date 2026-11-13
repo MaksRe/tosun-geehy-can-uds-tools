@@ -331,6 +331,22 @@ class AppControllerChamberLiveMixin(AppControllerContract):
             return key, var, signed
         return None
 
+    # Не чаще раза в столько секунд окно перечитывает показания, монитор и ленту плат.
+    CHAMBER_LIVE_NOTIFY_S = 0.5
+
+    def _chamber_live_notify(self, now: float):
+        """«Показания обновились» - не чаще двух раз в секунду.
+
+        13.11.2026: сигнал шёл на каждом такте опроса (90-150 мс) и на каждом ответе платы, а окно на
+        каждый сигнал заново собирало монитор, ленту плат и таблицы. Через сутки прогона трёх плат это
+        занимало большую часть времени потока окна: ответы плат обрабатывались с опозданием, опрос
+        считал платы пропавшими и переподключался, программа подтормаживала.
+        """
+        if now - float(getattr(self, "_chamber_live_notified_s", 0.0) or 0.0) < self.CHAMBER_LIVE_NOTIFY_S:
+            return
+        self._chamber_live_notified_s = now
+        self.chamberLiveChanged.emit()
+
     def _on_chamber_live_tick(self):
         """Такт опроса: один запрос, если шина свободна, и обновление показа."""
         # Несколько плат: очередь записи профилей идёт и при занятой шине, и при закрытом разделе.
@@ -351,8 +367,9 @@ class AppControllerChamberLiveMixin(AppControllerContract):
         monitor_tick = getattr(self, "_chamber_monitor_tick", None)
         if monitor_tick is not None:
             monitor_tick(now)
-        # Возраст показаний меняется и без ответов, поэтому показ обновляется каждый такт.
-        self.chamberLiveChanged.emit()
+        # Возраст показаний меняется и без ответов, поэтому показ обновляется сам - но не чаще
+        # двух раз в секунду (см. _chamber_live_notify).
+        self._chamber_live_notify(now)
         self._chamber_live_check_waiting(now)
 
         if not self._can.is_connect or not self._can.is_trace:
@@ -448,7 +465,8 @@ class AppControllerChamberLiveMixin(AppControllerContract):
             self._chamber_live_refusals.pop(key, None)
             if self._chamber_live_pending is not None and self._chamber_live_pending[0] == key:
                 self._chamber_live_pending = None
-            self.chamberLiveChanged.emit()
+            # Окно узнает о новом показании на ближайшем такте опроса (не позже чем через 0,5 с):
+            # сигнал на каждый ответ перегружал поток окна, а с ним и опрос плат.
             return
 
     # ------------------------------------------------------------------ показ

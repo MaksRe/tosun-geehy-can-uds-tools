@@ -674,7 +674,7 @@
   // full - для вкладки «Журнал»: там к плитке добавляются снятые узлы и число точек.
   function boardTileHtml(b, i, selected, full) {
     const tone = !b.fresh ? "bad" : b.stable ? "ok" : "warn";
-    const status = !b.fresh ? "нет связи" : b.stable ? "устоялась" : b.rateText;
+    const status = !b.fresh ? "нет связи" : b.stateText || (b.stable ? "устоялась" : b.rateText);
     return `<div class="tile ${selected ? "shown" : ""}" role="button" tabindex="0" aria-pressed="${selected}" data-show-board="${esc(b.saText)}">` +
       `<div class="head"><span class="mark" style="background:${boardColor(i)}"></span><span class="name">${esc(b.name)}</span>` +
       `<span class="sa">${esc(b.saText)}</span></div>` +

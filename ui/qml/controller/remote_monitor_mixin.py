@@ -49,7 +49,7 @@ from ui.qml.telegram_bot import (LEVEL_TITLES, LEVELS, OPTIONS, ROLE_TITLES, Tel
                                  public_user, validate_init_data)
 
 from .contract import AppControllerContract
-from .stability import is_stable, rate_and_spread
+from .stability import is_stable, quiet_on_average, rate_and_spread, unstable_reason
 
 # Откуда адрес https мини-приложения: ngrok (основной), туннель Cloudflare или свой сервер.
 MINIAPP_MODES = ("tailscale", "ngrok", "tunnel", "manual")
@@ -740,9 +740,8 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             self._remote_stable_text = "Температура платы: истории ещё мало."
             self._remote_stable_ok = False
             return
-        rate, spread, covered = result
+        rate = result[0]
         rate_text = f"{rate:+.3f} °C/мин".replace(".", ",")
-        full_window = covered >= window_s * 0.9
         stable = is_stable(result, window_s, rate_limit, self.REMOTE_STABLE_SPREAD_C)
         board = self._remote_history[-1][1]
 
@@ -759,8 +758,8 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             return
 
         self._remote_stable_ok = False
-        wait = "" if full_window else f", окно заполнено на {int(covered / window_s * 100)} %"
-        self._remote_stable_text = f"Плата ещё меняется: {rate_text}{wait}."
+        reason = unstable_reason(result, window_s, rate_limit, self.REMOTE_STABLE_SPREAD_C)
+        self._remote_stable_text = f"Плата ещё не устоялась: {reason}."
         if self._remote_stable_announced and abs(rate) > self.REMOTE_MOVING_RATE_C_MIN:
             self._remote_stable_announced = False
             who = "средняя температура плат" if self._remote_multi() else "температура платы"
@@ -773,14 +772,23 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         temperatures = self._mb_board_temps(now)
         for board in self._mb_working_boards(now):
             sa = int(board["sa"])
-            series = ((stamp, temps.get(sa)) for stamp, temps in self._remote_boards_history if temps.get(sa) is not None)
+            series = [(stamp, temps.get(sa)) for stamp, temps in self._remote_boards_history if temps.get(sa) is not None]
             rate = rate_and_spread(series, now, window_s)
-            stable = (rate is not None and temperatures.get(sa, (None, None))[0] is not None
-                      and is_stable(rate, window_s, rate_limit, self.REMOTE_STABLE_SPREAD_C))
-            result[sa] = (None if rate is None else rate[0], bool(stable))
+            fresh = temperatures.get(sa, (None, None))[0] is not None
+            stable = fresh and is_stable(rate, window_s, rate_limit, self.REMOTE_STABLE_SPREAD_C)
+            if stable:
+                state = "устоялась"
+            elif fresh and rate is not None and quiet_on_average(series, now, window_s, rate_limit):
+                # Как у прогона: показание скачет, но за три окна плата никуда не уходит.
+                stable = True
+                state = f"в среднем стоит, скачет на {rate[1]:.1f} °C".replace(".", ",")
+            else:
+                state = ("нет свежей температуры" if not fresh
+                         else unstable_reason(rate, window_s, rate_limit, self.REMOTE_STABLE_SPREAD_C))
+            result[sa] = (None if rate is None else rate[0], bool(stable), state)
         self._remote_boards_stability = result
         total = len(result)
-        stable_count = sum(1 for _rate, stable in result.values() if stable)
+        stable_count = sum(1 for _rate, stable, _state in result.values() if stable)
         if not total:
             return
         avg = self._remote_history[-1][1] if self._remote_history else None
@@ -789,9 +797,8 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             self._remote_stable_text = f"Температура устойчива у {total} из {total} плат{avg_text}."
             self._remote_stable_ok = True
             return
-        moving = [f"{self._mb_label(sa)} " + ("истории мало" if rate is None
-                                                else f"{rate:+.3f} °C/мин".replace(".", ","))
-                  for sa, (rate, stable) in result.items() if not stable]
+        moving = [f"{self._mb_label(sa)} {state}"
+                  for sa, (_rate, stable, state) in result.items() if not stable]
         self._remote_stable_text = (f"Устоялись {stable_count} из {total} плат{avg_text}; ещё меняются: "
                                     + ", ".join(moving[:5]) + ".")
         self._remote_stable_ok = False
@@ -810,14 +817,14 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             sa = int(row["sa"])
             board_c, fuel_c = temps.get(sa, (None, None))
             extra = details.get(sa, {})
-            rate, stable = self._remote_boards_stability.get(sa, (None, False))
+            rate, stable, state = self._remote_boards_stability.get(sa, (None, False, "истории мало"))
             rows.append({
                 "name": row["name"], "saText": row["saText"], "sa": sa, "active": row["active"],
                 "fresh": row["fresh"],
                 "boardTemp": "—" if board_c is None else f"{board_c:+.1f} °C".replace(".", ","),
                 "fuelTemp": "—" if fuel_c is None else f"{fuel_c:+.1f} °C".replace(".", ","),
                 "rateText": "—" if rate is None else f"{rate:+.3f} °C/мин".replace(".", ","),
-                "stable": bool(stable), "main": row["main"], "media": row["media"],
+                "stable": bool(stable), "stateText": state, "main": row["main"], "media": row["media"],
                 "mainNow": row.get("mainNow", "—"), "mediaNow": row.get("mediaNow", "—"),
                 "points": row["points"], "tablesComplete": row["tablesComplete"],
                 "profileState": row.get("profileState", ""), "profileTone": row.get("profileTone", "normal"),
@@ -991,7 +998,7 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             lines.append(snapshot.get("stability", {}).get("text", ""))
             for row in boards.get("rows") or []:
                 lines.append(f"{'✓' if row.get('stable') else '○'} {row['name']} {row['saText']}: плата {row['boardTemp']}, "
-                             f"топливо {row['fuelTemp']}, {row['rateText']}, точек {row['points']}, профиль "
+                             f"топливо {row['fuelTemp']}, {row.get('stateText') or row['rateText']}, точек {row['points']}, профиль "
                              f"{row.get('profileState') or '—'}")
         else:
             lines.append(f"Плата {board}. {snapshot.get('stability', {}).get('text', '')}")

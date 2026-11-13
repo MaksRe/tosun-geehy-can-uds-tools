@@ -186,12 +186,23 @@ class AppControllerChamberMonitorMixin(AppControllerContract):
         truth = sample.get("truth")
         return None if truth is None else sample["level"] / 10.0 - float(truth)
 
-    def _chamber_monitor_board(self, label: str, now: float) -> dict:
-        """Сводка монитора одной платы (в её поле): уровень сейчас, погрешность, сдвиг от +25 °C, узлы."""
-        missing = set(self._chamber_live_missing or set())
-        current = self._chamber_monitor_current(now)
-        ref = self._chamber_monitor_ref
-        history = list(self._chamber_monitor_history or [])
+    def _chamber_monitor_summary(self, label: str, history: list, ref: dict | None):
+        """Итоги истории платы: по узлам, худший сдвиг и худшая погрешность.
+
+        13.11.2026: история за сутки - тысячи записей у каждой платы, а окно перечитывало монитор
+        на каждом обновлении показаний; полный проход по истории всех плат занимал поток окна, и
+        ответы плат опаздывали («пропадает связь», программа тормозила). История меняется раз в
+        20 с, поэтому итоги пересчитываются, только когда в ней новая запись или новое показание
+        при +25 °C, а не на каждом обновлении.
+        """
+        key = (len(history), history[-1].get("wall") if history else None,
+               None if ref is None else (ref.get("level"), ref.get("wall"), ref.get("auto")))
+        cache = getattr(self, "_chamber_monitor_cache", None)
+        if cache is None:
+            cache = self._chamber_monitor_cache = {}
+        cached = cache.get(label)
+        if cached is not None and cached[0] == key:
+            return cached[1]
         stats: dict[int, dict] = {}
         worst_shift = worst_error = None
         for sample in history:
@@ -208,6 +219,17 @@ class AppControllerChamberMonitorMixin(AppControllerContract):
                 worst_shift = (shift, sample["tube"], sample["clock"])
             if error is not None and (worst_error is None or abs(error) > abs(worst_error[0])):
                 worst_error = (error, sample["tube"], sample["clock"])
+        result = (stats, worst_shift, worst_error)
+        cache[label] = (key, result)
+        return result
+
+    def _chamber_monitor_board(self, label: str, now: float) -> dict:
+        """Сводка монитора одной платы (в её поле): уровень сейчас, погрешность, сдвиг от +25 °C, узлы."""
+        missing = set(self._chamber_live_missing or set())
+        current = self._chamber_monitor_current(now)
+        ref = self._chamber_monitor_ref
+        history = list(self._chamber_monitor_history or [])
+        stats, worst_shift, worst_error = self._chamber_monitor_summary(label, history, ref)
         shift = None if current is None or ref is None else (current["level"] - ref["level"]) / 10.0
         error = None if current is None else self._chamber_monitor_error(current)
         comp_shift = None if current is None or ref is None else current["comp"] - ref["comp"]

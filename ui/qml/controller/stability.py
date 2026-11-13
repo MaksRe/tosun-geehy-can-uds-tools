@@ -38,6 +38,35 @@ def is_stable(result, window_s: float, rate_limit: float, spread_limit: float) -
     return covered >= window_s * 0.9 and abs(rate) < rate_limit and spread < spread_limit
 
 
+def quiet_on_average(samples, now: float, window_s: float, rate_limit: float) -> bool:
+    """Показание колеблется, но в среднем стоит: скорость по окну втрое длиннее меньше порога.
+
+    То же правило, что у прогона: шум датчика (разброс больше предела) не держит плату
+    в «ещё меняется» бесконечно, если за три окна она никуда не уходит.
+    """
+    long_s = 3.0 * window_s
+    result = rate_and_spread(samples, now, long_s)
+    return result is not None and result[2] >= long_s * 0.9 and abs(result[0]) < rate_limit
+
+
+def unstable_reason(result, window_s: float, rate_limit: float, spread_limit: float) -> str:
+    """Почему температура ещё не «устоялась» - коротко и понятно, а не одной скоростью.
+
+    Скорость +0,000 °C/мин рядом с «ещё меняется» сбивала с толку: держит окно или разброс.
+    """
+    if result is None:
+        return "истории мало"
+    rate, spread, covered = result
+    rate_text = f"{rate:+.3f} °C/мин".replace(".", ",")
+    if abs(rate) >= rate_limit:
+        return rate_text
+    if covered < window_s * 0.9:
+        return f"стоит {covered / 60:.0f} из {window_s / 60:g} мин"
+    if spread >= spread_limit:
+        return f"скачет на {spread:.1f} °C".replace(".", ",")
+    return rate_text
+
+
 def predict_final(samples, start: float, now: float, chunks: int = 6, min_change_c: float = 0.5,
                   max_tau_s: float = 600 * 60.0, min_fit: float = 0.6):
     """Где устоится температура, которая подходит к своему значению по экспоненте.

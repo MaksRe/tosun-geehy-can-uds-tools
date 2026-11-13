@@ -439,8 +439,10 @@ class AppControllerMultiBoardMixin(AppControllerContract):
     def _mb_on_bus(self, sa: int, now: float | None = None) -> bool:
         """Плата присылала температуру за последнюю минуту."""
         now = time.monotonic() if now is None else now
-        with self._mb_context(sa, notify=False):
-            seen = float((self._chamber_live_seen or {}).get("board_temp", 0.0) or 0.0)
+        # Без переключения полей на плату: оно стоит ~45 присваиваний полей контроллера, а вызывается
+        # десятки раз на каждое обновление окна и снимок сайта (13.11.2026: тормоза при трёх платах).
+        seen_map = self._mb_context_value(sa, "_chamber_live_seen") or {}
+        seen = float(seen_map.get("board_temp", 0.0) or 0.0)
         return seen > 0.0 and now - seen <= self.MB_PRESENT_S
 
     def _mb_working_boards(self, now: float | None = None) -> list[dict]:
@@ -548,7 +550,8 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             return False
         pending = self._chamber_live_pending
         mine = self._mb_pending_sa == (int(src) & 0xFF)
-        with self._mb_context(src):
+        # Без сигнала окну на каждый ответ: показ обновится на ближайшем такте опроса.
+        with self._mb_context(src, notify=False):
             if not mine:
                 self._chamber_live_pending = None
             self._chamber_live_frame_apply(identifier, payload)
