@@ -485,9 +485,9 @@ class TelegramBot:
         if not self.ready:
             return
         mark = EVENT_MARK.get(level, "ℹ️")
-        body = f"{mark} {text}"
+        body = reports.notification_report(text, mark, kind)
         for chat_id in self._only_admins(self.users.recipients(level, kind)):
-            self._queue.put(("send", {"chat_id": chat_id, "text": body, "disable_web_page_preview": True}))
+            self.send_to(chat_id, body, html=True)
 
     def send_document(self, path, caption: str = "", chat_ids: list[str] | None = None):
         """Файл тем, кто включил «файлы» (или в указанные чаты)."""

@@ -169,6 +169,7 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         self._climate_auto_last_save = 0.0
         self._climate_auto_finishing = False
         self._climate_auto_finish_since = 0.0
+        self._climate_auto_finish_note = ""
         self._climate_auto_problems: list = []
         self._climate_auto_paused_by = ""
         self._climate_auto_last_remind = None
@@ -596,6 +597,8 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
     def _climate_auto_on_start(self, now: float):
         """Прогон начат: время, план и первое сохранение."""
         self._climate_auto_reset()
+        if getattr(self, "_remote_step_notes", None):
+            self._remote_step_notes.clear()
         self._climate_auto_session_start = now
         self._climate_auto_node_start = now
         self._climate_auto_last_report = now
@@ -629,10 +632,12 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         self._climate_auto_node_start = now
         left = self._climate_auto_eta(now)
         tail = f" Осталось примерно {duration_text(left)}." if left is not None else ""
-        self._climate_event(f"узел {_c(node)} пройден за {duration_text(seconds)} "
-                            f"({len(self._climate_auto_durations)} из {len(self._climate_run_nodes)}).{tail}", "ok")
+        heading = (f"узел {_c(node)} пройден за {duration_text(seconds)} "
+                   f"({self._climate_run_index + 1} из {len(self._climate_run_nodes)}).{tail}")
+        self._climate_event(heading, "ok", kind="journal")
+        self._climate_hook("_remote_flush_step", heading[:1].upper() + heading[1:])
 
-    def _climate_auto_on_node_left(self, node: float, now: float, who: str = ""):
+    def _climate_auto_on_node_left(self, node: float, now: float, who: str = "", heading: str = ""):
         """Шаг оставлен вручную без точки: его время - отдельной строкой, отсчёт следующего шага - с нуля.
 
         Иначе часы, проведённые на пропущенном шаге, приписывались следующему: на стенде
@@ -641,11 +646,13 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         """
         started = self._climate_auto_node_start if self._climate_auto_node_start is not None else now
         seconds = (now - started) * self._climate_speed()
+        notified = self._climate_hook("_remote_flush_step", heading or f"Шаг {_c(node)} оставлен. Сняты отдельные точки.", True)
         self._climate_auto_skipped.append((float(node), seconds))
         self._climate_auto_node_start = now
         self._climate_auto_problems.append(
             f"{time.strftime('%d.%m %H:%M')} шаг {_c(node)} оставлен без точки через {duration_text(seconds)}"
             + (f" ({who})" if who else ""))
+        return notified
 
     def _climate_auto_on_finish(self, now: float | None = None):
         """Узлы пройдены: дальше ждём запись профиля и присылаем итог."""
@@ -660,6 +667,7 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         self._climate_auto_finish_elapsed = self._climate_auto_elapsed(time.monotonic())
         self._climate_auto_clear_file()
         self._climate_hook("_chamber_monitor_finish", reason)
+        self._climate_hook("_remote_flush_step", "Прогон остановлен. Ниже результаты последнего шага.")
         done = len(self._climate_auto_durations)
         if done:
             self._climate_event(f"до остановки пройдено узлов: {done} из {len(self._climate_run_nodes)} - "
@@ -753,9 +761,10 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         alarm = getattr(reading, "alarm", None) if reading is not None else None
         if alarm:
             codes = ", ".join((getattr(reading, "details", None) or {}).get("alarms") or []) or str(alarm)
-            if self._climate_auto_alert("alarm", True, f"АВАРИЯ КАМЕРЫ (код {codes}): прогон поставлен на паузу. "
-                                                       f"Осмотрите камеру и нажмите «Продолжить прогон».", "bad"):
-                self._climate_auto_pause("alarm", f"авария камеры, код {codes}.")
+            if not self._climate_run_paused or "alarm" in self._climate_auto_alerts:
+                if self._climate_auto_alert("alarm", True, f"АВАРИЯ КАМЕРЫ (код {codes}): прогон поставлен на паузу. "
+                                                           f"Осмотрите камеру и нажмите «Продолжить прогон».", "bad"):
+                    self._climate_auto_pause("alarm", f"авария камеры, код {codes}.")
         elif reading is not None and "alarm" in self._climate_auto_alerts:
             self._climate_auto_alert("alarm", False, "", cleared="авария камеры снята. Прогон на паузе: проверьте "
                                                                  "камеру и нажмите «Продолжить прогон».")
@@ -764,14 +773,19 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         stages = getattr(self, "_mb_run_stages", None) or {}
         board_fresh = self._chamber_live_fresh("board_temp", time.monotonic())
         if stages and stage in ACTIVE_STAGES:
+            silent_boards = []
             for sa in stages:
                 seen = self._mb_context_value(sa, "_chamber_live_seen") or {}
                 missing = now - (seen.get("board_temp") or 0.0) > self._chamber_live_stale_s()
-                silence = self._climate_auto_since(f"board_lost_{sa}", missing, now)
-                self._climate_auto_alert(
-                    f"board_{sa}", silence >= self.AUTO_BOARD_LOST_S,
-                    f"{self._mb_label(sa)}: нет свежей температуры {int(silence)} с.", "bad",
-                    f"{self._mb_label(sa)}: температура снова поступает.")
+                if self._climate_auto_since(f"board_lost_{sa}", missing, now) >= self.AUTO_BOARD_LOST_S:
+                    silent_boards.append(sa)
+            previous = self._climate_auto_watch.get("silent_boards", [])
+            message = "Температура не поступает от плат\n" + ", ".join(self._mb_label(sa) for sa in silent_boards)
+            raised = self._climate_auto_alert("boards", bool(silent_boards), message, "bad",
+                                               "Температура снова поступает от всех плат.")
+            if silent_boards and silent_boards != previous and not raised:
+                self._climate_event(message, "bad")
+            self._climate_auto_watch["silent_boards"] = silent_boards
         silent = self._climate_auto_since("board_lost", stage in ACTIVE_STAGES and not board_fresh, now)
         self._climate_auto_alert(
             "board", not stages and silent >= self.AUTO_BOARD_LOST_S,
@@ -1055,20 +1069,34 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
             else None
         eta = self._climate_auto_eta(now)
         parts = [
-            f"сводка: узел {index + 1} из {len(nodes)} ({_c(nodes[index])}), {self._climate_run_status}",
-            f"камера {_c(getattr(reading, 'actual_c', None))} при уставке {_c(getattr(reading, 'setpoint_c', None))}",
-            f"плата {_c(None if board is None else int(board) / 10.0)}",
-            f"точек в журнале {len(getattr(self, '_chamber_points', []) or [])}",
+            f"сводка: узел {index + 1} из {len(nodes)} · {_c(nodes[index])}",
+            f"Камера {_c(getattr(reading, 'actual_c', None))} · уставка {_c(getattr(reading, 'setpoint_c', None))}",
             f"прошло {duration_text(self._climate_auto_elapsed(now))}"
-            + (f", осталось ≈ {duration_text(eta)}" if eta is not None else ""),
+            + (f" · осталось ≈ {duration_text(eta)}" if eta is not None else ""),
+            "",
+            self._climate_run_status.replace("; ", "\n• "),
         ]
+        if self._climate_multi():
+            rows = []
+            for item in self._mb_result_boards(now):
+                sa = item["sa"]
+                seen = self._mb_context_value(sa, "_chamber_live_seen") or {}
+                values = self._mb_context_value(sa, "_chamber_live_last") or {}
+                last = values.get("board_temp") if now - seen.get("board_temp", 0) <= self._chamber_live_stale_s() else None
+                points = len(self._mb_context_value(sa, "_chamber_points") or [])
+                rows.append(f"• {self._mb_label(sa)} · {_c(None if last is None else last / 10)} · точек {points}")
+            if rows:
+                parts.append("\nПлаты\n" + "\n".join(rows))
+        else:
+            parts.append(f"Плата {_c(None if board is None else board / 10)} · "
+                         f"точек в журнале {len(self._chamber_points)}")
         dew_fn = getattr(self, "_climate_dew", None)
         dew = dew_fn(now) if dew_fn is not None else None
         if dew is not None:
-            parts.insert(3, dew["text"].rstrip("."))
+            parts.append(dew["text"].rstrip("."))
         if self._climate_auto_alerts:
-            parts.append("проблемы: " + "; ".join(item["text"] for item in self._climate_auto_alerts.values()))
-        return ". ".join(parts) + "."
+            parts.append("\nЗамечания\n" + "\n".join(f"• {item['text']}" for item in self._climate_auto_alerts.values()))
+        return "\n".join(parts)
 
     def _climate_auto_maybe_report(self, now: float):
         """Сводка по расписанию: раз в N минут (0 - не присылать)."""
@@ -1106,32 +1134,60 @@ class AppControllerClimateSupervisorMixin(AppControllerContract):
         failed_profiles = self._climate_hook("_mb_profile_failures") or []
         if not self._climate_multi() and getattr(self, "_chamber_auto_write", False) and getattr(self, "_profile_last_result", None) == "fail":
             failed_profiles = ["выбранная плата"]
-        profile_note = (" Не подтверждена запись профилей: " + ", ".join(failed_profiles)
-                        + ". Проверьте сохранённые таблицы и повторите запись и сверку профиля.") if failed_profiles else ""
-        text = (f"ИТОГ ПРОГОНА: пройдено {len(self._climate_auto_durations)} из {len(self._climate_run_nodes)} "
-                f"температур за {duration_text(elapsed)}. Точек в журнале: "
-                f"{len(getattr(self, '_chamber_points', []) or [])}. По узлам: {self._climate_auto_nodes_text()}. "
-                f"Таблицы: {tables} Профиль: {chain}{self._climate_hook('_mb_summary_text') or ''} "
-                + (f"Проблем за прогон: {len(problems) + len(failed_profiles)}." if problems or failed_profiles else "Проблем за прогон не было.")
-                + profile_note)
+        sections = [f"ИТОГ ПРОГОНА: пройдено {len(self._climate_auto_durations)} из {len(self._climate_run_nodes)} "
+                    f"температур за {duration_text(elapsed)} (ч:мин)."]
+        finish_note = getattr(self, "_climate_auto_finish_note", "")
+        if finish_note:
+            sections.append(finish_note)
+        if problems or failed_profiles:
+            remarks = [f"Событий с замечаниями: {len(problems)}"]
+            if failed_profiles:
+                remarks.append("Не подтверждена запись профилей: " + ", ".join(failed_profiles) + ".")
+                remarks.append("Проверьте таблицы и повторите запись и сверку профиля.")
+            sections.append("Замечания\n" + "\n".join(remarks))
+        boards = self._climate_hook("_mb_summary_rows") or []
+        if boards:
+            sections.append("Платы\n" + "\n".join(f"• {row['text']}" for row in boards))
+        else:
+            profile = [f"Точек в журнале: {len(getattr(self, '_chamber_points', []) or [])}", tables, chain]
+            sections.append("Таблицы и профиль\n" + "\n".join(line for line in profile if line))
+        monitor = {}
+        if getattr(self, "_chamber_monitor_session", None) is not None:
+            self._climate_hook("_chamber_monitor_finish")
+            monitor = self._climate_hook("_chamber_monitor_view") or {}
+        if monitor.get("levelEnabled") and monitor.get("live"):
+            levels = (f"• {row['label']} · {row['worst']} · {row['status']}" for row in monitor["live"])
+            sections.append("Проверка уровня\nДопуск ±1 %\n" + "\n".join(levels))
+        for title, steps in (("Температурные шаги", self._climate_auto_durations),
+                             ("Пропущенные шаги", self._climate_auto_skipped)):
+            if steps:
+                sections.append(title + "\n" + "\n".join(
+                    f"• {_c(node)} - {duration_text(seconds)}" for node, seconds in steps))
+        text = "\n\n".join(sections)
         if failed_profiles:
             self._climate_run_set("Температурные этапы завершены. Не подтверждена запись профилей: " + ", ".join(failed_profiles) + ".", "#dc2626")
         elif getattr(self, "_mb_profile_outcomes", None):
             profiles_done = ("Профили плат обучения записаны, сверены и сохранены." if getattr(self, "_mb_run_stages", None)
                              else "Профили всех плат записаны, сверены и сохранены.")
             self._climate_run_set("Автоматический прогон закончен. " + profiles_done, "#16a34a")
-        self._climate_event(text, "bad" if failed_profiles else "ok" if not problems and getattr(self, "_chamber_tables_complete", False) else "warn")
-        if problems:
-            self._climate_auto_send_report()
-        # 13.11.2026: подробный отчёт PDF - сам в конце прогона (run_report_mixin).
-        self._climate_hook("_run_report_finish", "конец прогона")
+        level = "bad" if failed_profiles or monitor.get("tone") == "bad" else "warn"
+        complete = all(row["ready"] for row in boards) if boards else bool(self._chamber_tables_complete)
+        if monitor.get("levelEnabled"):
+            readings = monitor.get("live") or []
+            complete = bool(readings) and all(row["worst"] != "—" for row in readings)
+        if level != "bad" and not problems and complete and monitor.get("tone") != "warn":
+            level = "ok"
+        self._climate_event(text, level, kind="final")
+        pdf = self._climate_hook("_run_report_finish", "конец прогона")
+        if problems or failed_profiles or not pdf:
+            self._climate_auto_send_report(send_file=not pdf)
 
-    def _climate_auto_send_report(self):
+    def _climate_auto_send_report(self, send_file: bool = True):
         """Были проблемы: отчёт диагностики файлом - в Telegram тем, у кого включены «файлы»."""
         path = self._climate_save_report()
         remote = getattr(self, "_remote_settings", {}) or {}
         telegram = getattr(self, "_remote_telegram", None)
-        if path and telegram is not None and remote.get("telegram_enabled"):
+        if path and send_file and telegram is not None and remote.get("telegram_enabled"):
             telegram.send_document(path, "Отчёт диагностики камеры за прогон")
 
     # ------------------------------------------------------------------ продолжение после перезапуска

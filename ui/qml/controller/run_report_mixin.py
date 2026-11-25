@@ -306,7 +306,7 @@ class AppControllerRunReportMixin(AppControllerContract):
             return ""
         event = getattr(self, "_climate_event", None)
         if event is not None:
-            event(f"отчёт PDF ({why}): {path.rsplit(chr(92), 1)[-1].rsplit('/', 1)[-1]}", "info")
+            event(f"отчёт PDF ({why}): {path.rsplit(chr(92), 1)[-1].rsplit('/', 1)[-1]}", "info", kind="journal")
         remote = getattr(self, "_remote_settings", {}) or {}
         telegram = getattr(self, "_remote_telegram", None)
         if telegram is not None and remote.get("telegram_enabled"):

@@ -13,7 +13,8 @@
 
 from __future__ import annotations
 
-from html import escape
+import re
+from html import escape, unescape
 
 # Ширина строки таблицы: столько знаков моноширинного шрифта помещается на экране телефона.
 WIDTH = 34
@@ -43,7 +44,54 @@ def pre(text: str) -> str:
 
 
 def _clip(text: str) -> str:
-    return text if len(text) <= MAX_TEXT else text[:MAX_TEXT] + "\n…"
+    """Ограничивает сообщение целыми строками и закрывает открытые теги Telegram."""
+    if len(text) <= MAX_TEXT:
+        return text
+    prefix, cut, _ = text[:MAX_TEXT].rpartition("\n")
+    if not cut or len(prefix) < MAX_TEXT // 3:
+        plain = unescape(re.sub(r"<[^>]+>", "", text))
+        return escape(plain[:MAX_TEXT - 1]) + "…"
+    opened = []
+    for closing, tag in re.findall(r"<(/?)(b|i|pre|code)>", prefix):
+        if closing:
+            if opened and opened[-1] == tag:
+                opened.pop()
+        else:
+            opened.append(tag)
+    return prefix + "\n…" + "".join(f"</{tag}>" for tag in reversed(opened))
+
+
+_NOTIFICATION_TITLES = {
+    "event": "Климатическая камера",
+    "point": "Точки прогона",
+    "step_warning": "Точки прогона",
+    "summary": "Сводка прогона",
+    "final": "Итог прогона",
+}
+_NOTIFICATION_SECTIONS = frozenset((
+    "Температурные шаги", "Пропущенные шаги", "Платы", "Таблицы и профиль", "Замечания", "Снятые точки",
+    "Проверка уровня",
+))
+
+
+def notification_report(text: str, mark: str, kind: str) -> str:
+    """Превращает событие в сообщение Telegram с заголовком и безопасной разметкой."""
+    title = _NOTIFICATION_TITLES.get(kind, "Камера")
+    body = str(text).removeprefix("Камера: ")
+    if kind == "final":
+        body = body.removeprefix("ИТОГ ПРОГОНА: ")
+        body = body[:1].upper() + body[1:]
+    elif kind == "summary":
+        body = body.removeprefix("сводка: ")
+        body = body[:1].upper() + body[1:]
+    lines = body.splitlines()
+    rendered = [f"{mark} <b>{title}</b>", ""]
+    for line in lines:
+        safe = escape(line)
+        rendered.append(f"<b>{safe}</b>" if line in _NOTIFICATION_SECTIONS else safe)
+    if kind == "final":
+        rendered.extend(("", "Файлы прогона · <code>/all</code>"))
+    return _clip("\n".join(rendered))
 
 
 def _pairs(rows: list[tuple[str, str]]) -> str:
@@ -168,12 +216,23 @@ def steps_report(snapshot: dict) -> str:
 def points_report(snapshot: dict) -> str:
     """Последние точки журнала прогона."""
     journal = snapshot.get("run") or {}
-    rows = [[row.get("time", ""), row.get("boardTemp", ""), row.get("node", ""), row.get("main", ""), row.get("media", "")]
-            for row in (journal.get("rows") or [])[:15]]
-    head = f"<b>Точки</b> · всего {journal.get('points', 0)}" + (f" · {escape(journal['file'])}" if journal.get("file") else "")
-    if not rows:
+    points = (journal.get("rows") or [])[:15]
+    multiple = any(isinstance(row.get("sa"), int) for row in points)
+    head = "<b>Точки всех плат</b>" if multiple else f"<b>Точки</b> · всего {journal.get('points', 0)}"
+    if not multiple and journal.get("file"):
+        head += "\n" + escape(journal["file"])
+    if not points:
         return head + "\nТочек пока нет."
-    return _clip(head + "\n" + pre(table(["время", "плата", "узел", "осн", "вид"], rows, right=(1, 3, 4))))
+    rows = []
+    for point in points:
+        sa = point.get("sa")
+        temp = str(point.get("node", "")).replace(" °C", "")
+        row = [point.get("time"), temp, point.get("main"), point.get("media")]
+        if multiple:
+            row.insert(1, f"0x{sa:02X}" if isinstance(sa, int) else "—")
+        rows.append(row)
+    headers = ["время", "CAN", "узел", "осн", "вид"] if multiple else ["время", "узел", "осн", "вид"]
+    return _clip(head + "\n" + pre(table(headers, rows, right=tuple(range(len(headers) - 3, len(headers))))))
 
 
 def events_report(snapshot: dict, count: int = 15) -> str:

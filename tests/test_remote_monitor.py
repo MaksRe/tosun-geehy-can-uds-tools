@@ -792,3 +792,36 @@ def test_wrong_kind_of_ngrok_key_is_named_and_not_shown(monkeypatch, tmp_path: P
     log = (tmp_path / "ngrok.log").read_text(encoding="utf-8")
     assert "ERR_NGROK_105" in log and "ak_2wrong" not in log
 
+
+
+def test_automatic_points_are_sent_once_at_step_end(tmp_path: Path):
+    """Проверяет общую рассылку точек с адресами и причинами пропуска, включая ручной режим."""
+    stub = _RemoteStub(tmp_path)
+    stub._climate_run_stage = "capture"
+    stub._climate_run_node = lambda: 25
+    stub._remote_board_prefix = lambda: "0x81 (П1): "
+    point = dict(_full_run_points()[0])
+    stub._remote_note_point(point)
+    stub._remote_board_prefix = lambda: "0x82 (П2): "
+    stub._remote_note_point(point)
+    stub._remote_add_step_note("Замечания", "0x83 (П3) · нет ответа CAN")
+    assert stub._remote_telegram.sent == [] and len(stub._remote_events) == 2
+
+    assert stub._remote_flush_step("Шаг +25 °C завершён")
+    assert not stub._remote_flush_step("Следующий шаг")
+    [(message, level, kind)] = stub._remote_telegram.sent
+    assert "Снятые точки" in message and "Замечания" in message
+    assert all(address in message for address in ("0x81", "0x82", "0x83"))
+    assert (level, kind) == ("warn", "step_warning")
+
+
+def test_automatic_profile_notes_wait_for_joint_result(tmp_path: Path):
+    """Проверяет, что автоматическая очередь профилей пишет детали в ленту без рассылки по одной плате."""
+    stub = _RemoteStub(tmp_path)
+    stub._climate_auto_finishing = True
+    profile = tmp_path / "profile.json"
+    profile.write_text("{}", encoding="utf-8")
+    stub._remote_note_chain(True, "0x81 профиль записан", str(profile))
+    stub._remote_note_chain(False, "0x82 сбой сверки")
+    assert len(stub._remote_events) == 2 and str(profile) == stub._remote_sync.queued[-1][0]
+    assert not stub._remote_telegram.sent and not stub._remote_telegram.documents

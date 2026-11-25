@@ -259,10 +259,11 @@ def test_profiles_are_written_one_board_after_another(tmp_path: Path):
         stub._mb_profile_tick(now)
         assert stub._mb_profiles_busy()
         stub._chamber_chain_stage = ""
+        stub._chamber_chain_steps = {"file": "ok"}
     stub._mb_profile_tick(now)
     assert started == [0x80, 0x81, 0x82] and not stub._mb_profiles_busy()
     assert "записан в 0x82" in stub._mb_profile_results[0x82]
-    assert "0x81 (П2): точек 0, профиль записан в 0x81" in stub._mb_summary_text()
+    assert {"text": "0x81 (П2) · точек 0 · профиль подтверждён", "ready": True} in stub._mb_summary_rows()
 
 
 def test_board_list_is_kept_and_checked(tmp_path: Path):

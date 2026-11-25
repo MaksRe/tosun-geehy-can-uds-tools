@@ -792,7 +792,9 @@ class AppControllerClimateChamberMixin(AppControllerContract):
     def _climate_watch_alarm(self):
         alarm = getattr(self._climate_reading, "alarm", None)
         if alarm and alarm != self._climate_alarm_reported:
-            self._climate_event(f"АВАРИЯ КАМЕРЫ: код {alarm}. Проверьте камеру.", "bad")
+            in_run = bool(self._climate_run_stage) and getattr(self, "_climate_auto_alerts", None) is not None and not self._climate_run_paused
+            self._climate_event(f"АВАРИЯ КАМЕРЫ: код {alarm}. Проверьте камеру.", "bad",
+                                kind="journal" if in_run else "event")
         self._climate_alarm_reported = alarm or 0
 
     def _climate_event(self, text: str, level: str = "info", kind: str = "event"):
@@ -2200,7 +2202,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 self._climate_run_set(f"Узел {where}: {self._climate_ramp_text()}, в камере {_c(actual)}.")
                 return
             if actual is not None and abs(actual - setpoint) <= tolerance:
-                self._climate_event(f"камера вышла на {_c(setpoint)}, жду, пока устоится плата.", "info")
+                self._climate_event(f"камера вышла на {_c(setpoint)}, жду, пока устоится плата.", "info", kind="journal")
                 self._climate_run_enter("settle", now)
                 return
             left = self._climate_time_left(now, "reach_timeout_min")
@@ -2299,7 +2301,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 if overdue and not (stable or quiet_long):
                     self._climate_event(f"время ожидания вышло при {_c(board)} (узел {_c(node)}), {then}.", "warn")
                 else:
-                    self._climate_event(f"плата устоялась при {_c(board)} (узел {_c(node)}), {then}.", "ok")
+                    self._climate_event(f"плата устоялась при {_c(board)} (узел {_c(node)}), {then}.", "ok", kind="journal")
                 if hold > 0:
                     self._climate_run_enter("hold", now)
                 else:
@@ -2425,6 +2427,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         if not retries.get(node):
             retries[node] = 1
             self._chamber_points.pop()
+            self._climate_hook("_remote_discard_last_step_point")
             self._chamber_after_change()
             self._chamber_repeat_last = None
             self._climate_run_hold_override_s = self.CLIMATE_REPEAT_RECHECK_S
@@ -2483,7 +2486,11 @@ class AppControllerClimateChamberMixin(AppControllerContract):
 
     def _climate_run_fault(self, cause: str, text: str):
         """Останавливает переходы прогона при отказе и сохраняет причину для оператора."""
-        self._climate_event(text, "bad")
+        alert = getattr(self, "_climate_auto_alert", None)
+        if cause == "alarm" and alert is not None:
+            alert("alarm", True, text, "bad")
+        else:
+            self._climate_event(text, "bad")
         pause = getattr(self, "_climate_auto_pause", None)
         if pause:
             pause(cause, text)
@@ -2592,7 +2599,10 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 self._climate_run_skip_node(now, text, "условия записи не подтверждены")
                 return
             self._mb_stage_excluded.update(waiting)
-            self._climate_event(f"Узел {where}. {text}", "warn")
+            for sa, state in waiting.items():
+                problems = ", ".join(state["reasons"])
+                self._climate_hook("_remote_add_step_note", "Замечания", f"{self._mb_label(sa)} · {problems}")
+            self._climate_event(f"Узел {where}. {text}", "warn", kind="journal")
         if self._climate_run_param("hold_min") > 0:
             self._climate_run_enter("hold", now)
         else:
@@ -2658,11 +2668,11 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         node = self._climate_run_node()
         nodes = self._climate_run_nodes
         last = self._climate_run_index + 1 >= len(nodes)
-        self._climate_event(f"узел {_c(node)} пропущен без точки: {why}. "
-                            + ("Это был последний шаг." if last else
-                               f"Перехожу к шагу {self._climate_run_index + 2} ({_c(nodes[self._climate_run_index + 1])})."),
-                            "warn")
-        self._climate_hook("_climate_auto_on_node_left", node, now, who)
+        message = (f"узел {_c(node)} пропущен без точки: {why}.\n"
+                   + ("Это был последний шаг." if last else
+                      f"Следующий шаг · {self._climate_run_index + 2} ({_c(nodes[self._climate_run_index + 1])})."))
+        batched = self._climate_hook("_climate_auto_on_node_left", node, now, who, message)
+        self._climate_event(message, "warn", kind="journal" if batched else "event")
         self._climate_run_index += 1
         self._climate_run_reset_board()
         self._climate_run_label_index = 0
@@ -2730,7 +2740,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             then = ", затем остановлю её" if finish_stop else ""
             self._climate_run_set(f"Все шаги пройдены. Возвращаю камеру к {_c(finish)}{then}.", "#16a34a")
             self._climate_event(f"все шаги пройдены ({len(self._climate_run_done)} температур): возвращаю камеру к "
-                                f"{_c(finish)}{then}.", "info")
+                                f"{_c(finish)}{then}.", "info", kind="journal")
             return
         if finish is not None:
             self._climate_run_complete(f" Команда возврата к {_c(finish)} не отправлена. Проверьте пульт камеры.", stop=False)
@@ -2782,8 +2792,9 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 else " Далее — запись и проверка профилей всех плат; итог будет отдельно.") if pending_profiles else ""
         self._climate_run_set(f"Автоматический прогон закончен: пройдено {len(self._climate_run_done)} температур.{tail}{note}",
                               "#0f6ab4" if pending_profiles else "#16a34a")
+        self._climate_auto_finish_note = tail.strip()
         self._climate_event(f"автоматический прогон закончен: {len(self._climate_run_done)} температур.{tail}{note}",
-                            "info" if pending_profiles else "ok")
+                            "info" if pending_profiles else "ok", kind="journal")
         if self._climate_multi():
             self._mb_start_profiles()
             if not self._mb_profiles_busy():

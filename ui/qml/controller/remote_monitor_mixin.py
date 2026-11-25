@@ -181,6 +181,7 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         self._remote_settings.update(self._remote_load_settings())
 
         self._remote_events: deque = deque(maxlen=self.REMOTE_EVENTS_KEPT)
+        self._remote_step_notes: dict[str, list[str]] = {}
         self._remote_history: deque = deque(maxlen=int(self.REMOTE_HISTORY_SPAN_S / self.REMOTE_HISTORY_STEP_S))
         # Несколько плат: температура каждой платы в те же моменты, что и общая история (для графиков).
         self._remote_boards_history: deque = deque(maxlen=self._remote_history.maxlen)
@@ -507,8 +508,8 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             "text": str(text),
             "level": str(level),
         })
-        if telegram and self._remote_settings["telegram_enabled"]:
-            self._remote_telegram.notify(f"Камера: {text}", level, kind)
+        if telegram and kind != "journal" and self._remote_settings["telegram_enabled"]:
+            self._remote_telegram.notify(text, level, kind)
         self.remoteMonitorChanged.emit()
 
     def _remote_control(self, chat_id: str, channel: str, action: str, params: dict) -> tuple[bool, str]:
@@ -545,10 +546,48 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         text = (f"{prefix}точка «{point['note']}»{trial} записана: {expected}узел {where}; "
                 f"{temperatures.replace('.', ',')}; основной {point['main']}, вид топлива {media}. "
                 f"Всего точек: {len(self._chamber_points)}.")
-        self._remote_event(text, "ok" if node is not None else "warn", kind="point")
+        if stage and stage != "finish":
+            line = (f"{prefix.rstrip(': ')} · «{point['note']}»{trial}\n"
+                    f"  {temperatures.replace('.', ',')}\n"
+                    f"  Основной {point['main']} · вид топлива {media}")
+            self._remote_add_step_note("Снятые точки", line)
+            self._remote_event(text, "ok" if node is not None else "warn", telegram=False, kind="point")
+        else:
+            self._remote_event(text, "ok" if node is not None else "warn", kind="point")
         diag = getattr(self, "_climate_diag_event", None)
         if callable(diag):
             diag("point", text, "INFO" if node is not None else "WARN")
+
+    def _remote_add_step_note(self, section: str, text: str):
+        """Собирает точки и причины пропуска для общей сводки температурного шага."""
+        if getattr(self, "_remote_step_notes", None) is None:
+            self._remote_step_notes = {}
+        entries = self._remote_step_notes.setdefault(section, [])
+        if text not in entries:
+            entries.append(text)
+
+    def _remote_discard_last_step_point(self):
+        """Убирает из будущей сводки одиночную точку, отменённую проверкой повторяемости."""
+        points = (getattr(self, "_remote_step_notes", None) or {}).get("Снятые точки")
+        if points:
+            points.pop()
+            if not points:
+                del self._remote_step_notes["Снятые точки"]
+
+    def _remote_flush_step(self, heading: str, warn: bool = False) -> bool:
+        """Отправляет одну сводку шага и очищает накопленные записи."""
+        notes = getattr(self, "_remote_step_notes", None) or {}
+        if not notes:
+            return False
+        self._remote_step_notes = {}
+        sections = [heading]
+        for title in ("Замечания", "Снятые точки"):
+            if notes.get(title):
+                sections.append(title + "\n" + "\n".join(f"• {line}" for line in notes[title]))
+        warnings = warn or bool(notes.get("Замечания"))
+        self._remote_event("\n\n".join(sections), "warn" if warnings else "ok",
+                           kind="step_warning" if warnings else "point")
+        return True
 
     def _remote_multi(self) -> bool:
         """Цель функции в признаке работы с несколькими платами для сайта и бота."""
@@ -572,23 +611,25 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             sa = int(getattr(self, "_mb_active_sa", -1) or -1)
             if complete and not self._remote_tables_complete_by_board.get(sa):
                 self._remote_event(f"{self._remote_board_prefix()}данных хватило во всех узлах, таблицы посчитаны "
-                                   "полностью.", "ok")
+                                   "полностью.", "ok", telegram=not bool(getattr(self, "_climate_run_stage", "")))
             self._remote_tables_complete_by_board[sa] = bool(complete)
             return
         if complete and not self._remote_tables_were_complete:
-            self._remote_event("данных хватило во всех узлах, таблицы посчитаны полностью.", "ok")
+            self._remote_event("данных хватило во всех узлах, таблицы посчитаны полностью.", "ok",
+                               telegram=not bool(getattr(self, "_climate_run_stage", "")))
         self._remote_tables_were_complete = bool(complete)
 
     def _remote_note_chain(self, ok: bool, text: str, profile_path: str = ""):
         """Запись профиля закончилась: итог, копии и файлы в Telegram."""
-        self._remote_event(self._remote_board_prefix() + text, "ok" if ok else "bad")
+        finishing = bool(getattr(self, "_climate_auto_finishing", False))
+        self._remote_event(self._remote_board_prefix() + text, "ok" if ok else "bad", telegram=not finishing)
         if not ok:
             return
         journal = str(self._chamber_file_path or "")
         for path in (journal, profile_path):
             if path:
                 self._remote_sync.enqueue(path, "chamber")
-        if self._remote_settings["telegram_enabled"]:
+        if not finishing and self._remote_settings["telegram_enabled"]:
             # Файлы получают те, у кого включены «файлы».
             prefix = self._remote_board_prefix()
             for path, caption in ((journal, f"{prefix}Журнал прогона"), (profile_path, f"{prefix}Записанный профиль")):

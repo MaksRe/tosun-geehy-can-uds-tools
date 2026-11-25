@@ -268,3 +268,25 @@ def test_site_stability_rule_follows_scenario():
     assert Remote._remote_stable_rule(owner) == (720.0, 0.03)
     owner._climate_scenario = None
     assert Remote._remote_stable_rule(owner) == (300.0, 0.05)
+
+
+def test_final_notification_is_one_safe_html_message(tmp_path: Path):
+    """Проверяет заголовки, экранирование имён и единственную отправку итога в чат."""
+    bot, _calls = _bot(tmp_path)
+    _sent(bot)
+    bot.notify("ИТОГ ПРОГОНА: 7 из 7\n\nПлаты\n• 0x81 <П1&П2>\n\nТемпературные шаги\n• +25 °C - 3:02",
+               "warn", "final")
+    sent = [item for item in _sent(bot) if item["chat_id"] == "3"]
+    assert len(sent) == 1
+    assert sent[0]["parse_mode"] == "HTML"
+    body = sent[0]["text"]
+    assert "<b>Итог прогона</b>" in body and "<b>Платы</b>" in body
+    assert "0x81 &lt;П1&amp;П2&gt;" in body and "<b>Температурные шаги</b>" in body
+
+
+def test_long_report_keeps_html_tags_balanced():
+    """Проверяет обрезку длинной команды со строками внутри моноширинной таблицы."""
+    text = reports.scenarios_report({"climate": {"control": {
+        "scenarioFiles": [{"name": "<" * 30} for _ in range(300)]}}})
+    assert text.count("<pre>") == text.count("</pre>") == 1
+    assert len(text) < 4096 and "…" in text and "&lt;" in text

@@ -964,9 +964,10 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                 self._mb_captured.add(sa)
                 if wanted is not None and got != wanted:
                     what = "трубки" if field == "fuel_temp_x10" else "платы"
-                    self._climate_event(f"плата {self._mb_label(sa)}: точка при {point[field] / 10:+.1f} °C ({what}) - "
-                                        f"не в узле {chamber_fit.node_text(wanted)} (±3 °C), в таблицу узла не "
-                                        "попадёт.", "warn")
+                    warning = (f"{self._mb_label(sa)} · температура {what} {point[field] / 10:+.1f} °C "
+                               f"вне узла {chamber_fit.node_text(wanted)}. Точка не войдёт в таблицу этого узла.")
+                    self._climate_hook("_remote_add_step_note", "Замечания", warning)
+                    self._climate_event(warning, "warn", kind="journal")
         left = max(0, int(self.MB_CAPTURE_WAIT_S - (now - self._mb_capture_stage_since)))
         self._mb_status = (f"Точки записаны у {sum(board['sa'] in self._mb_captured for board in boards)} "
                            f"из {len(boards)} плат."
@@ -980,7 +981,9 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             names = ", ".join(self._mb_label(board["sa"]) for board in missing)
             reason = "; ".join(waiting)
             self._climate_event(f"у плат {names} за {self.MB_CAPTURE_WAIT_S:g} с не снята точка: {reason}. "
-                                "Прогон идёт дальше.", "warn")
+                                "Прогон идёт дальше.", "warn", kind="journal")
+            for issue in waiting:
+                self._climate_hook("_remote_add_step_note", "Замечания", issue)
             problems = getattr(self, "_climate_auto_problems", None)
             if individual and problems is not None:
                 problems.append(f"Не снята точка {node:+g} °C: {reason}.")
@@ -1522,19 +1525,39 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         outcomes = getattr(self, "_mb_profile_outcomes", None) or {}
         return [self._mb_label(sa) for sa, ok in outcomes.items() if ok is not True]
 
-    def _mb_summary_text(self) -> str:
-        """Итог по платам для сообщения о конце прогона."""
+    def _mb_summary_rows(self) -> list[dict]:
+        """Готовит по одной строке на участника с полнотой таблиц и итогом записи профиля."""
         if not self._mb_on():
-            return ""
-        parts = []
+            return []
+        rows = []
         for board in self._mb_result_boards():
-            with self._mb_context(board["sa"], notify=False):
+            sa = board["sa"]
+            stage = self._mb_stage_for(sa) or {}
+            with self._mb_context(sa, notify=False):
                 points = len(self._chamber_points)
-            result = self._mb_profile_results.get(board["sa"], "")
-            stage = self._mb_stage_name(board["sa"])
-            prefix = stage + ", " if stage else ""
-            parts.append(f"{self._mb_label(board['sa'])}: {prefix}точек {points}" + (f", {result}" if result else ""))
-        return " По платам: " + "; ".join(parts) + "."
+                complete = self._chamber_tables_complete
+                check_only = self._chamber_check_only
+                marks = self._mb_node_marks() if stage.get("stage") == "assembly" else []
+            outcome = self._mb_profile_outcomes.get(sa)
+            label = self._mb_stage_name(sa)
+            check_only = stage.get("check_only", check_only)
+            if check_only:
+                status = "проверка готового профиля"
+            elif outcome is True:
+                status = "профиль подтверждён"
+            elif sa in self._mb_profile_outcomes:
+                result = self._mb_profile_results.get(sa)
+                status = result or "запись профиля не подтверждена"
+            else:
+                status = ("таблицы полные" if complete else "таблицы неполные") + " · автозапись выключена"
+            parts = [self._mb_label(sa)]
+            if label and not check_only:
+                parts.append(label)
+            if marks:
+                parts.append(f"сухие узлы {sum(bool(mark['air']) for mark in marks)}/{len(marks)}")
+            parts.extend((f"точек {points}", status))
+            rows.append({"text": " · ".join(parts), "ready": bool(complete or check_only or outcome is True)})
+        return rows
 
     # ------------------------------------------------------------------ показ
 

@@ -73,7 +73,7 @@ def test_unreached_node_is_skipped_by_the_rule_and_the_run_finishes(tmp_path: Pa
     assert [node for node, _seconds in stub._climate_auto_skipped] == [-20.0]
     assert any("50,0" in text and "пройден" in text for _level, text in stub.events), "узел +50 снят после пропуска"
     summary = [text for _level, text in stub.events if text.startswith("ИТОГ")]
-    assert summary and "Без точки" in summary[0] and "-20,0 °C" in summary[0]
+    assert summary and "Пропущенные шаги" in summary[0] and "-20,0 °C" in summary[0]
 
 
 def test_weak_cooling_on_the_return_at_the_end_is_named(tmp_path: Path):
