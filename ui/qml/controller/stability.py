@@ -9,6 +9,14 @@
 from __future__ import annotations
 
 
+def countdown(seconds: float) -> str:
+    """Показывает оставшееся реальное время до действия с точностью до секунды."""
+    from math import ceil
+    minutes, seconds = divmod(max(0, ceil(seconds)), 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
+
+
 def rate_and_spread(samples, now: float, window_s: float):
     """Скорость (°C/мин), разброс (°C) и охват окна (с) по показаниям за окно.
 

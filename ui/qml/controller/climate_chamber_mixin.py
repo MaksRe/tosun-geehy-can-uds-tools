@@ -77,13 +77,12 @@ from ui.qml import climate_scenario
 from ui.qml.climate_scenario import DEFAULTS as SCENARIO_DEFAULTS
 
 from .contract import AppControllerContract
-from .stability import air_for_board, fit_board_model, is_stable, predict_final, rate_and_spread
+from .stability import air_for_board, countdown, fit_board_model, is_stable, predict_final, rate_and_spread, unstable_reason
 
 DRIVERS = (DRIVER_NONE, DRIVER_ESPEC, DRIVER_SIMCON, DRIVER_ZUNDAR, DRIVER_SIMULATOR, DRIVER_MODBUS_TCP,
            DRIVER_MODBUS_RTU)
 
-# Камеры, с которыми работает программа: у каждой своё назначение, чтобы их не путать.
-# board_only - какой режим раздела «Прогон в камере» подходит этой камере.
+# Для подключения описывает камеры; этап и число плат задаются сценарием независимо от модели камеры.
 # Паспортный диапазон температур камеры (range_c, °C): за него программа не задаст уставку.
 # ESPEC серии MC-811 (MC-811, MC-812R): -85...+180 °C по данным производителя.
 # Vötsch VT 7100 и Weiss WK1-600/70 (оба с пультом S!MCON/32): -70...+180 °C. У VT 7100 -
@@ -92,48 +91,41 @@ DRIVERS = (DRIVER_NONE, DRIVER_ESPEC, DRIVER_SIMCON, DRIVER_ZUNDAR, DRIVER_SIMUL
 CHAMBERS = {
     DRIVER_ESPEC: {
         "name": "ESPEC MC-811P",
-        "purpose": "Испытания платы",
+        "purpose": "Платы и изделия в сборе",
         "link": "RS-485, 4 провода",
         "accent": "#0f766e",
-        "board_only": True,
         "range_c": (-85.0, 180.0),
     },
     DRIVER_SIMCON: {
         "name": "Vötsch VT 7100 / Weiss WK1",
-        "purpose": "Изделие в сборе: плата с трубками в корпусе",
+        "purpose": "Платы и изделия в сборе",
         "link": "RS-232, пульт S!MCON/32",
         "accent": "#1d4ed8",
-        "board_only": False,
         "range_c": (-70.0, 180.0),
     },
     DRIVER_ZUNDAR: {
         "name": "Zundar EEXTH1000U",
-        "purpose": "Климатика: изделие в сборе или платы",
+        "purpose": "Платы и изделия в сборе",
         "link": "Ethernet, Modbus TCP",
         "accent": "#7c3aed",
-        # Можно и платы на своих ёмкостях, и изделие с трубками: режим раздела не навязывается.
-        "board_only": None,
     },
     DRIVER_SIMULATOR: {
         "name": "Имитатор камеры",
         "purpose": "Отладка порядка работы на столе",
         "link": "без камеры",
         "accent": "#9a3412",
-        "board_only": None,
     },
     DRIVER_MODBUS_TCP: {
         "name": "Другая камера, Modbus TCP",
         "purpose": "Камера с картой регистров",
         "link": "Ethernet",
         "accent": "#64748b",
-        "board_only": None,
     },
     DRIVER_MODBUS_RTU: {
         "name": "Другая камера, Modbus RTU",
         "purpose": "Камера с картой регистров",
         "link": "RS-485, 2 провода",
         "accent": "#64748b",
-        "board_only": None,
     },
 }
 DRIVER_TITLES = {DRIVER_NONE: "не выбрана", **{key: value["name"] for key, value in CHAMBERS.items()}}
@@ -685,6 +677,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             self._climate_incoming.clear()
         for state in incoming:
             if state.get("kind") == "reading" and state.get("ok"):
+                self._climate_reading_failed = False
                 self._climate_reading = state["reading"]
                 self._climate_last_ok_s = now
                 title = self._climate_link.driver.title if self._climate_link is not None else "камера"
@@ -741,6 +734,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                         self._climate_event(f"камера занята: {text}", "warn")
                 self._climate_peers_text = text
             elif state.get("kind") == "reading":
+                self._climate_reading_failed = True
                 self._climate_status = f"Нет связи с камерой: {state.get('text')}. Повторяю..."
                 self._climate_ok = False
                 self._climate_peers_check(now)
@@ -1146,7 +1140,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             self._climate_bridge(now)
         self._climate_note_board(now)
         if self._climate_run_stage:
-            self._climate_run_tick(now)
+            self._climate_run_guarded_tick(now)
             changed = True
         if self._climate_hook("_climate_auto_tick", now) is not None or getattr(self, "_climate_auto_finishing", False):
             changed = True
@@ -1178,6 +1172,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 continue
             value = self._climate_sensor_x10(now, name)
             if value is not None:
+                if series and now - series[-1][0] > max(self.AUTO_BOARD_LOST_S, self._chamber_live_stale_s()):
+                    series.clear()
                 series.append((now, round(float(value) / 10.0, 3)))
 
     def _climate_board_second_series(self):
@@ -1203,6 +1199,10 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         корпусе с компаундом греется сильнее трубки, и по датчику платы точки трубки
         ушли бы дальше ±3 °C от узла и в таблицу не попали.
         """
+        if (self._climate_run_stage and getattr(self, "_mb_run_stages", None)
+                and self._climate_run_index < len(self._climate_run_nodes)):
+            group = self._mb_steering_group(self._mb_step_sensors(self._climate_run_node()))
+            return "fuel_temp" if group == "fuel_temp" else "board_temp"
         if getattr(self, "_chamber_board_only", False):
             return "board_temp"
         label = str(getattr(self, "_chamber_label", "") or "").strip().casefold()
@@ -1308,6 +1308,10 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         """Новый шаг: доводки ещё не было, уставка камеры - температура шага."""
         self._climate_run_offset = 0.0
         self._climate_run_board_attempts = 0
+        self._climate_rechecked_hold = False
+        self._climate_stage_response = None
+        self._climate_finish_resent = False
+        self._climate_camera_wait = None
         self._climate_run_board_since = 0.0
         self._climate_run_board_preset_done = False
         self._climate_run_quiet_since = None
@@ -1376,7 +1380,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         нужен сейчас. Так доводка почти не нужна, а шаг короче на часы. Шаг без точки -
         как задан.
         """
-        if self._climate_run_board_preset_done:
+        if self._climate_run_board_preset_done or getattr(self, "_mb_run_stages", None):
             return
         self._climate_run_board_preset_done = True
         if self._climate_run_offset or self._climate_run_board_attempts:
@@ -1469,6 +1473,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                     self._climate_ramp = None
                     self._climate_event(f"отогрев закончен: уставка камеры {_c(value)}.", "info")
                     return False
+            else:
+                self._climate_run_fault("ramp", f"Не удалось задать ступень отогрева {_c(value)}. {self._climate_command_status}")
         return True
 
     def _climate_ramp_hold(self, now: float):
@@ -1617,7 +1623,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             return
         value, held = plateau
         if held < self.FOLLOW_STABLE_S:
-            self._climate_run_set(f"Узел {where}: камера ведёт свою программу, уставка {_c(value)}; жду узел {_c(node)}.")
+            self._climate_run_set(f"Узел {where}: проверяю постоянство уставки {_c(value)}, ещё "
+                                  f"{countdown((self.FOLLOW_STABLE_S - held) / self._climate_speed())}.")
             return
         nodes = self._climate_run_nodes
         match = next((index for index in range(self._climate_run_index, len(nodes))
@@ -1626,14 +1633,20 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             done = state.get("done_sv")
             if done is not None and abs(value - done) <= self.FOLLOW_SAME_C:
                 self._climate_run_set(f"Узел снят. Жду, когда камера перейдёт к следующему шагу ({_c(node)}): "
-                                      f"сейчас держит {_c(value)}.")
+                                      f"пульт продолжает выдержку при {_c(value)}.")
                 return
             if state.get("ignored") is None or abs(state["ignored"] - value) > self.FOLLOW_SAME_C:
                 state["ignored"] = value
                 self._climate_event(f"камера держит {_c(value)}: такого узла среди оставшихся нет "
                                     f"({', '.join(_c(item) for item in nodes[self._climate_run_index:])}) - жду "
                                     "следующий шаг её программы.", "info")
-            self._climate_run_set(f"Узел {where}: камера держит {_c(value)} - это не узел сценария; жду {_c(node)}.")
+            left = (self._climate_run_param("reach_timeout_min") * 60 - held) / self._climate_speed()
+            if left <= 0:
+                self._climate_run_fault("follow", f"Пульт удерживает {_c(value)}, такой ступени в сценарии нет. "
+                                        f"Проверьте программу камеры, следующий узел {_c(node)}.")
+                return
+            self._climate_run_set(f"Узел {where}: камера держит {_c(value)} - это не узел сценария; жду {_c(node)}. "
+                                  f"До паузы {countdown(left)}.")
             return
         if match > self._climate_run_index:
             skipped = nodes[self._climate_run_index:match]
@@ -1724,7 +1737,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
     CLIMATE_FORECAST_CHECK_S = 5 * 60.0
     CLIMATE_FORECAST_AGREE_C = 0.5
 
-    def _climate_run_board_forecast(self, now: float) -> float | None:
+    def _climate_run_board_forecast(self, now: float, series=None) -> float | None:
         """Где устоится плата на этом шаге (°C) или None, если прогнозу пока нельзя верить.
 
         Данные - с начала устаивания (камера уже на уставке, плата подходит к своему
@@ -1738,10 +1751,10 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         на стенде 19.10 на +50 °C он дал 50,8, по хвосту - 52,0, плата дошла до 52,0.
         """
         speed = self._climate_speed()
-        start = self._climate_run_since
+        start = self._climate_run_since if not series else max(self._climate_run_since, series[0][0])
         if now - start < self.CLIMATE_FORECAST_MIN_S / speed:
             return None
-        samples = list(self._climate_board)
+        samples = list(self._climate_board if series is None else series)
         max_tau = 600 * 60.0 / speed
         latest = predict_final(samples, start, now, max_tau_s=max_tau)
         earlier = predict_final(samples, start, now - self.CLIMATE_FORECAST_CHECK_S / speed, max_tau_s=max_tau)
@@ -1924,10 +1937,16 @@ class AppControllerClimateChamberMixin(AppControllerContract):
 
     def _climate_run_start(self) -> bool:
         """Запускает прогон по списку узлов из настроек."""
-        if self._climate_run_stage:
+        if self._climate_run_stage or getattr(self, "_climate_auto_finishing", False) or self._climate_hook("_mb_profiles_busy"):
             return False
         # Режим расчёта, пометка и автозапись берутся из сценария: проверка перед стартом видит их уже такими.
-        self._climate_hook("_climate_scenario_apply_chamber")
+        plan_of = getattr(self, "_mb_stage_plan", None)
+        try:
+            individual = plan_of(time.monotonic(), self._climate_run_plan()) if callable(plan_of) else {}
+        except ValueError:
+            individual = {}
+        if not individual:
+            self._climate_hook("_climate_scenario_apply_chamber")
         blockers = self._climate_hook("_climate_auto_blockers") or []
         if blockers:
             self._climate_run_set("Прогон не запущен: " + blockers[0][:1].lower() + blockers[0][1:] + ".", "#dc2626")
@@ -1952,7 +1971,9 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                                   "#dc2626")
             self.climateChanged.emit()
             return False
-        labels = plan["labels"] or [""]
+        now = time.monotonic()
+        stages = self._climate_hook("_mb_stage_plan", now, plan) or {}
+        labels = ["по этапам плат"] if stages else (plan["labels"] or [""])
         if not labels[0]:
             self._climate_run_set("Прогон не запущен: напишите, что подключено к прибору, или список пометок.",
                                   "#dc2626")
@@ -1968,7 +1989,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         except OSError:
             self._climate_trace_path = None
         # Проверка профиля: у каждой платы - новый журнал проверки и свежий монитор (chamber_mixin).
-        self._climate_hook("_chamber_check_begin")
+        if not stages:
+            self._climate_hook("_chamber_check_begin")
         # Сколько точек было в журнале до прогона: новые точки этого прогона - после них.
         self._climate_run_journal_base = len(self._chamber_points)
         self._climate_run_repeat_retries = {}
@@ -1976,11 +1998,13 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         self._climate_run_nodes = nodes
         self._climate_run_steps = plan["steps"]
         self._climate_run_labels = labels
-        self._climate_run_connected = str(self._chamber_label).strip()
+        self._climate_run_connected = labels[0] if stages else str(self._chamber_label).strip()
         joined, left = ([], [])
         if self._climate_multi():
             # Участники - платы, что на шине сейчас; остальные платы списка в этот прогон не входят.
-            joined, left = self._mb_run_begin(time.monotonic())
+            joined, left = self._mb_run_begin(now, stages)
+            if stages:
+                self._mb_prepare_stage_journals()
         self._climate_run_stage = "setpoint"
         self._climate_event(
             f"автоматический прогон начат: {len(nodes)} температур ({', '.join(_c(node) for node in nodes)}), "
@@ -1991,13 +2015,15 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                "камеры." if follow else ""), "info")
         started = time.monotonic()
         self._climate_hook("_climate_auto_on_start", started)
-        self._climate_run_tick(started)
+        self._climate_run_guarded_tick(started)
         self.climateChanged.emit()
         return True
 
     def _climate_run_stop(self, reason: str = "остановлен оператором"):
         if not self._climate_run_stage:
             return
+        if self._climate_run_stage == "capturing":
+            self._chamber_capture_waiting = False
         self._climate_run_stage = ""
         self._climate_ramp = None
         if self._climate_multi():
@@ -2010,8 +2036,23 @@ class AppControllerClimateChamberMixin(AppControllerContract):
     def _climate_run_pause(self, paused: bool):
         if not self._climate_run_stage:
             return
+        if self._climate_run_paused and not paused and getattr(self, "_mb_run_stages", None):
+            if self._climate_run_stage in ("settle", "hold", "points") or (
+                    self._climate_run_stage == "capture" and self._mb_capture_stage_since is None):
+                self._climate_run_enter("settle", time.monotonic())
         self._climate_run_paused = bool(paused)
         if not paused:
+            if getattr(self, "_climate_auto_paused_by", "") == "follow":
+                self._climate_run_since = time.monotonic()
+            if getattr(self, "_climate_auto_paused_by", "") == "progress":
+                self._climate_auto_progress.clear()
+            if getattr(self, "_climate_auto_paused_by", "") == "journal":
+                if self._climate_run_stage == "capturing":
+                    self._climate_run_enter("capture", time.monotonic())
+                if getattr(self, "_mb_capture_stage_since", None) is not None:
+                    self._mb_capture_stage_since = time.monotonic()
+            self._climate_finish_resent = False
+            self._climate_camera_wait = None
             # Оператор сам продолжил: пауза из-за беды снята.
             self._climate_auto_paused_by = ""
         self._climate_event("прогон поставлен на паузу оператором." if paused else "прогон продолжен оператором.",
@@ -2031,16 +2072,87 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         return self._climate_run_nodes[self._climate_run_index]
 
     def _climate_run_enter(self, stage: str, now: float):
+        if stage in ("setpoint", "settle") and getattr(self, "_mb_run_stages", None):
+            self._mb_stage_history.clear()
+            self._mb_stage_excluded.clear()
+            self._mb_status = ""
+            self._mb_capture_stage_since = None
+            self._mb_captured.clear()
         self._climate_run_stage = stage
         self._climate_run_since = now
         self._climate_run_warned = False
         self._climate_hook("_climate_auto_on_stage", stage, now)
 
+    def _climate_camera_issue(self, now):
+        """Проверяет телеметрию до команды или точки и задаёт срок восстановления."""
+        stage = self._climate_run_stage
+        reading = self._climate_reading if self._climate_link and self._climate_fresh(now) else None
+        actual = getattr(reading, "actual_c", None)
+        if getattr(reading, "alarm", None):
+            return "alarm", f"Авария камеры, код {reading.alarm}.", 0.0
+        if getattr(self, "_climate_reading_failed", False) or actual is None or not math.isfinite(actual):
+            return "link", "Нет свежей температуры камеры.", self.AUTO_LINK_LOST_S
+        if stage == "setpoint":
+            return None
+        if getattr(reading, "running", None) is False:
+            return "stopped", "Камера остановлена.", self.AUTO_STOPPED_PAUSE_S
+        if self._climate_run_follow:
+            return None
+        target = self._climate_run_finish_target if stage == "finish" else self._climate_run_setpoint()
+        ramp = self._climate_ramp
+        commanded = ramp["sent"] if ramp else target
+        sv = getattr(reading, "setpoint_c", None)
+        # Некоторые драйверы не читают уставку. У них выход подтверждает температура воздуха.
+        if sv is not None and (not math.isfinite(sv) or abs(commanded - sv) >
+                               self.AUTO_SETPOINT_TOLERANCE_C + (self.RAMP_STEP_C if ramp else 0)):
+            return "setpoint", f"Пульт показывает {_c(sv)}, запрошено {_c(commanded)}.", self.AUTO_SETPOINT_ALERT_S
+        if stage not in ("reach", "finish") and abs(actual - target) > max(2.0, 2 * self._climate_run_param("reach_tolerance_c")):
+            return "drift", f"Воздух камеры {_c(actual)}, уставка {_c(target)}.", self.AUTO_DRIFT_HOLD_S / self._climate_speed()
+        return None
+
+    def _climate_run_guarded_tick(self, now: float):
+        """Даёт автоматике ход только при подтверждённом состоянии камеры."""
+        if self._climate_run_paused:
+            self._climate_run_tick(now)
+            return
+        issue = self._climate_camera_issue(now)
+        if issue:
+            cause, reason, limit = issue
+            self._climate_run_trace(now)
+            previous = self._climate_camera_wait
+            self._climate_camera_wait = (cause, previous[1] if previous else now)
+            if not previous and hasattr(self, "_climate_auto_progress"):
+                self._climate_auto_progress.clear()
+            left = limit - (now - self._climate_camera_wait[1])
+            self._climate_ramp_hold(now)
+            if self._climate_run_stage == "finish" and cause == "setpoint":
+                if left > 0 and limit - left >= self.AUTO_SETPOINT_RESEND_S and not self._climate_finish_resent:
+                    self._climate_finish_resent = True
+                    self._climate_send_setpoint(self._climate_ramp["sent"] if self._climate_ramp else self._climate_run_finish_target)
+            if left <= 0:
+                self._climate_run_fault(cause, reason + " Проверьте камеру и продолжите прогон.")
+            else:
+                self._climate_run_set(f"{reason} До паузы {countdown(left)}.", "#d97706")
+            return
+        if self._climate_camera_wait and self._climate_run_stage in ("settle", "hold"):
+            # Краткий обрыв требует нового окна наблюдения, но не обнуляет предельный срок ожидания.
+            original = self._climate_run_since
+            self._climate_board.clear()
+            second = self._climate_board_second_series()
+            if second is not None:
+                second.clear()
+            self._climate_run_enter("settle", now)
+            self._climate_run_since = original
+        self._climate_camera_wait = None
+        self._climate_finish_resent = False
+        self._climate_run_tick(now)
+
     def _climate_run_tick(self, now: float):
         """Шаг прогона. Каждый этап ждёт своего условия и переходит к следующему."""
         if self._climate_run_paused:
             self._climate_ramp_hold(now)
-            self._climate_run_set("Прогон на паузе. Нажмите «Продолжить прогон».", "#d97706")
+            if not self._climate_run_status.startswith("Прогон на паузе:"):
+                self._climate_run_set("Прогон на паузе. Нажмите «Продолжить прогон».", "#d97706")
             return
         stage = self._climate_run_stage
         self._climate_run_trace(now)
@@ -2081,6 +2193,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 # Камера идёт к уставке своей программы: её и ждём.
                 setpoint = float(self._climate_follow["sv"])
             if self._climate_ramp_tick(now):
+                if self._climate_run_paused:
+                    return
                 # Время выхода на узел и пропуск узла считаются от конца отогрева: медленный он - по правилу.
                 self._climate_run_since = now
                 self._climate_run_set(f"Узел {where}: {self._climate_ramp_text()}, в камере {_c(actual)}.")
@@ -2089,7 +2203,18 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 self._climate_event(f"камера вышла на {_c(setpoint)}, жду, пока устоится плата.", "info")
                 self._climate_run_enter("settle", now)
                 return
-            self._climate_run_set(f"Узел {where}: камера идёт к уставке {_c(setpoint)}, сейчас {_c(actual)}.")
+            left = self._climate_time_left(now, "reach_timeout_min")
+            timer = f"До предупреждения {countdown(left)}." if left > 0 else "Срок предупреждения истёк."
+            if self._climate_run_param("skip_unreached_min") > 0:
+                timer += f" До пропуска шага {countdown(self._climate_time_left(now, 'skip_unreached_min'))}."
+            progress = getattr(self, "_climate_auto_progress", ())
+            if (progress and not self._climate_run_follow and not self._climate_run_param("skip_unreached_min")
+                    and actual is not None and abs(actual - setpoint) > self.AUTO_RATE_GAP_C):
+                remaining = self.AUTO_PROGRESS_WINDOW_S / self._climate_speed() - (now - progress[0][0])
+                if remaining > 0:
+                    timer += f" До первой проверки хода температуры {countdown(remaining)}."
+            reading = f"сейчас {_c(actual)}" if actual is not None else "нет свежей температуры камеры"
+            self._climate_run_set(f"Узел {where}: камера идёт к {_c(setpoint)}, {reading}. {timer}")
             self._climate_run_timeout(now, "reach_timeout_min", f"камера не вышла на {_c(setpoint)}")
             skip_min = self._climate_run_param("skip_unreached_min")
             if skip_min > 0 and now - self._climate_run_since >= skip_min * 60.0 / self._climate_speed():
@@ -2101,6 +2226,27 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             speed = self._climate_speed()
             window_s = self._climate_run_param("settle_min") * 60.0 / speed
             rate_limit = self._climate_run_param("settle_rate") * speed
+            left = self._climate_time_left(now, "settle_timeout_min")
+            timer = (f"До решения {countdown(left)}." if left > 0 else "Срок истёк, жду показание датчика.")
+            if getattr(self, "_mb_run_stages", None):
+                self._climate_run_settle_stages(now, node, where, window_s, rate_limit)
+                return
+            sensors = [(self._climate_board, "ведущего датчика")]
+            second = self._climate_board_second_series()
+            if self._climate_steer_key() == "fuel_temp" and second is not None:
+                sensors.append((second, "датчика платы"))
+            for series, name in sensors:
+                last = series[-1][0] if series else None
+                if last is not None and now - last <= max(self.CLIMATE_BOARD_STEP_S * 2, self._chamber_live_stale_s()):
+                    continue
+                since = max(self._climate_run_since, last if last is not None else self._climate_run_since)
+                remaining = self.AUTO_BOARD_LOST_S - (now - since)
+                reason = f"Узел {where}: нет свежей температуры {name}."
+                if remaining <= 0:
+                    self._climate_run_fault("sensors", reason + " Проверьте CAN и датчик.")
+                else:
+                    self._climate_run_set(reason + f" До паузы {countdown(remaining)}.")
+                return
             result = rate_and_spread(self._climate_board, now, window_s)
             # Где устоится плата: у инертной платы правило скорости срабатывает за градусы до её предела.
             final = self._climate_run_board_forecast(now)
@@ -2143,14 +2289,17 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                     return
                 if decision is None:
                     self._climate_run_set(f"Узел {where}: плата почти устоялась ({_c(board)}), но ещё идёт к шагу: "
-                                          f"по прогнозу придёт к {_c(final)}. Жду.")
+                                          f"по прогнозу придёт к {_c(final)}. {timer}")
                     self._climate_run_timeout(now, "settle_timeout_min", f"плата не устоялась при {_c(node)}")
                     return
                 hold = self._climate_run_param("hold_min")
                 capture = bool(self._climate_run_step().get("capture", True))
                 then = (f"выдержка {hold:g} мин" if hold > 0
                         else ("снимаю точки" if capture else "точка на этом шаге не снимается"))
-                self._climate_event(f"плата устоялась при {_c(board)} (узел {_c(node)}), {then}.", "ok")
+                if overdue and not (stable or quiet_long):
+                    self._climate_event(f"время ожидания вышло при {_c(board)} (узел {_c(node)}), {then}.", "warn")
+                else:
+                    self._climate_event(f"плата устоялась при {_c(board)} (узел {_c(node)}), {then}.", "ok")
                 if hold > 0:
                     self._climate_run_enter("hold", now)
                 else:
@@ -2161,9 +2310,11 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             if board_wait is not None:
                 board_rate = f"{board_wait[0] / speed:+.3f} °C/мин".replace(".", ",")
                 self._climate_run_set(f"Узел {where}: трубка устоялась ({rate}), жду, пока устоится плата в "
-                                      f"корпусе ({board_rate}).")
+                                      f"корпусе ({board_rate}). {timer}")
             else:
-                self._climate_run_set(f"Узел {where}: камера на уставке, жду, пока устоится плата ({rate}{forecast}).")
+                reason = unstable_reason(result, window_s, rate_limit, self.CLIMATE_STABLE_SPREAD_C)
+                sensor = "трубка" if self._climate_steer_key() == "fuel_temp" else "плата"
+                self._climate_run_set(f"Узел {where}: {sensor} — {reason}{forecast}. {timer}")
             self._climate_run_timeout(now, "settle_timeout_min", f"плата не устоялась при {_c(node)}")
             return
 
@@ -2176,7 +2327,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 self._climate_run_after_hold(now)
             else:
                 self._climate_run_set(f"Узел {where}: плата устоялась, выдержка ещё "
-                                      f"{max(1, int(left * self._climate_speed() // 60))} мин.")
+                                      f"{countdown(left)}.")
             return
 
         if stage == "points":
@@ -2209,23 +2360,30 @@ class AppControllerClimateChamberMixin(AppControllerContract):
 
         if stage == "capture":
             if now < self._climate_run_retry_at:
+                self._climate_run_set(f"Узел {where}: {self._chamber_status}. До повторной записи "
+                                      f"{countdown(self._climate_run_retry_at - now)}.")
                 return
             label = self._climate_run_order[self._climate_run_label_index]
-            self._chamber_label = label
-            self.chamberChanged.emit()
+            if not getattr(self, "_mb_run_stages", None):
+                self._chamber_label = label
+                self.chamberChanged.emit()
             if self._climate_multi():
                 # Несколько плат: точка шага у каждой, по её средним; ждём всех (не дольше минуты).
                 if self._mb_run_capture(now, self._climate_run_node()):
+                    if (getattr(self, "_mb_run_stages", None) and self._mb_step_sensors(node)
+                            and not self._mb_captured):
+                        self._climate_run_skip_node(now, self._mb_status, "нет подтверждённых точек")
+                        return
                     self._climate_run_label_index += 1
                     self._climate_run_enter("points", now)
-                else:
+                elif not self._climate_run_paused:
                     self._climate_run_set(f"Узел {where}, «{label}»: {self._mb_status}")
                 return
             self._climate_run_points = len(self._chamber_points)
             if self._chamber_capture_from_average():
                 self._climate_run_enter("capturing", now)
                 self._climate_run_set(f"Узел {where}: записываю точку «{label}».")
-            else:
+            elif not self._climate_run_paused:
                 self._climate_run_capture_failed(now)
             return
 
@@ -2238,6 +2396,10 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                 return
             if not self._chamber_capture_waiting:
                 self._climate_run_capture_failed(now)
+            else:
+                _, reason = self._chamber_live_point(now)
+                left = self.CHAMBER_WAIT_LIMIT_S - (now - self._chamber_capture_wait_since)
+                self._climate_run_set(f"Узел {where}: {reason}. До конца ожидания записи {countdown(left)}.")
 
     # Повторяемость нарушена: выдержка перед повторной точкой, с - разовый выброс так отсеивается.
     CLIMATE_REPEAT_RECHECK_S = 10 * 60.0
@@ -2319,12 +2481,150 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         self._climate_hook("_climate_auto_save", now)
         self.chamberChanged.emit()
 
+    def _climate_run_fault(self, cause: str, text: str):
+        """Останавливает переходы прогона при отказе и сохраняет причину для оператора."""
+        self._climate_event(text, "bad")
+        pause = getattr(self, "_climate_auto_pause", None)
+        if pause:
+            pause(cause, text)
+        else:
+            self._climate_run_paused = True
+            self._climate_run_set("Прогон на паузе: " + text, "#dc2626")
+
+    def _climate_stage_adjust(self, now, node, states):
+        """Доводит камеру по рабочим датчикам выбранной группы с учётом пределов и числа попыток."""
+        group = self._mb_steering_group({sa: state["key"] for sa, state in states.items()})
+        members = [(sa, state) for sa, state in states.items() if state["key"] == group]
+        if not members:
+            return "Для смешанных этапов выбрано «Без доводки»."
+        members = [(sa, state) for sa, state in members if state["missing_s"] < self.AUTO_BOARD_LOST_S]
+        if not members:
+            return "Нет свежих данных ведущей группы для доводки."
+        if all(state["inRange"] for _, state in members):
+            return ""
+        if self._climate_run_follow:
+            return "Уставку задаёт программа пульта."
+        if self._climate_run_param("board_max_shift_c") <= 0:
+            return "В сценарии сдвиг уставки выключен."
+        if self._climate_run_board_attempts >= self._climate_run_param("board_attempts"):
+            return "Попытки доводки исчерпаны."
+        values = []
+        predicted = False
+        for sa, state in members:
+            if state["value"] is None:
+                return "Для доводки нужны свежие температуры ведущей группы."
+            value = state["value"]
+            if not state["ready"]:
+                series = self._mb_stage_history.get((sa, group), ())
+                value = self._climate_run_board_forecast(now, series)
+                if value is None:
+                    return "Для доводки жду устойчивую температуру или подтверждённый прогноз."
+                predicted = True
+            values.append(value)
+        low, high = min(values), max(values)
+        target = self._climate_run_board_target(node)
+        tol = self._climate_run_param("board_tolerance_c")
+        if high - low > 2 * tol + 1e-9:
+            # При общем промахе подводим ближайшие изделия. Если цели по разные стороны, сохраняем доступные точки.
+            nearest = low if low > target + tol else high if high < target - tol else None
+            if nearest is None or predicted:
+                return "Разброс ведущей группы превышает двойной допуск шага."
+            members = [member for member, value in zip(members, values) if abs(value - nearest) <= 2 * tol]
+            selected = [state["value"] for _, state in members]
+            low, high = min(selected), max(selected)
+        if max(abs(target - low), abs(target - high)) <= tol + 1e-9:
+            return "По прогнозу температура войдёт в допуск."
+        centre = (low + high) / 2
+        correction = target - centre
+        # Чувствительность оценивается только по двум устойчивым измерениям той же группы на этом шаге.
+        signature = (group, tuple(sorted(sa for sa, _ in members)))
+        previous = self._climate_stage_response
+        if not predicted:
+            if previous and previous[0] == signature:
+                air_change = self._climate_run_offset - previous[1]
+                if abs(air_change) >= 1.0:
+                    gain = (centre - previous[2]) / air_change
+                    if 0.5 <= gain <= 1.2:
+                        correction /= gain
+            self._climate_stage_response = (signature, self._climate_run_offset, centre)
+        wanted = self._climate_run_offset + correction
+        sensor = "трубкам" if group == "fuel_temp" else "платам"
+        basis = "по прогнозу" if predicted else "по измерениям"
+        detail = f"доводка по {sensor} {basis}: {_c(low)} … {_c(high)}"
+        if self._climate_run_board_shift(now, node, target, wanted, detail):
+            self._climate_run_set(f"{detail}. Новая уставка {_c(self._climate_run_setpoint())}.")
+            return ""
+        return "Достигнут предел сдвига уставки."
+
+    def _climate_run_settle_stages(self, now: float, node: float, where: str, window_s: float, rate_limit: float):
+        """Подтверждает условия записи отдельно по адресам и указывает причину каждого пропуска."""
+        capture = bool(self._climate_run_step().get("capture", True))
+        states = self._mb_stage_conditions(now, node, window_s, rate_limit) if capture else {}
+        waiting = {sa: state for sa, state in states.items() if state["reasons"]}
+        if waiting:
+            offline = {sa for sa, state in waiting.items() if state["missing_s"] >= self.AUTO_BOARD_LOST_S}
+            if len(offline) == len(states):
+                addresses = ", ".join(self._mb_label(sa) for sa in sorted(offline))
+                self._climate_run_fault("sensors", f"У всех участников шага ({addresses}) дольше "
+                                        f"{self.AUTO_BOARD_LOST_S:g} с отсутствует обязательная температура. "
+                                        "Проверьте CAN и датчики, затем продолжите этот шаг.")
+                return
+            adjustment = self._climate_stage_adjust(now, node, states)
+            if self._climate_run_stage == "setpoint":
+                return
+            left = self._climate_time_left(now, "settle_timeout_min")
+            details = "; ".join(f"{self._mb_label(sa)}: {', '.join(state['reasons'])}" for sa, state in waiting.items())
+            # Если все датчики уже устойчивы, дальнейшее ожидание не устранит постоянный промах.
+            final = all(state["stable"] or sa in offline for sa, state in states.items()) and (
+                not self._climate_run_follow or set(waiting) == offline)
+            if left > 0 and not final:
+                missing = [self.AUTO_BOARD_LOST_S - state["missing_s"] for state in waiting.values()
+                           if 0 < state["missing_s"] < self.AUTO_BOARD_LOST_S]
+                link_timer = f" До решения по потере связи {countdown(min(missing))}." if missing else ""
+                self._climate_run_set(f"Узел {where}. До решения по тайм-ауту {countdown(left)}.{link_timer} "
+                                      f"{details}. {adjustment}".strip())
+                return
+            cause = ("Истекло время ожидания" if left <= 0 else "Условия записи не подтверждены")
+            text = f"{cause}. Без точки: {details}. {adjustment}".strip()
+            if getattr(self, "_climate_auto_problems", None) is not None:
+                self._climate_auto_problems.append(text)
+            if len(waiting) == len(states):
+                self._climate_run_skip_node(now, text, "условия записи не подтверждены")
+                return
+            self._mb_stage_excluded.update(waiting)
+            self._climate_event(f"Узел {where}. {text}", "warn")
+        if self._climate_run_param("hold_min") > 0:
+            self._climate_run_enter("hold", now)
+        else:
+            self._climate_run_after_hold(now)
+
+    def _climate_time_left(self, now: float, parameter: str) -> float:
+        """Считает остаток тайм-аута по тем же часам и настройкам шага, что использует автоматика."""
+        return self._climate_run_param(parameter) * 60 / self._climate_speed() - (now - self._climate_run_since)
+
     def _climate_run_after_hold(self, now: float):
         """После устойчивости и выдержки: точки, а у шага без точки - сразу следующий шаг."""
         self._climate_run_hold_override_s = None
         if not bool(self._climate_run_step().get("capture", True)):
             self._climate_run_node_done(now)
             return
+        if self._climate_run_stage == "hold" and getattr(self, "_mb_run_stages", None):
+            speed = self._climate_speed()
+            states = self._mb_stage_conditions(now, self._climate_run_node(),
+                                               self._climate_run_param("settle_min") * 60 / speed,
+                                               self._climate_run_param("settle_rate") * speed)
+            waiting = [self._mb_label(sa) for sa, state in states.items()
+                       if sa not in self._mb_stage_excluded and state["reasons"]]
+            if waiting and not self._mb_stage_excluded:
+                self._climate_stage_adjust(now, self._climate_run_node(), states)
+                if self._climate_run_stage == "setpoint":
+                    return
+                if not self._climate_rechecked_hold:
+                    self._climate_rechecked_hold = True
+                    self._climate_event("После выдержки условия изменились у " + ", ".join(waiting)
+                                        + ". Повторно проверяю устойчивость перед записью.", "warn")
+                    self._climate_run_enter("settle", now)
+                    return
         self._climate_run_label_index = 0
         self._climate_run_order = self._climate_label_order()
         self._climate_run_enter("points", now)
@@ -2381,6 +2681,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         if self._climate_run_attempts >= self.CLIMATE_CAPTURE_RETRIES:
             self._climate_run_paused = True
             self._climate_run_enter("capture", now)
+            self._climate_run_set(f"Прогон на паузе: точка не записалась. {self._chamber_status}", "#dc2626")
             self._climate_event(f"точка не записалась {self.CLIMATE_CAPTURE_RETRIES} раза подряд: "
                                 f"{self._chamber_status} Прогон на паузе.", "bad")
             return
@@ -2431,6 +2732,9 @@ class AppControllerClimateChamberMixin(AppControllerContract):
             self._climate_event(f"все шаги пройдены ({len(self._climate_run_done)} температур): возвращаю камеру к "
                                 f"{_c(finish)}{then}.", "info")
             return
+        if finish is not None:
+            self._climate_run_complete(f" Команда возврата к {_c(finish)} не отправлена. Проверьте пульт камеры.", stop=False)
+            return
         self._climate_run_complete("")
 
     def _climate_run_finish_tick(self, now: float):
@@ -2438,6 +2742,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         target = self._climate_run_finish_target
         actual = getattr(self._climate_reading, "actual_c", None) if self._climate_fresh(now) else None
         if self._climate_ramp_tick(now):
+            if self._climate_run_paused:
+                return
             # Срок выхода на уставку «в конце» - от конца отогрева.
             self._climate_run_since = now
             then = ", затем остановлю её" if self._climate_run_finish_stop else ""
@@ -2458,7 +2764,8 @@ class AppControllerClimateChamberMixin(AppControllerContract):
                                        + kept, stop=False)
         else:
             then = ", затем остановлю её" if self._climate_run_finish_stop else ""
-            self._climate_run_set(f"Все шаги пройдены. Возвращаю камеру к {_c(target)}{then}: сейчас {_c(actual)}.",
+            self._climate_run_set(f"Все шаги пройдены. Возвращаю камеру к {_c(target)}{then}: сейчас {_c(actual)}. "
+                                  f"До окончания ожидания {countdown(self._climate_time_left(now, 'reach_timeout_min'))}.",
                                   "#16a34a")
 
     def _climate_run_complete(self, tail: str, stop: bool = True):
@@ -2468,12 +2775,19 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         if stop and getattr(self, "_climate_run_finish_stop", False):
             self._climate_send_run(False)
             tail += " Камера остановлена."
-        self._climate_run_set(f"Автоматический прогон закончен: пройдено {len(self._climate_run_done)} температур.{tail}",
-                              "#16a34a")
-        self._climate_event(f"автоматический прогон закончен: {len(self._climate_run_done)} температур.{tail}", "ok")
+        stages = getattr(self, "_mb_run_stages", None) or {}
+        pending_profiles = self._climate_multi() and (
+            any(stage["auto_write"] for stage in stages.values()) if stages else bool(getattr(self, "_chamber_auto_write", False)))
+        note = (" Далее — запись и сверка профилей плат обучения. Итог будет отдельно." if stages
+                else " Далее — запись и проверка профилей всех плат; итог будет отдельно.") if pending_profiles else ""
+        self._climate_run_set(f"Автоматический прогон закончен: пройдено {len(self._climate_run_done)} температур.{tail}{note}",
+                              "#0f6ab4" if pending_profiles else "#16a34a")
+        self._climate_event(f"автоматический прогон закончен: {len(self._climate_run_done)} температур.{tail}{note}",
+                            "info" if pending_profiles else "ok")
         if self._climate_multi():
-            self._mb_quiet_release()
             self._mb_start_profiles()
+            if not self._mb_profiles_busy():
+                self._mb_quiet_release()
         self._climate_hook("_climate_auto_on_finish")
 
     # ------------------------------------------------------------------ показ
@@ -2738,14 +3052,7 @@ class AppControllerClimateChamberMixin(AppControllerContract):
         }
 
     def _climate_mode_hint(self) -> str:
-        """Подсказка, если режим раздела «Прогон в камере» не подходит выбранной камере."""
-        info = CHAMBERS.get(self._climate_settings["driver"])
-        want = None if info is None else info["board_only"]
-        board_only = bool(getattr(self, "_chamber_board_only", False))
-        if want is True and not board_only:
-            return ("В ESPEC испытывается одна плата: включите «Только плата» в разделе «Прогон в камере».")
-        if want is False and board_only:
-            return ("В Weiss испытывается изделие в сборе: выключите «Только плата» в разделе «Прогон в камере».")
+        """Для совместимости интерфейса оставляет пустую подсказку: модель камеры не ограничивает этап."""
         return ""
 
     def _climate_shutdown(self):

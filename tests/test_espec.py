@@ -264,7 +264,8 @@ def test_port_errors_are_readable():
 
 # ------------------------------------------------------------------ раздел программы
 
-def test_section_names_the_chamber_and_hints_the_mode(tmp_path: Path):
+def test_section_names_the_chamber_without_restricting_stage(tmp_path: Path):
+    """Чтобы любую камеру можно было использовать на любом этапе, проверяет отсутствие привязки режима к модели."""
     from tests.test_climate_run import _ClimateStub
 
     stub = _ClimateStub(tmp_path)
@@ -276,7 +277,7 @@ def test_section_names_the_chamber_and_hints_the_mode(tmp_path: Path):
     assert view["chamber"]["name"] == "ESPEC MC-811P"
     # По умолчанию порт «auto»: программа сама ищет переходник Moxa UPort.
     assert "Moxa UPort" in view["chamber"]["summary"] and "адрес 1" in view["chamber"]["summary"]
-    assert "Только плата" in view["modeHint"] and "включите" in view["modeHint"]
+    assert view["modeHint"] == "" and stub._chamber_board_only is False
 
     stub._chamber_board_only = True
     assert stub._climate_view()["modeHint"] == ""
@@ -284,7 +285,7 @@ def test_section_names_the_chamber_and_hints_the_mode(tmp_path: Path):
     assert stub._climate_set("driver", "simcon_ascii2")
     view = stub._climate_view()
     assert view["chamber"]["name"] == "Vötsch VT 7100 / Weiss WK1"
-    assert "выключите" in view["modeHint"]
+    assert view["modeHint"] == "" and stub._chamber_board_only is True
 
 
 def test_espec_settings_are_checked(tmp_path: Path):

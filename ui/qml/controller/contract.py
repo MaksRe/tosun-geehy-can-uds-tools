@@ -6,6 +6,15 @@ from typing import Any
 class AppControllerContract:
     """IDE contract for cross-mixin attributes (PyCharm static analysis)."""
 
+    # Единые пороги для управления камерой и наблюдения за прогоном.
+    AUTO_LINK_LOST_S = 120.0
+    AUTO_BOARD_LOST_S = 60.0
+    AUTO_STOPPED_PAUSE_S = 180.0
+    AUTO_SETPOINT_TOLERANCE_C = 0.3
+    AUTO_SETPOINT_RESEND_S = 60.0
+    AUTO_SETPOINT_ALERT_S = 180.0
+    AUTO_DRIFT_HOLD_S = 300.0
+
     CAN_FILTER_FIELDS: tuple[str, ...]
 
     # Qt signals used across mixins.

@@ -32,6 +32,7 @@ Card {
     property color inputFocus: "#0ea5e9"
 
     readonly property var addr: root.appController ? root.appController.boardAddressing : ({})
+    readonly property var scan: root.addr.scan || ({})
     readonly property bool active: !!root.addr.active
     readonly property bool manual: root.addr.mode === "manual"
     readonly property bool asking: !!root.addr.asking
@@ -59,6 +60,12 @@ Card {
     function confirmManual() {
         if (root.appController)
             root.appController.confirmBoardAddress(manualSaField.text, manualNameField.text)
+    }
+
+    // Для следующего поиска сохраняет диапазон, не меняя адреса и трафик плат.
+    function saveScanSettings() {
+        if (root.appController && !root.scan.active)
+            root.appController.configureBoardScan(scanStart.text, scanEnd.text, scanRepeat.checked, scanAuto.checked)
     }
 
     component Caption: Text {
@@ -370,6 +377,7 @@ Card {
             }
             InfoRow { label: "Температура платы"; value: boardCard.modelData.boardTemp }
             InfoRow { label: "Температура топлива"; value: boardCard.modelData.fuelTemp }
+            InfoRow { label: "Уровень топлива"; value: boardCard.modelData.levelText || "—" }
             InfoRow { label: "Основной контур"; value: boardCard.modelData.main }
             InfoRow { label: "Контур вида топлива"; value: boardCard.modelData.media }
 
@@ -733,6 +741,120 @@ Card {
                 Item { Layout.fillWidth: true }
             }
 
+            // Для молчащих плат ищет ответы UDS без назначения адресов и включения Tx.
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: scanLayout.implicitHeight + 24
+                radius: 12
+                color: "#f0f9ff"
+                border.color: "#bae6fd"
+
+                ColumnLayout {
+                    id: scanLayout
+                    anchors.fill: parent
+                    anchors.margins: 12
+                    spacing: 8
+                    Text {
+                        text: "Поиск подключённых плат"
+                        color: root.textMain
+                        font.pixelSize: 16
+                        font.bold: true
+                        font.family: "Bahnschrift"
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: "Находит платы с выключенным Tx: запрашивает адрес, температуры и уровень топлива. Адреса и режим Tx не меняются."
+                        wrapMode: Text.WordWrap
+                        color: root.textSoft
+                        font.pixelSize: 12
+                        font.family: "Bahnschrift"
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+                        Caption { text: "От (HEX)" }
+                        FancyTextField {
+                            id: scanStart
+                            topPadding: 2
+                            bottomPadding: 2
+                            objectName: "boardScanStart"
+                            Layout.preferredWidth: 90
+                            Layout.preferredHeight: 30
+                            text: root.scan.startText || "0x80"
+                            enabled: !root.scan.active
+                            onEditingFinished: root.saveScanSettings()
+                        }
+                        Caption { text: "До (HEX)" }
+                        FancyTextField {
+                            id: scanEnd
+                            topPadding: 2
+                            bottomPadding: 2
+                            objectName: "boardScanEnd"
+                            Layout.preferredWidth: 90
+                            Layout.preferredHeight: 30
+                            text: root.scan.endText || "0x8F"
+                            enabled: !root.scan.active
+                            onEditingFinished: root.saveScanSettings()
+                        }
+                        SmallButton {
+                            objectName: "startBoardScan"
+                            Layout.preferredWidth: 130
+                            text: "Найти платы"
+                            enabled: root.appController && !root.scan.active && !root.active
+                            tone: "#0284c7"; toneHover: "#0369a1"; tonePressed: "#075985"
+                            onClicked: root.appController.startBoardScan(scanStart.text, scanEnd.text, scanRepeat.checked, scanAuto.checked)
+                        }
+                        SmallButton {
+                            objectName: "stopBoardScan"
+                            Layout.preferredWidth: 130
+                            text: root.scan.stopping ? "Останавливаю..." : "Остановить поиск"
+                            enabled: root.appController && root.scan.active && !root.scan.stopping
+                            onClicked: root.appController.stopBoardScan()
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        CheckBox {
+                            id: scanRepeat
+                            objectName: "boardScanRepeat"
+                            text: "Повторять поиск"
+                            checked: !!root.scan.repeat
+                            enabled: !root.scan.active
+                            onToggled: root.saveScanSettings()
+                        }
+                        CheckBox {
+                            id: scanAuto
+                            objectName: "boardScanAuto"
+                            text: "Искать при открытии раздела"
+                            checked: !!root.scan.auto
+                            enabled: !root.scan.active
+                            onToggled: root.saveScanSettings()
+                        }
+                        Caption { text: "Адреса 00–FD; адрес программы пропускается." }
+                        Item { Layout.fillWidth: true }
+                    }
+                    ProgressBar {
+                        Layout.fillWidth: true
+                        visible: !!root.scan.active
+                        value: root.scan.total ? root.scan.checked / root.scan.total : 0
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: (root.scan.status || "") + " Найдено: " + (root.scan.found || 0) + "."
+                        color: root.toneColors[root.scan.tone] || root.textSoft
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: 12
+                        font.family: "Bahnschrift"
+                    }
+                    ResultsTable {
+                        Layout.fillWidth: true
+                        visible: ((root.scan.table || {}).rows || []).length > 0
+                        table: root.scan.table || ({})
+                    }
+                }
+            }
+
             // Мастер: как выбирается адрес, запуск и остановка.
             Rectangle {
                 Layout.fillWidth: true
@@ -796,6 +918,7 @@ Card {
                             Layout.preferredHeight: 30
                             fontPixelSize: 13
                             text: root.active ? "Остановить мастер" : "Запустить мастер"
+                            enabled: !root.scan.active
                             tone: root.active ? "#64748b" : "#16a34a"
                             toneHover: root.active ? "#475569" : "#15803d"
                             tonePressed: root.active ? "#334155" : "#166534"
@@ -975,14 +1098,14 @@ Card {
                 SmallButton {
                     Layout.preferredWidth: 150
                     text: "Обновить показания"
-                    enabled: (root.addr.cards || []).length > 0
+                    enabled: (root.addr.cards || []).length > 0 && !root.scan.active
                     toolTipText: "Прочитать заново данные всех карточек"
                     onClicked: if (root.appController) root.appController.refreshBoardInfo(-1)
                 }
                 SmallButton {
                     Layout.preferredWidth: 190
                     text: "Всем: только приём (TX выкл)"
-                    enabled: (root.addr.cards || []).length > 0
+                    enabled: (root.addr.cards || []).length > 0 && !root.scan.active
                     toolTipText: "Одна команда всем платам: 0x28 RX вкл · TX выкл (без подтверждения)"
                     tone: "#0f766e"; toneHover: "#115e59"; tonePressed: "#134e4a"
                     onClicked: if (root.appController) root.appController.setAllBoardsTraffic(1)
@@ -990,7 +1113,7 @@ Card {
                 SmallButton {
                     Layout.preferredWidth: 170
                     text: "Всем: RX+TX (обычная)"
-                    enabled: (root.addr.cards || []).length > 0
+                    enabled: (root.addr.cards || []).length > 0 && !root.scan.active
                     toolTipText: "Одна команда всем платам: 0x28 RX вкл · TX вкл (мастер остановится)"
                     tone: "#b45309"; toneHover: "#92400e"; tonePressed: "#78350f"
                     onClicked: if (root.appController) root.appController.releaseBoardsTraffic()

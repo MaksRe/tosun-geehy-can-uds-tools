@@ -196,6 +196,12 @@ class AppControllerProfileAuditMixin(AppControllerContract):
         multi = getattr(self, "_mb_on", None)
         if multi is not None and multi():
             working = self._mb_working_boards() or []
+            try:
+                stages = self._mb_stage_plan(time.monotonic(), self._climate_run_plan())
+            except (AttributeError, ValueError):
+                stages = {}
+            if stages:
+                return [sa for sa, stage in stages.items() if stage["check_only"]]
             return [int(board["sa"]) & 0xFF for board in working]
         target = getattr(self, "_resolve_calibration_target_sa", None)
         return [int(target()) & 0xFF] if callable(target) else []
@@ -378,6 +384,7 @@ class AppControllerProfileAuditMixin(AppControllerContract):
                 continue
             result = results.get(sa)
             if result is None:
+                add(f"profile_{sa:02X}", False, f"{self._profile_audit_label(sa)}: профиль ещё не подтверждён.")
                 continue
             label = self._profile_audit_label(sa)
             if result["error"]:

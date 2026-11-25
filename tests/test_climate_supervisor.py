@@ -388,3 +388,125 @@ def test_missing_journal_is_reported_on_resume(tmp_path: Path):
     _feed(again, now)
     assert again._climate_auto_resume_now(now)
     assert any("журнал прогона не загрузился" in text for text in again.kinds("bad"))
+
+
+def test_wrong_setpoint_blocks_point_before_watchdog_and_pauses(tmp_path):
+    """Проверяет запрет записи при неподтверждённой уставке и паузу после повтора."""
+    stub, now = _started(tmp_path)
+    stub._climate_run_enter("points", now)
+    wrong = ChamberReading(actual_c=-40, setpoint_c=-15, running=True, alarm=0)
+    for seconds in (0, 61, 181):
+        _feed(stub, now + seconds, wrong)
+        stub._climate_run_guarded_tick(now + seconds)
+        stub._climate_auto_tick(now + seconds)
+        assert stub._climate_run_stage == "points"
+    assert stub._climate_auto_paused_by == "setpoint"
+    assert not stub._chamber_points
+
+
+def test_guard_detects_alarm_at_capture_without_waiting_for_watchdog(tmp_path):
+    """Проверяет немедленную паузу перед записью при аварии пульта."""
+    stub, now = _started(tmp_path)
+    stub._climate_run_enter("capture", now)
+    _feed(stub, now, ChamberReading(actual_c=-40, setpoint_c=-40, running=True, alarm=1))
+    stub._climate_run_guarded_tick(now)
+    assert stub._climate_auto_paused_by == "alarm" and not stub._chamber_points
+
+
+def test_stale_single_sensor_cannot_qualify_on_timeout(tmp_path):
+    """Проверяет, что старое показание одной платы не превращается в точку по сроку."""
+    stub, now = _started(tmp_path)
+    stub._climate_run_enter("settle", now)
+    stub._climate_board.append((now, -40))
+    stub._climate_run_tick(now + 4 * 3600)
+    assert stub._climate_auto_paused_by == "sensors" and not stub._chamber_points
+
+
+def test_flat_chamber_pauses_but_slow_progress_continues(tmp_path):
+    """Отличает остановку нагрева от медленного приближения к уставке."""
+    for label, speed in (("flat", 0), ("slow", .06)):
+        stub, now = _started(tmp_path / label)
+        stub._climate_settings["sim_speed"] = 1
+        for seconds in range(0, 1211, 10):
+            _feed(stub, now + seconds, ChamberReading(actual_c=20 - speed * seconds / 60,
+                                                       setpoint_c=-40, running=True, alarm=0))
+            stub._climate_auto_watchdog(now + seconds)
+        assert stub._climate_run_paused == (speed == 0)
+
+
+def test_unwritable_journal_does_not_consume_point(tmp_path, monkeypatch):
+    """Проверяет отказ диска и повторную запись после устранения причины."""
+    stub, now = _started(tmp_path)
+    stub._climate_run_enter("capture", now)
+    stub._chamber_rehearsal = False
+    monkeypatch.setattr(stub, "_chamber_test_on", lambda: False)
+    values = dict(main=100, media=200, board_temp_x10=250, fuel_temp_x10=250)
+    with monkeypatch.context() as failure:
+        failure.setattr(stub, "_chamber_write_csv", lambda path: "Диск занят")
+        assert stub._chamber_append_point(values) is False
+    assert not stub._chamber_points and stub._climate_auto_paused_by == "journal"
+    stub._climate_run_pause(False)
+    stub._chamber_append_point(values)
+    assert len(stub._chamber_points) == 1
+    assert Path(stub._chamber_file_path).is_file()
+
+
+def test_failed_file_replacement_preserves_previous_journal(tmp_path, monkeypatch):
+    """Проверяет сохранность предыдущего CSV при ошибке замены открытого файла на Windows."""
+    stub = _ready(tmp_path)
+    path = tmp_path / "журнал.csv"
+    path.write_text("ранее записанные точки", encoding="utf-8")
+
+    def locked(source, target):
+        """Имитирует отказ файловой системы при замене занятого файла."""
+        raise PermissionError("Журнал занят")
+
+    monkeypatch.setattr(Path, "replace", locked)
+    assert "Журнал занят" in stub._chamber_write_csv(str(path))
+    assert path.read_text(encoding="utf-8") == "ранее записанные точки"
+
+
+def test_camera_read_failure_blocks_even_recent_last_temperature(tmp_path):
+    """Проверяет ожидание свежего ответа и сохранение срока шага после краткого обрыва."""
+    stub, now = _started(tmp_path)
+    stub._climate_run_enter("settle", now)
+    reading = ChamberReading(actual_c=-40, setpoint_c=-40, running=True, alarm=0)
+    _feed(stub, now + 4, reading)
+    stub._climate_reading_failed = True
+    stub._climate_run_guarded_tick(now + 4)
+    assert "До паузы" in stub._climate_run_status
+    stub._climate_reading_failed = False
+    _feed(stub, now + 6, reading)
+    stub._climate_run_guarded_tick(now + 6)
+    assert stub._climate_run_stage == "settle" and stub._climate_run_since == now
+    stub._climate_reading_failed = True
+    stub._climate_run_guarded_tick(now + 7)
+    stub._climate_run_guarded_tick(now + 127)
+    assert stub._climate_auto_paused_by == "link"
+
+
+def test_finish_retries_unaccepted_temperature_without_stopping_hot(tmp_path):
+    """Проверяет один повтор команды возврата и паузу при неизменном показании пульта."""
+    stub, now = _started(tmp_path)
+    stub._climate_run_finish_target = 25
+    stub._climate_run_enter("finish", now)
+    before = len(stub._climate_link.commands)
+    for seconds in (0, 61, 90, 181):
+        _feed(stub, now + seconds, ChamberReading(actual_c=85, setpoint_c=85, running=True, alarm=0))
+        stub._climate_run_guarded_tick(now + seconds)
+    assert stub._climate_link.commands[before:] == [("setpoint", 25)]
+    assert stub._climate_auto_paused_by == "setpoint"
+
+
+def test_pending_capture_cannot_write_while_paused_or_after_stop(tmp_path, monkeypatch):
+    """Блокирует отложенную запись из отдельного таймера при паузе и отмене прогона."""
+    stub, now = _started(tmp_path)
+    stub._climate_run_enter("capturing", now)
+    stub._chamber_capture_waiting = True
+    stub._climate_run_pause(True)
+    calls = []
+    monkeypatch.setattr(stub, "_chamber_live_try_store", lambda: calls.append(True))
+    stub._chamber_live_check_waiting(now)
+    stub._climate_run_stop()
+    stub._chamber_live_check_waiting(now + 1)
+    assert calls == [] and not stub._chamber_capture_waiting

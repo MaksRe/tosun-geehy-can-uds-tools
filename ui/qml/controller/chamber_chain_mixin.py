@@ -260,7 +260,9 @@ class AppControllerChamberChainMixin(AppControllerContract):
     def _chamber_chain_fail(self, step: str, reason: str):
         """Останавливает цепочку на шаге и называет причину."""
         self._chamber_chain_steps[step] = "fail"
-        text = f"Профиль не записан до конца: {reason}"
+        title = {"verify": "Профиль отправлен, но сверка не завершена",
+                 "file": "Профиль записан и сверен, но файл не сохранён"}.get(step, "Профиль не записан до конца")
+        text = f"{title}: {reason}"
         self._chamber_chain_finish(text, "#dc2626")
         self._chamber_remote("_remote_note_chain", False, text, "")
 
@@ -269,6 +271,9 @@ class AppControllerChamberChainMixin(AppControllerContract):
         self._chamber_chain_stage = ""
         self._chamber_chain_timer.stop()
         self._chamber_chain_set(text, color)
+        note_result = getattr(self, "_mb_note_profile_result", None)
+        if callable(note_result):
+            note_result(text, self._chamber_chain_steps.get("file") == "ok")
         if self._chamber_tables_deferred:
             # Пока шла запись, пришли новые точки: пересчёт может снова запустить запись.
             self._chamber_auto_compute()

@@ -271,7 +271,7 @@ def test_board_list_is_kept_and_checked(tmp_path: Path):
     assert not stub._mb_add_board("0xF1", "тестер")[0], "адрес самой программы"
     assert not stub._mb_add_board("abc", "x")[0]
     again = _MbStub(tmp_path)
-    assert [board["sa"] for board in again._mb_boards] == [0x80, 0x81, 0x82] and again._mb_on()
+    assert [board["sa"] for board in again._mb_boards] == [0x80, 0x81, 0x82] and not again._mb_on()
     assert stub._mb_remove_board(0x82)[0] and stub._mb_remove_board(0x81)[0]
     assert not stub._mb_on(), "одна плата - обычный режим"
 

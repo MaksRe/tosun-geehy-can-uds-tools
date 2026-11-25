@@ -119,10 +119,12 @@ def test_journal_copy_reaches_the_network_folder(tmp_path: Path):
         source = tmp_path / "chamber_1.csv"
         source.write_text("первая версия", encoding="utf-8")
         sync.enqueue(source, "chamber")
+        assert _wait(lambda: results)
         source.write_text("вторая версия", encoding="utf-8")
         sync.enqueue(source, "chamber")
 
-        assert _wait(lambda: results)
+        # Чтобы не принять первую копию за завершение второй, ждёт отдельного подтверждения обновления.
+        assert _wait(lambda: len(results) >= 2)
         copied = target / "chamber" / "chamber_1.csv"
         assert copied.read_text(encoding="utf-8") == "вторая версия"
         assert not list((target / "chamber").glob("*.part"))

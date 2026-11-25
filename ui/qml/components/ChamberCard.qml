@@ -37,6 +37,7 @@ Card {
     readonly property var pages: [
         { "key": "points", "title": "Точки", "tip": "Запись точки, полнота по узлам, замечания расчёта и журнал точек" },
         { "key": "results", "title": "Итоги", "tip": "Итоги прогона: таблицы по узлам и этапам, ёмкость, уход от +25 °C, разброс" },
+        { "key": "tubes", "title": "Проверка трубок", "tip": "Прибавка отсчётов после монтажа относительно голой платы" },
         { "key": "monitor", "title": "Уровень", "tip": "Уровень топлива сейчас у всех плат: погрешность и сдвиг от +25 °C по тому, что считает сам прибор" },
         { "key": "profile", "title": "Расчёт и профиль", "tip": "Режим прогона, расчёт таблиц и запись профиля в прибор" },
         { "key": "journals", "title": "Журналы", "tip": "Журналы на диске: открыть, сохранить, журналы первого этапа всем платам" },
@@ -60,7 +61,9 @@ Card {
 
     // Прибор опрашивается, только пока раздел открыт и окно не свёрнуто.
     readonly property bool liveWanted: root.visible && root.Window.visibility !== Window.Hidden
+    readonly property bool tubeWanted: root.liveWanted && root.page === "tubes"
     onLiveWantedChanged: if (root.appController) root.appController.setChamberLiveEnabled(root.liveWanted)
+    onTubeWantedChanged: if (root.appController) root.appController.setChamberTubeVisible(root.tubeWanted)
     Component.onCompleted: if (root.appController) root.appController.setChamberLiveEnabled(root.liveWanted)
 
     cardColor: "#ffffff"
@@ -341,6 +344,11 @@ Card {
 
                             Text {
                                 anchors.centerIn: parent
+                                width: Math.max(0, parent.width - 6)
+                                horizontalAlignment: Text.AlignHCenter
+                                fontSizeMode: Text.HorizontalFit
+                                minimumPixelSize: 9
+                                elide: Text.ElideRight
                                 text: pageTab.modelData.title
                                       + (pageTab.modelData.key === "points" && root.appController
                                          ? "  " + root.appController.chamberPointCount : "")
@@ -366,6 +374,13 @@ Card {
                         }
                     }
                 }
+            }
+
+            Loader {
+                Layout.fillWidth: true
+                visible: active
+                active: root.page === "tubes"
+                sourceComponent: TubeCheckPanel { appController: root.appController }
             }
 
             // --- Снятие точки ---
@@ -778,7 +793,7 @@ Card {
                             Layout.preferredWidth: 72
                             Layout.preferredHeight: 30
                             // Без привязки: показ обновляется много раз в секунду и затирал бы ввод.
-                            Component.onCompleted: text = root.live.windowText || "10"
+                            Component.onCompleted: text = root.live.configuredWindowText || "10"
                             horizontalAlignment: TextInput.AlignHCenter
                             textColor: root.textMain
                             bgColor: root.inputBg
@@ -968,16 +983,40 @@ Card {
                 expanded: true
                 title: "Уровень топлива сейчас"
                 readonly property var monitor: root.appController ? root.appController.chamberMonitor : ({})
-                hintText: monitorSpoiler.monitor.worst
+                hintText: monitorSpoiler.monitor.levelEnabled === false ? "оценка уровня выключена" : monitorSpoiler.monitor.worst
                           ? "худшее за прогон " + monitorSpoiler.monitor.worst + " %"
                           : "все платы сразу, обновляется каждые пару секунд"
 
                 ResultsTable {
+                    visible: monitorSpoiler.monitor.levelEnabled !== false
                     Layout.fillWidth: true
                     table: monitorSpoiler.monitor.now || ({})
                 }
 
+                Text {
+                    Layout.fillWidth: true
+                    visible: monitorSpoiler.monitor.levelEnabled === false
+                    text: monitorSpoiler.monitor.levelReason || ""
+                    wrapMode: Text.WordWrap
+                    color: "#475569"
+                    font.pixelSize: 13
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: (monitorSpoiler.monitor.storageError || monitorSpoiler.monitor.recording || "")
+                          + (monitorSpoiler.monitor.gaps ? " · Пропусков показаний: " + monitorSpoiler.monitor.gaps : "")
+                    color: monitorSpoiler.monitor.storageError ? "#dc2626" : "#475569"
+                    wrapMode: Text.WordWrap
+                    font.pixelSize: 13
+                }
+                LevelMonitorChart {
+                    visible: monitorSpoiler.monitor.levelEnabled !== false
+                    monitor: monitorSpoiler.monitor
+                }
+
                 Spoiler {
+                    visible: monitorSpoiler.monitor.levelEnabled !== false
                     Layout.fillWidth: true
                     expanded: false
                     title: "Подробнее: по узлам, итог периода, кнопки"
@@ -991,7 +1030,7 @@ Card {
                             text: "Считать сдвиг от текущего"
                             tone: "#0284c7"; toneHover: "#0369a1"; tonePressed: "#075985"
                             toolTipText: "Сдвиг каждой платы будет считаться от её показания сейчас, а не при +25 °C. Нужно, только если трубка в этом прогоне не бывает при +25 °C"
-                            enabled: root.appController !== null
+                            enabled: root.appController !== null && !monitorSpoiler.monitor.hasRun
                             onClicked: if (root.appController) root.appController.setChamberMonitorReference()
                         }
                         SmallButton {
@@ -1000,7 +1039,7 @@ Card {
                             Layout.preferredWidth: 170
                             text: armed ? "Точно? Ещё раз" : "Сбросить наблюдение"
                             toolTipText: "Забыть историю и показание при +25 °C у всех плат. Журналы точек не трогаются"
-                            enabled: root.appController !== null
+                            enabled: root.appController !== null && !monitorSpoiler.monitor.hasRun
                             onClicked: {
                                 if (!armed) { armed = true; monitorResetDisarm.restart(); return }
                                 armed = false
@@ -1012,10 +1051,9 @@ Card {
                             tip: "Погрешность - уровень прибора минус настоящий: у сухой трубки («воздух») настоящий 0 %, "
                                  + "в топливе («жидкость») 100 %.<br><br>"
                                  + "Сдвиг от +25 °C - насколько уровень ушёл от показания этой же платы при +25 °C трубки. "
-                                 + "Это ошибка от температуры, которую профиль не убрал. Показание при +25 °C запоминается само.<br><br>"
+                                 + "Изменение может включать температурный дрейф и изменение плёнки. Показание при +25 °C запоминается само.<br><br>"
                                  + "Требование ±1 %: до 0,5 % - в норме, 0,5-1 % - на грани, больше 1 % - вне допуска.<br><br>"
-                                 + "Если холодные узлы завышены, а горячие нет - на трубке, похоже, осталась плёнка топлива: при нагреве она "
-                                 + "стекает и испаряется (прогон 11-12.11.2026)."
+                                 + "Плёнка после калибровки входит в отклонение от 0 %. Программа не вычитает её влияние."
                         }
                         Item { Layout.fillWidth: true }
                     }

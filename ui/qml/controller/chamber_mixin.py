@@ -29,6 +29,7 @@
 from __future__ import annotations
 
 import csv
+import tempfile
 import hashlib
 import json
 import pathlib
@@ -40,7 +41,9 @@ from PySide6.QtCore import QTimer
 
 import chamber_fit
 from ui.qml.app_paths import previous_version_roots
+from ui.qml.capacitance import counts_to_pf, decimal_text
 from ui.qml.chamber_results import board_results, combined_table, overview_table
+from ui.qml.tube_check import CHANNELS, bare_at_temperature, bare_board_curves, dry_reference_points, nearest_dry_point
 from uds.data_identifiers import UdsData
 from uds.services.read_data_by_id import ServiceReadDataById
 
@@ -120,6 +123,9 @@ class AppControllerChamberMixin(AppControllerContract):
         "Показаний в среднем",
         "Разброс основного (отсч.)",
         "Разброс вида топлива (отсч.)",
+        # 14.11.2026: что выдаёт сам прибор - для погрешности уровня в итогах.
+        "Уровень прибора (%)",
+        "Итог периода (отсч.)",
     )
     # Журналы до связи с камерой: без последнего столбца. Читаются так же.
     CHAMBER_LEGACY_COLUMNS = 7
@@ -179,8 +185,19 @@ class AppControllerChamberMixin(AppControllerContract):
         self._chamber_journal_origin: dict | None = None
         # Монитор отклонений (chamber_monitor_mixin): опора, история по узлам, время последней записи.
         self._chamber_monitor_ref: dict | None = None
+        self._chamber_tube_sources: dict[int, dict] = {}
+        self._chamber_tube_visible = False
         self._chamber_monitor_history: list[dict] = []
         self._chamber_monitor_last_s = 0.0
+        # Для безопасного опроса до первого прогона явно задаёт пустое состояние постоянного монитора.
+        self._chamber_monitor_session = None
+        self._chamber_monitor_started_s: float | None = None
+        self._chamber_monitor_tick_s = 0.0
+        self._chamber_monitor_suspended = False
+        self._chamber_monitor_storage_error = ""
+        self._chamber_monitor_frozen = None
+        self._chamber_monitor_plots_cache = None
+        self._run_report_frozen = None
 
         # Прогон одной платы без эталонов и без трубки: в каждом узле снимается
         # только своя ёмкость платы («0/0»). Таблица платы тогда считается по одной
@@ -370,15 +387,25 @@ class AppControllerChamberMixin(AppControllerContract):
             "date": datetime.now().strftime("%Y-%m-%d"),
         }
         # Статистика окна усреднения - для итогов прогона (сколько показаний и их разброс).
-        for key in ("samples", "main_spread", "media_spread"):
+        for key in ("samples", "main_spread", "media_spread", "comp"):
             if values.get(key) is not None:
                 point[key] = int(round(float(values[key])))
+        # Уровень прибора в точке, десятые доли % (0x0018): по нему итоги считают погрешность уровня.
+        if values.get("level_x10") is not None:
+            point["level_x10"] = round(float(values["level_x10"]), 1)
         # Температура воздуха камеры рядом с температурой платы: видно, насколько плата отстала.
         chamber_temp = getattr(self, "_climate_point_temperature", None)
         chamber_x10 = chamber_temp() if chamber_temp is not None else None
         if chamber_x10 is not None:
             point["chamber_temp_x10"] = int(chamber_x10)
         self._chamber_points.append(point)
+        saved_path = None
+        if not rehearsal and getattr(self, "_climate_run_stage", "") in ("capture", "capturing"):
+            saved_path = self._chamber_autosave()
+            if not saved_path:
+                self._chamber_points.pop()
+                self._climate_run_fault("journal", "Не удалось сохранить точку на диск. Проверьте журнал и свободное место.")
+                return False
         repeat = "" if rehearsal else self._chamber_repeatability(point)
 
         node = chamber_fit.nearest_node(point["board_temp_x10"])
@@ -394,7 +421,7 @@ class AppControllerChamberMixin(AppControllerContract):
 
         prefix = "Пробная точка" if rehearsal else "Точка"
         how = f" ({detail})" if detail else ""
-        saved = self._chamber_after_change()
+        saved = self._chamber_after_change(saved_path) if saved_path else self._chamber_after_change()
         if not self._chamber_rehearsal:
             self._chamber_remote("_remote_note_point", point)
         self._chamber_set_status(
@@ -608,6 +635,225 @@ class AppControllerChamberMixin(AppControllerContract):
                 unique.append(folder)
         return unique
 
+    def _chamber_tube_read_journal(self, path: pathlib.Path, sa: int) -> tuple[list[dict], str]:
+        """Читает источник сравнения и проверяет адрес платы, не открывая рабочий журнал."""
+        if path.suffix.casefold() != ".csv":
+            return [], "Выберите CSV журнала прогона."
+        address = journal_sa(path.name)
+        if address is not None and address != sa:
+            return [], f"Журнал относится к 0x{address:02X}. Сейчас выбран узел 0x{sa:02X}."
+        try:
+            points = self._chamber_parse_journal(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError, OverflowError, csv.Error) as error:
+            return [], f"Не удалось прочитать журнал. {error}"
+        return (points, "") if points else ([], "В CSV нет измерений прогона. Проверьте выбранный файл.")
+
+    def _chamber_tube_addresses(self, now: float | None = None) -> list[int]:
+        """Для проверки трубок использует обнаруженные адреса, а в прогоне только его участников."""
+        if not (self._can.is_connect and self._can.is_trace):
+            return []
+        now = time.monotonic() if now is None else now
+        grouped = self._mb_live_group()
+        boards = self._mb_polled_boards() if grouped else [{"sa": self._resolve_calibration_target_sa()}]
+        scan = getattr(self, "_addr_scan", None) or {}
+        owner = self._mb_active_sa if self._mb_on() else self._resolve_calibration_target_sa()
+        addresses = []
+        for board in boards:
+            sa = board["sa"]
+            row = scan.get("rows", {}).get(sa, {})
+            stamp = row.get("identified_at", 0.0)
+            if sa == owner:
+                source, seen = self._chamber_live_source_sa, self._chamber_live_seen
+            else:
+                context = self._mb_contexts.get(sa, {})
+                source, seen = context.get("_chamber_live_source_sa"), context.get("_chamber_live_seen") or {}
+            if source == sa:
+                stamp = max(stamp, seen.get("board_temp", 0.0))
+            if stamp > scan.get("missed_at", {}).get(sa, 0.0) and now - stamp <= self.MB_PRESENT_S:
+                addresses.append(sa)
+        return addresses
+
+    def _chamber_tube_load(self, sa: int, path: str, reference: bool = False) -> str:
+        """Закрепляет выбранную базу или прошлый замер за адресом, указанным при открытии диалога."""
+        if sa not in self._chamber_tube_addresses():
+            return f"Узел 0x{sa:02X} недоступен. Дождитесь его ответа и выберите файл ещё раз."
+        if reference and not path:
+            self._chamber_tube_sources.get(sa, {}).pop("reference", None)
+            self.chamberLiveChanged.emit()
+            return ""
+        source = pathlib.Path(path)
+        points, error = self._chamber_tube_read_journal(source, sa)
+        if error:
+            return error
+        if reference:
+            dry = dry_reference_points(points)
+            if not dry:
+                return "В журнале нет рабочих точек с пометкой «воздух»."
+            self._chamber_tube_sources.setdefault(sa, {})["reference"] = (source, dry)
+        else:
+            curves = bare_board_curves(points)
+            if not any(curves.values()):
+                return "В журнале нет рабочих точек голой платы «0/0»."
+            self._chamber_tube_set_base(sa, source, curves, points)
+        self.chamberLiveChanged.emit()
+        return ""
+
+    def _chamber_tube_set_base(self, sa, source, curves, points):
+        """Чтобы сохранить явно выбранный прошлый замер, обновляет вместе с базой только автоматическую привязку."""
+        state = self._chamber_tube_sources.setdefault(sa, {})
+        old_base = state.get("baseline")
+        old_reference = state.get("reference")
+        state["baseline"] = (source, curves)
+        if old_reference is None or (old_base is not None and old_reference[0] == old_base[0]):
+            dry = dry_reference_points(points)
+            if dry:
+                state["reference"] = (source, dry)
+            else:
+                state.pop("reference", None)
+
+    def _chamber_tube_find(self) -> str:
+        """Для выбранной платы подбирает журнал голой платы по адресу и сумме профиля."""
+        sa = self._resolve_calibration_target_sa()
+        if sa not in self._chamber_tube_find_bases([sa]):
+            return f"Журнал с точками «0/0» для 0x{sa:02X} не найден. Выберите CSV вручную."
+        return ""
+
+    def _chamber_tube_find_bases(self, addresses: list[int]) -> set[int]:
+        """Для пакетного поиска обходит папки один раз и выбирает отдельную базу для каждого адреса."""
+        if not addresses:
+            return set()
+        info = getattr(self, "_addr_info", None) or {}
+        crcs = {sa: info.get(sa, {}).get("profileCrc") for sa in addresses}
+        folders = self._chamber_journal_dirs()
+        root = getattr(self, "_project_root_directory", None)
+        if root is not None:
+            root = pathlib.Path(root)
+            folders.append(root / "logs")
+            project = root.parent.parent if root.parent.name.casefold() == "dist" else root.parent
+            if (project / "main.spec").is_file():
+                folders.append(project / "logs")
+        best = {}
+        seen = set()
+        for folder in dict.fromkeys(folders):
+            for path in folder.rglob("chamber_*.csv"):
+                sa = journal_sa(path.name)
+                if sa not in crcs or path in seen:
+                    continue
+                seen.add(path)
+                points, error = self._chamber_tube_read_journal(path, sa)
+                if error:
+                    continue
+                curves = bare_board_curves(points)
+                if not any(curves.values()):
+                    continue
+                try:
+                    modified = path.stat().st_mtime
+                except OSError:
+                    continue
+                crc = crcs[sa]
+                same_profile = crc not in (None, 0) and self._chamber_journal_profile_crc(path) == crc
+                score = (same_profile, min(map(len, curves.values())), sum(map(len, curves.values())), modified)
+                if sa not in best or score > best[sa][0]:
+                    best[sa] = (score, path, curves, points)
+        for sa, (_, path, curves, points) in best.items():
+            self._chamber_tube_set_base(sa, path, curves, points)
+        if best:
+            self.chamberLiveChanged.emit()
+        return set(best)
+
+    def _chamber_tube_display_stats(self, key: str, now: float) -> dict | None:
+        """Между ответами показывает среднее на момент последнего принятого отсчёта и отмечает задержку."""
+        samples = self._chamber_live_recent.get(key) or []
+        if not samples or key in self._chamber_live_missing:
+            return None
+        stamp = min(samples[-1][0], self._chamber_live_seen.get(key, 0.0))
+        age = now - stamp
+        fresh_s = self._chamber_live_stale_s()
+        if age >= max(self._chamber_live_window_s(), 2 * fresh_s):
+            return None
+        stats = self._chamber_live_stats(key, samples[-1][0])
+        if stats is not None:
+            stats["waiting"] = age > fresh_s or bool(self._chamber_live_outliers.get(key))
+        return stats
+
+    def _chamber_tube_view(self, now: float | None = None) -> dict:
+        """Сравнивает в контексте платы её свежие исходные отсчёты с её базой."""
+        now = time.monotonic() if now is None else now
+        sa = self._resolve_calibration_target_sa()
+        state = self._chamber_tube_sources.get(sa, {})
+        base_path, curves = state.get("baseline", (None, {}))
+        ref_path, ref_points = state.get("reference", (None, []))
+        view = {"sa": sa, "node": self._mb_label(sa), "baseline": "" if base_path is None else str(base_path),
+                "reference": "" if ref_path is None else str(ref_path), "unsigned": any(
+                    journal_sa(path.name) is None for path in (base_path, ref_path) if path is not None), "rows": []}
+        if self._chamber_test_mode or self._chamber_rehearsal:
+            return dict(view, status="Для проверки монтажа выключите тестовый режим.")
+        if not (self._can.is_connect and self._can.is_trace):
+            return dict(view, status="Подключите CAN и включите трассировку.")
+        if getattr(self, "_chamber_live_source_sa", None) != sa:
+            return dict(view, status="Жду свежую температуру выбранной платы.")
+        board = self._chamber_tube_display_stats("board_temp", now)
+        if board is None:
+            return dict(view, status="Жду среднюю температуру платы.")
+        temp = board["mean"]
+        tube = self._chamber_live_stats("fuel_temp", now) if self._chamber_live_fresh("fuel_temp", now) else None
+        dry = nearest_dry_point(ref_points, temp, tube["mean"] if tube else None)
+        if dry:
+            dry_board = decimal_text(dry["board_temp_x10"] / 10)
+            dry_tube = decimal_text(dry["fuel_temp_x10"] / 10)
+            view["referenceStatus"] = f"Прошлый замер на воздухе: плата {dry_board} °C, трубка {dry_tube} °C."
+        elif ref_points:
+            view["referenceStatus"] = "Нет прошлого замера при близких температурах платы и трубки."
+        view["temperature"] = decimal_text(temp / 10) + " °C"
+        for key, label in CHANNELS.items():
+            stats = self._chamber_tube_display_stats(key, now)
+            base = bare_at_temperature(curves.get(key, []), temp)
+            current = round(stats["mean"]) if stats and 0 < stats["mean"] <= 0xFFFF else None
+            baseline = round(base[0]) if base else None
+            delta = current - baseline if current is not None and baseline is not None else None
+            previous = dry.get(key) if dry else None
+            if previous is not None and not 0 < previous <= 0xFFFF:
+                previous = None
+            if base:
+                temperatures = " и ".join(decimal_text(t / 10) + " °C" for t in base[1])
+                detail = ("База между замерами при " if len(base[1]) == 2 else "База по замеру при ") + temperatures + "."
+            else:
+                detail = ("Нет базы «0/0» при близкой температуре." if curves.get(key)
+                          else "В журнале нет отсчётов этого контура.")
+            note = ""
+            if current is None:
+                detail += " Нет свежего среднего по контуру."
+                note = "Ждём показания контура"
+            elif stats["waiting"] or board["waiting"]:
+                detail += " Показан последний замер, ожидается обновление."
+                note = "Последний замер · ждём обновления"
+                view["displayNote"] = note
+            elif stats["count"] < self.CHAMBER_MIN_SAMPLES:
+                detail += f" Предварительно, отсчётов в среднем: {stats['count']}."
+                note = "Предварительно · набирается среднее"
+                view.setdefault("displayNote", note)
+            dry_delta = current - previous if previous is not None and current is not None else None
+            if dry_delta is not None:
+                detail += f" Сухая трубка ранее: {previous} отсч. ({dry_delta:+d} сейчас к прежнему)."
+            view["rows"].append({"key": key, "label": label, "baseline": baseline, "current": current,
+                                 "dryDelta": dry_delta, "note": note,
+                                 "delta": delta, "pf": None if delta is None else decimal_text(counts_to_pf(delta)),
+                                 "spread": stats["spread"] if current is not None else None, "detail": detail})
+        return view
+
+    def _chamber_tube_group_view(self) -> dict:
+        """Для общей таблицы собирает результаты по адресам на один момент времени."""
+        now = time.monotonic()
+        boards = []
+        grouped = self._mb_live_group()
+        for sa in self._chamber_tube_addresses(now):
+            if grouped:
+                with self._mb_live_context(sa):
+                    boards.append(self._chamber_tube_view(now))
+            else:
+                boards.append(self._chamber_tube_view(now))
+        return {"boards": boards, "scanAllowed": not self._mb_stages_locked()}
+
     @staticmethod
     def _chamber_journal_place(folder: pathlib.Path) -> str:
         """Где лежит чужой журнал - коротко: «прошлая версия v1.0.16» или последние две папки пути."""
@@ -660,6 +906,12 @@ class AppControllerChamberMixin(AppControllerContract):
         own = self._chamber_autosave_directory()
         current = str(pathlib.Path(self._chamber_file_path).resolve()) if self._chamber_file_path else ""
         found = {}
+        # 13.11.2026: раз в 10 с в потоке окна перечитывались и разбирались все журналы (своя папка,
+        # подпапки, прошлые версии); с каждым прогоном их больше - окно подвисало, опрос плат вставал.
+        # Теперь файл разбирается заново, только если изменились его время записи, размер или профиль.
+        file_cache = getattr(self, "_chamber_journal_file_cache", None)
+        if file_cache is None:
+            file_cache = self._chamber_journal_file_cache = {}
         for folder in self._chamber_journal_dirs():
             try:
                 files = list(folder.rglob("chamber_*.csv"))
@@ -669,11 +921,24 @@ class AppControllerChamberMixin(AppControllerContract):
                 try:
                     resolved = path.resolve()
                     stat = path.stat()
-                    text = path.read_text(encoding="utf-8-sig", errors="replace")
                 except OSError:
                     continue
                 key = str(resolved)
                 if key in found:
+                    continue
+                profile = path.with_name(f"{path.stem}_profile.json")
+                try:
+                    profile_mtime = profile.stat().st_mtime
+                except OSError:
+                    profile_mtime = None
+                signature = (stat.st_mtime, stat.st_size, profile_mtime)
+                cached_file = file_cache.get(key)
+                if cached_file is not None and cached_file[0] == signature:
+                    found[key] = dict(cached_file[1], current=key == current)
+                    continue
+                try:
+                    text = path.read_text(encoding="utf-8-sig", errors="replace")
+                except OSError:
                     continue
                 points = max(0, sum(1 for line in text.splitlines() if line.strip()) - 1)
                 parsed = self._chamber_parse_journal(text) or []
@@ -688,6 +953,7 @@ class AppControllerChamberMixin(AppControllerContract):
                     "points": points, "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%d.%m.%Y %H:%M"),
                     "stamp": stat.st_mtime, "current": key == current, "external": not inside,
                 }
+                file_cache[key] = (signature, dict(found[key]))
         journals = sorted(found.values(), key=lambda item: item["stamp"], reverse=True)
         for item in journals:
             if item["folder"] == ".":
@@ -821,7 +1087,7 @@ class AppControllerChamberMixin(AppControllerContract):
         self._chamber_tables_color = "#64748b"
         self._chamber_set_status("Журнал прогона очищен. Следующая точка начнёт новый файл.", "#64748b")
 
-    def _chamber_after_change(self) -> str:
+    def _chamber_after_change(self, saved_path=None) -> str:
         """После каждой правки журнала: сохраняет его в файл и пересчитывает таблицы.
 
         Возвращает хвост строки хода работы: куда сохранён журнал. Точки пробной
@@ -831,7 +1097,7 @@ class AppControllerChamberMixin(AppControllerContract):
         if self._chamber_rehearsal:
             self.chamberChanged.emit()
             return ""
-        path = self._chamber_autosave()
+        path = saved_path or self._chamber_autosave()
         self._chamber_auto_compute()
         self.chamberChanged.emit()
         if not path:
@@ -868,11 +1134,14 @@ class AppControllerChamberMixin(AppControllerContract):
         return path
 
     def _chamber_write_csv(self, path: str):
-        """Пишет журнал в CSV. Возвращает None или текст ошибки."""
+        """Заменяет журнал только после полной записи нового CSV в той же папке."""
+        temporary = None
         try:
             target = pathlib.Path(str(path))
             target.parent.mkdir(parents=True, exist_ok=True)
-            with target.open("w", newline="", encoding="utf-8-sig") as file:
+            with tempfile.NamedTemporaryFile(mode="w", dir=target.parent, delete=False, newline="",
+                                             encoding="utf-8-sig") as file:
+                temporary = pathlib.Path(file.name)
                 writer = csv.writer(file, delimiter=";")
                 writer.writerow(self.CHAMBER_COLUMNS)
                 for point in self._chamber_points:
@@ -890,9 +1159,19 @@ class AppControllerChamberMixin(AppControllerContract):
                         "" if point.get("samples") is None else int(point["samples"]),
                         "" if point.get("main_spread") is None else int(point["main_spread"]),
                         "" if point.get("media_spread") is None else int(point["media_spread"]),
+                        "" if point.get("level_x10") is None
+                        else f"{point['level_x10'] / 10:.2f}".replace(".", ","),
+                        "" if point.get("comp") is None else int(point["comp"]),
                     ))
+            temporary.replace(target)
         except OSError as error:
             return str(error)
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
         return None
 
     def _chamber_save_file(self, path: str) -> bool:
@@ -956,6 +1235,12 @@ class AppControllerChamberMixin(AppControllerContract):
                 value = number(row[offset]) if len(row) > offset else None
                 if value is not None:
                     point[key] = int(round(value))
+            level = number(row[base + 4]) if len(row) > base + 4 else None
+            if level is not None:
+                point["level_x10"] = round(level * 10, 1)
+            comp = number(row[base + 5]) if len(row) > base + 5 else None
+            if comp is not None:
+                point["comp"] = int(round(comp))
             points.append(point)
         return points
 
@@ -1226,17 +1511,22 @@ class AppControllerChamberMixin(AppControllerContract):
         одна плата - итоги открытого журнала.
         """
         boards = []
+        context_of = getattr(self, "_chamber_monitor_level_context", None)
+        level_enabled = not callable(context_of) or context_of().get("levelEnabled") is not False
         multi = getattr(self, "_mb_on", None)
         if multi is not None and multi():
             shown = getattr(self, "_mb_active_sa", None)
-            # Чтобы отключённая плата не теряла свои итоги, включаем все сохранённые контексты списка.
-            for board in self._mb_boards:
+            # Участники прогона (пропавшая с шины плата не теряет итогов), без прогона - платы на шине.
+            for board in self._mb_result_boards():
                 sa = int(board["sa"])
-                with self._mb_context(sa, notify=False):
+                stage = self._mb_stage_for(sa)
+                with self._mb_context(sa, notify=False), self._mb_stage_context(sa):
                     result = board_results(self._chamber_points, str(board["name"]), f"0x{sa:02X}",
                                            span_known=self._chamber_span_known(),
                                            check=bool(getattr(self, "_chamber_check_only", False)))
                 result["shown"] = sa == shown
+                result["levelVisible"] = level_enabled and (not stage or stage["check_only"])
+                result["runStage"] = self._mb_stage_name(sa)
                 boards.append(result)
         else:
             target = getattr(self, "_resolve_calibration_target_sa", None)
@@ -1244,11 +1534,23 @@ class AppControllerChamberMixin(AppControllerContract):
             result = board_results(self._chamber_points, "Плата", sa_text, span_known=self._chamber_span_known(),
                                    check=bool(getattr(self, "_chamber_check_only", False)))
             result["shown"] = True
+            result["levelVisible"] = level_enabled
             boards.append(result)
         file = pathlib.Path(self._chamber_file_path).name if self._chamber_file_path else ""
+        # Скрывает проценты обучаемой платы и в её таблицах, и в общей сводке.
+        for board in boards:
+            if board["levelVisible"]:
+                continue
+            board.update(levelTable=None, levelText="—", levelTone="info")
+            board["summary"] = [item for item in board["summary"] if not item["label"].startswith("Уровень")]
+            board["tables"] = [table for table in board["tables"] if table.get("id") != "level"]
+            for table in board["tables"]:
+                table["columns"] = [column for column in table["columns"] if column["key"] not in ("level", "levelErr")]
+                for row in table["rows"]:
+                    row["cells"].pop("level", None)
+                    row["cells"].pop("levelErr", None)
         return {"boards": boards, "overview": overview_table(boards) if len(boards) > 1 else None,
-                "combined": combined_table(boards),
-                "file": file, "time": datetime.now().strftime("%d.%m.%Y %H:%M")}
+                "combined": combined_table(boards), "file": file, "time": datetime.now().strftime("%d.%m.%Y %H:%M")}
 
     def _chamber_span_known(self) -> bool:
         """Погружение в камере не нужно: размах задан вручную или идёт проверка профиля."""

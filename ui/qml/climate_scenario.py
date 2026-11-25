@@ -121,6 +121,7 @@ def empty_scenario(name: str = "Новый сценарий") -> dict:
         "name": name,
         "description": "",
         "board_only": False,
+        "mixed_steering": "fixed",
         "single_model": SINGLE_MODELS[0],
         "labels": [],
         "auto_write": True,
@@ -136,14 +137,15 @@ def empty_scenario(name: str = "Новый сценарий") -> dict:
 
 
 def board_cycle_scenario() -> dict:
-    """Наш случай: одна плата на своих ёмкостях, все 7 узлов прибора за один проход.
+    """Для первого этапа испытывает платы на своих ёмкостях во всех 7 узлах за один проход.
 
     Первым опорный +25 °C, затем -20 и -40, потом вверх до +85, в конце камера
     возвращается к +25 °C. Пометка «0/0»: к входам ничего не подключено.
     """
     scenario = empty_scenario(BOARD_CYCLE_NAME)
-    scenario["description"] = ("Одна плата, только её собственные ёмкости, один проход по всем 7 узлам "
-                               "прибора. Опорный узел +25 °C первым.")
+    scenario["description"] = ("Платы без трубок, только собственные ёмкости, один проход по всем 7 узлам "
+                               "прибора в любой подключённой камере. Опорный узел +25 °C первым. "
+                               "При нескольких платах у каждой сохраняется свой журнал.")
     scenario["board_only"] = True
     scenario["labels"] = ["0/0"]
     scenario["steps"] = _board_cycle_steps()
@@ -211,9 +213,10 @@ def check_scenario() -> dict:
     которые выдаёт сам прибор по уже записанному профилю.
     """
     scenario = empty_scenario(CHECK_NAME)
-    scenario["description"] = ("Проверка после калибровки и записи профиля: изделие в сборе, сухая трубка во всех 7 "
-                               "узлах. Журналы первого этапа не нужны, профиль не считается и не пишется - "
-                               "погрешность уровня смотрите на вкладке «Уровень».")
+    scenario["description"] = ("Проверка после калибровки и записи профиля: изделие в сборе без погружения во всех 7 "
+                               "узлах. Остаточная плёнка топлива входит в отклонение от 0 % и не вычитается. "
+                               "Показания сохраняются на диск; графики и допуск ±1 % видны на вкладке «Уровень» "
+                               "и в Mini App. Профиль не меняется, журналы первого этапа не нужны.")
     scenario["board_only"] = False
     scenario["labels"] = [AIR_LABEL]
     scenario["auto_write"] = False
@@ -310,6 +313,8 @@ def normalize(data) -> tuple[dict, list[str]]:
     scenario["name"] = str(data.get("name") or base["name"]).strip()[:120]
     scenario["description"] = str(data.get("description") or "").strip()[:2000]
     scenario["board_only"] = bool(data.get("board_only", False))
+    steering = data.get("mixed_steering", "fixed")
+    scenario["mixed_steering"] = steering if steering in ("board_temp", "fuel_temp") else "fixed"
     model = str(data.get("single_model") or SINGLE_MODELS[0])
     if model not in SINGLE_MODELS:
         problems.append(f"модель ухода «{model}» неизвестна, взято «{SINGLE_MODELS[0]}»")

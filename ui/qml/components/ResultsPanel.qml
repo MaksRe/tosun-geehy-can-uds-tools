@@ -16,6 +16,7 @@ ColumnLayout {
 
     property var appController: null
     readonly property var results: panel.appController ? panel.appController.chamberResults : ({})
+    readonly property var monitor: panel.appController ? panel.appController.chamberMonitor : ({})
     readonly property var boards: panel.results.boards || []
     property int picked: -1
     readonly property int index: {
@@ -31,6 +32,19 @@ ColumnLayout {
 
     spacing: 10
     Layout.fillWidth: true
+
+    Text {
+        Layout.fillWidth: true
+        visible: panel.monitor.levelEnabled === false
+        text: panel.monitor.levelReason || ""
+        wrapMode: Text.WordWrap
+        color: "#475569"
+        font.pixelSize: 13
+    }
+    LevelMonitorChart {
+        visible: panel.monitor.levelEnabled !== false && !!panel.monitor.plots
+        monitor: panel.monitor
+    }
 
     ResultsTable {
         visible: !!panel.results.overview
@@ -197,11 +211,12 @@ ColumnLayout {
 
     Repeater {
         // Чтобы прокрутка сохранялась при опросе, обновляем данные существующих таблиц по индексу.
-        model: (panel.board.tables || []).length
+        model: (panel.board.tables || []).filter(function(table) { return table.id !== "level" || panel.monitor.levelEnabled !== false })
 
         ResultsTable {
             required property int index
-            table: (panel.board.tables || [])[index] || ({})
+            required property var modelData
+            table: modelData || ({})
         }
     }
 

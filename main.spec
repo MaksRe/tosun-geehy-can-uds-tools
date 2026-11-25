@@ -146,9 +146,9 @@ for doc_name in ("README.md", "requirements.txt"):
     if doc_path.exists():
         datas.append((str(doc_path), "."))
 
-# Ensure the logs folder exists in the packaged app if the source tree has it.
+# Каталог поставляется пустым, чтобы локальные журналы стенда не попали в сборку.
 if LOGS_ROOT.exists():
-    datas += collect_tree(LOGS_ROOT, "ui/logs", ("*.gitkeep", "*.txt", "*.log"))
+    datas += collect_tree(LOGS_ROOT, "ui/logs", ("*.gitkeep",))
 
 
 binaries: list[tuple[str, str]] = []

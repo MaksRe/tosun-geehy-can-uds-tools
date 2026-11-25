@@ -710,7 +710,8 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             board_c = sum(known) / len(known) if known else None
         self._remote_history.append((now, board_c, fresh("main"), fresh("media")))
         self._remote_boards_history.append((now, temps))
-        self._remote_check_stability(now)
+        if not (self._remote_multi() and getattr(self, "_mb_run_stages", None) and self._climate_run_stage):
+            self._remote_check_stability(now)
         if self._remote_multi():
             self._remote_check_boards_stability(now)
 
@@ -724,6 +725,9 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
 
         Иначе сайт говорил бы «устоялась» по 5 мин и 0,05 °C/мин, пока прогон ждёт по своим правилам.
         """
+        if getattr(self, "_climate_run_stage", "") and hasattr(self, "_climate_run_param"):
+            speed = self._climate_speed()
+            return self._climate_run_param("settle_min") * 60 / speed, self._climate_run_param("settle_rate") * speed
         scenario = getattr(self, "_climate_scenario", None) or {}
         try:
             window = float(scenario.get("settle_min")) * 60.0
@@ -769,6 +773,20 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
         """Цель функции в устойчивости каждой платы по правилу сценария, затем общий итог «устоялись N из M»."""
         window_s, rate_limit = self._remote_stable_rule()
         result = {}
+        if (getattr(self, "_mb_run_stages", None) and self._climate_run_stage in ("settle", "hold", "points", "capture")
+                and self._climate_run_index < len(self._climate_run_nodes)):
+            states = self._mb_stage_conditions(now, self._climate_run_node(), window_s, rate_limit)
+            for sa, state in states.items():
+                reasons = state["reasons"]
+                if sa in self._mb_stage_excluded:
+                    reasons = ["пропуск точки на этом шаге"]
+                result[sa] = (state["rate"], not reasons, ", ".join(reasons) or "условия выполнены")
+            self._remote_boards_stability = result
+            ready = sum(ok for _, ok, _ in result.values())
+            self._remote_stable_text = (f"Условия записи выполнены у {ready} из {len(result)} плат."
+                                        if result else "На этом шаге нет плат для записи.")
+            self._remote_stable_ok = bool(result) and ready == len(result)
+            return
         temperatures = self._mb_board_temps(now)
         for board in self._mb_working_boards(now):
             sa = int(board["sa"])
@@ -820,6 +838,7 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             rate, stable, state = self._remote_boards_stability.get(sa, (None, False, "истории мало"))
             rows.append({
                 "name": row["name"], "saText": row["saText"], "sa": sa, "active": row["active"],
+                "stageText": row.get("stageText", ""),
                 "fresh": row["fresh"],
                 "boardTemp": "—" if board_c is None else f"{board_c:+.1f} °C".replace(".", ","),
                 "fuelTemp": "—" if fuel_c is None else f"{fuel_c:+.1f} °C".replace(".", ","),
@@ -842,6 +861,30 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
                 "listed": len(view["boards"]), "offline": list(view.get("offline") or []),
                 "runBoards": bool(view.get("runBoards"))}
 
+    def _remote_note_uds_response(self, identifier: int, payload):
+        """Чтобы запись профиля не выглядела потерей связи, отмечает ответы UDS выбранных плат."""
+        parsed = self._parse_calibration_response_identifier(identifier)
+        if parsed is None or len(payload) < 3:
+            return
+        sa = int(parsed[2]) & 0xFF
+        if self._remote_multi():
+            if self._mb_board(sa) is None:
+                return
+        else:
+            target = getattr(self, "_options_pending_target_sa", None)
+            if target is None:
+                target = self._resolve_calibration_target_sa()
+            if sa != int(target) & 0xFF:
+                return
+        pci = int(payload[0]) >> 4 & 0x0F
+        sid = int(payload[1 if pci == 0 else 2]) & 0xFF
+        if pci not in (0, 1, 2) or (pci != 2 and not 0x40 <= sid <= 0x7F):
+            return
+        seen = getattr(self, "_remote_uds_seen", None)
+        if seen is None:
+            seen = self._remote_uds_seen = {}
+        seen[sa] = time.monotonic()
+
     def _remote_watch_device(self, now: float):
         """Следит за адаптером и прибором: о пропаже и возвращении сообщает один раз."""
         connected = bool(self._can.is_connect) and bool(self._can.is_trace)
@@ -855,6 +898,17 @@ class AppControllerRemoteMonitorMixin(AppControllerContract):
             self._remote_event("адаптер CAN снова подключён.", "ok")
 
         seen = [float(stamp) for stamp in self._chamber_live_seen.values() if stamp > 0.0]
+        replies = getattr(self, "_remote_uds_seen", None) or {}
+        if self._remote_multi():
+            for board in self._mb_polled_boards():
+                stamps = self._mb_context_value(board["sa"], "_chamber_live_seen") or {}
+                seen.extend(float(stamp) for stamp in stamps.values() if stamp > 0.0)
+                seen.append(float(replies.get(board["sa"], 0.0)))
+                seen.append(float((getattr(self, "_mb_uds_seen", None) or {}).get(board["sa"], 0.0)))
+        else:
+            target = self._resolve_calibration_target_sa()
+            seen.append(float(replies.get(int(target) & 0xFF, 0.0)))
+        seen = [stamp for stamp in seen if stamp > 0.0]
         if not seen:
             return
         silent = now - max(seen) > self.REMOTE_SILENCE_S

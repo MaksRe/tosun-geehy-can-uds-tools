@@ -64,6 +64,14 @@ TIPS = {
     "stage2": "Второй этап: изделие в сборе, трубка сухая (пометка «воздух»). Даёт строки трубки по температуре.",
     "liquid": "Трубка погружена в топливо (пометка «жидкость»). Снимается при комнатной температуре; вместе "
               "с сухой трубкой даёт размах.",
+    "level": "Уровень, который выдал сам прибор по записанному профилю (0x0018), среднее за окно усреднения.",
+    "level_error": "Погрешность уровня - уровень прибора минус настоящий: у сухой трубки («воздух») настоящий "
+                   "0 %, в топливе («жидкость») 100 %. Это и есть итоговая ошибка изделия в точке.",
+    "level_shift": "Уровень в точке минус уровень той же пометки при +25 °C трубки: ошибка от температуры, "
+                   "которую профиль не убрал.",
+    "level_status": "Требование к уровню ±1 %: до 0,5 % - в норме, 0,5-1 % - на грани, больше 1 % - вне допуска.",
+    "comp": "Итог периода (0x0062) - период после температурной компенсации и подгонки нуля: у сухой трубки "
+            "должен стоять на месте при любой температуре.",
 }
 
 
@@ -295,6 +303,72 @@ def _coverage_table(points, stage1_nodes, counted, has_stage1, has_air):
             "columns": columns, "rows": rows}
 
 
+LEVEL_OK_PP = 0.5
+LEVEL_BAD_PP = 1.0
+
+
+def _level_tone(value):
+    """В норме / на грани / вне допуска по требованию ±1 %: до 0,5 - норма, 0,5-1 - грань."""
+    if value is None:
+        return "info"
+    size = abs(value)
+    return "ok" if size <= LEVEL_OK_PP else "warn" if size <= LEVEL_BAD_PP else "bad"
+
+
+LEVEL_STATUS = {"ok": "в норме", "warn": "на грани", "bad": "вне допуска", "info": "—"}
+
+
+def _level_truth(point):
+    """Настоящий уровень точки, %: сухая трубка - 0, в топливе - 100, иначе неизвестен."""
+    note = _note(point)
+    return 0.0 if note == chamber_fit.AIR_NOTE else 100.0 if note == chamber_fit.LIQUID_NOTE else None
+
+
+def _level_table(points):
+    """14.11.2026: уровень, который выдал сам прибор в каждой точке трубки, и его погрешность.
+
+    Таблицы этапов показывают периоды двух контуров, а итог для изделия - уровень: оператор не видел,
+    на сколько процентов ошибается прибор в каждом узле. Погрешность - уровень минус настоящий (сухая
+    трубка - 0 %, в топливе - 100 %), сдвиг - уровень минус уровень той же пометки при +25 °C трубки.
+    Уровень пишется в журнал с 14.11.2026; у старых журналов таблицы нет.
+    """
+    tube_points = [p for p in points if not p.get("rehearsal") and p.get("level_x10") is not None
+                   and _level_truth(p) is not None]
+    if not tube_points:
+        return None, None
+    bases = {}
+    for point in tube_points:
+        if chamber_fit.nearest_node(point["fuel_temp_x10"]) == chamber_fit.REFERENCE_X10:
+            bases[_note(point)] = point
+    rows, worst = [], None
+    for point in tube_points:
+        level = point["level_x10"] / 10.0
+        error = level - _level_truth(point)
+        base = bases.get(_note(point))
+        shift = None if base is None else level - base["level_x10"] / 10.0
+        node = chamber_fit.nearest_node(point["fuel_temp_x10"])
+        tone = _level_tone(error)
+        if worst is None or abs(error) > abs(worst[0]):
+            worst = (error, point["fuel_temp_x10"], _when(point))
+        rows.append({"tone": tone, "cells": {
+            "when": _when(point), "note": point.get("note", ""),
+            "node": chamber_fit.node_text(node) if node is not None else "вне узла",
+            "tube": _fmt(point["fuel_temp_x10"] / 10), "board": _fmt(point["board_temp_x10"] / 10),
+            "level": _fmt(level, 2, sign=False), "error": _fmt(error, 2), "shift": _fmt(shift, 2),
+            "comp": _int(point.get("comp")), "status": LEVEL_STATUS[tone],
+        }})
+    columns = [
+        _column("when", "Дата, время", align="center"), _column("note", "Пометка", "note", "left"),
+        _column("node", "Узел", "node", "center"), _column("tube", "Трубка, °C", "tube"),
+        _column("level", "Уровень прибора, %", "level"), _column("error", "Погрешность, %", "level_error"),
+        _column("shift", "Сдвиг от +25 °C, %", "level_shift"), _column("status", "Итог", "level_status", "center"),
+        _column("board", "Плата, °C", "board"), _column("comp", "Итог периода, отсч.", "comp"),
+    ]
+    table = {"id": "level", "title": "Уровень топлива в точках: погрешность", "columns": columns, "rows": rows,
+             "tip": TIPS["level_error"] + " " + TIPS["level_status"]}
+    return table, worst
+
+
 def _measurements_table(points: list[dict]) -> dict:
     """Для проверки фактических температур сохраняет все измерения, включая точки вне допуска и пробы."""
     bases = {}
@@ -321,6 +395,10 @@ def _measurements_table(points: list[dict]) -> dict:
                  "air": _fmt(None if point.get("chamber_temp_x10") is None else point["chamber_temp_x10"] / 10),
                  "board": _fmt(point["board_temp_x10"] / 10), "tube": _fmt(point["fuel_temp_x10"] / 10),
                  "samples": _int(point.get("samples")), "spread": _spread(point)}
+        level = None if point.get("level_x10") is None else point["level_x10"] / 10.0
+        truth = _level_truth(point)
+        cells["level"] = _fmt(level, 2, sign=False)
+        cells["levelErr"] = _fmt(None if level is None or truth is None else level - truth, 2)
         for key in ("main", "media"):
             cells |= _channel_cells(key, point.get(key), None if base is None or rehearsal else base.get(key),
                                     point is base)
@@ -330,6 +408,7 @@ def _measurements_table(points: list[dict]) -> dict:
                _column("node", "Узел", align="center"),
                _column("status", "Состояние точки", "measurement_status", "left"),
                _column("board", "Плата, °C"), _column("tube", "Топливо, °C"), _column("air", "Камера, °C"),
+               _column("level", "Уровень, %", "level"), _column("levelErr", "Погр. уровня, %", "level_error"),
                _column("main", "Осн., отсч.", "counts"), _column("media", "Вид, отсч.", "counts"),
                _column("mainPf", "Осн., пФ", "pf"), _column("mediaPf", "Вид, пФ", "pf"),
                _column("mainChange", "Δ осн., отсч.", "change"), _column("mainPct", "Δ осн., %", "pct"),
@@ -349,7 +428,8 @@ def combined_table(boards: list[dict]) -> dict:
         table = next((item for item in board.get("tables", []) if item["id"] == "measurements"), None)
         if table is None:
             continue
-        columns = table["columns"]
+        if len(table["columns"]) > len(columns):
+            columns = table["columns"]
         for row in table["rows"]:
             rows.append({"tone": row["tone"], "cells": dict(row["cells"], sa=board["sa"], name=board["name"])})
     identity = [{"key": "sa", "title": "CAN-адрес", "tip": "Адрес SA платы на шине CAN.", "align": "left"},
@@ -373,11 +453,22 @@ def board_results(points, name: str = "", sa_text: str = "", span_known: bool = 
     stage2, counted, worst2, has_air = _stage2_table(points)
     liquid, has_liquid = _liquid_table(points, counted)
     coverage = _coverage_table(points, stage1_nodes, counted, has_stage1, has_air)
+    level_table, level_worst = _level_table(points)
     total = len(chamber_fit.NODES_X10)
     spreads = [max(p.get("main_spread") or 0, p.get("media_spread") or 0) for p in points
                if p.get("main_spread") is not None or p.get("media_spread") is not None]
 
     summary = []
+    if level_worst is not None:
+        error, tube, when = level_worst
+        summary.append({"label": "Уровень: наибольшая погрешность",
+                        "value": f"{_fmt(error, 2)} % при трубке {_fmt(tube / 10)} °C ({when}) - "
+                                 f"{LEVEL_STATUS[_level_tone(error)]}",
+                        "tone": _level_tone(error), "tip": TIPS["level_error"] + " " + TIPS["level_status"]})
+    elif has_air or has_liquid:
+        summary.append({"label": "Уровень в точках", "value": "не записан (журнал до 14.11.2026 или прошивка "
+                                                              "не отдаёт уровень) - смотрите «Уровень по узлам»",
+                        "tone": "info", "tip": TIPS["level"]})
     if has_stage1:
         summary.append({"label": "Этап 1: узлов снято", "value": f"{len(stage1_nodes)} из {total}",
                         "tone": "ok" if len(stage1_nodes) == total else "warn", "tip": TIPS["stage1"]})
@@ -428,7 +519,8 @@ def board_results(points, name: str = "", sa_text: str = "", span_known: bool = 
     else:
         verdict = ("ok", "Все узлы сняты: таблицы можно считать полными")
 
-    tables = [coverage]
+    # Уровень - итог для изделия: его таблица первая.
+    tables = ([level_table] if level_table is not None else []) + [coverage]
     if has_stage1:
         tables.append(stage1)
     if has_air:
@@ -454,7 +546,11 @@ def board_results(points, name: str = "", sa_text: str = "", span_known: bool = 
             "summary": summary, "tables": tables,
             "stage1": stage1_text,
             "stage2": f"{len(counted)}/{total}" if has_air else "—",
-            "liquid": has_liquid, "liquidText": liquid_text}
+            "liquid": has_liquid, "liquidText": liquid_text,
+            "levelTable": level_table,
+            "levelText": "—" if level_worst is None else (f"{_fmt(level_worst[0], 2)} % при "
+                                                          f"{_fmt(level_worst[1] / 10)} °C"),
+            "levelTone": "info" if level_worst is None else _level_tone(level_worst[0])}
 
 
 def overview_table(boards: list[dict]) -> dict:
@@ -463,15 +559,22 @@ def overview_table(boards: list[dict]) -> dict:
         # Плата - по адресу узла, имя - пометка: имена бывают одинаковыми, адрес на шине - нет.
         "board": f"{board['sa']} ({board['name']})" if board["sa"] else board["name"], "points": str(board["points"]),
         "stage1": board["stage1"], "stage2": board["stage2"],
+        "runStage": board.get("runStage") or "—",
         "liquid": board.get("liquidText") or ("снято" if board["liquid"] else "не снято"),
+        "level": board.get("levelText") or "—",
         "verdict": board["verdict"]}} for board in boards]
     columns = [
         _column("board", "Плата", align="left"), _column("points", "Точек"),
+        _column("level", "Уровень: худшая погрешность", "level_error", "left", 190),
         _column("stage1", "Этап 1, узлов", "stage1", "center"),
         _column("stage2", "Этап 2, узлов", "status", "center"),
         _column("liquid", "Погружение", "liquid", "center"),
         _column("verdict", "Итог", align="left", width=520),
     ]
+    if boards and not any(board.get("levelVisible", True) for board in boards):
+        columns = [column for column in columns if column["key"] != "level"]
+    if any(board.get("runStage") for board in boards):
+        columns.insert(1, _column("runStage", "Этап прогона", align="left", width=235))
     return {"id": "overview", "title": "Сводка по платам",
             "tip": "Одна строка на плату: сколько узлов снято в журнале этого прогона на каждом этапе и чего "
                    "не хватает. Это не содержимое профиля в плате: записанный профиль здесь не виден.",
@@ -501,6 +604,9 @@ def results_text(view: dict) -> str:
     if view.get("combined"):
         lines += _text_table(view["combined"]) + [""]
     monitor = view.get("monitor") or {}
+    if monitor.get("levelEnabled") is False:
+        lines += [monitor.get("levelReason", "Уровень топлива на этом этапе не оценивается."), ""]
+        monitor = {}
     for key in ("now", "nodes"):
         if (monitor.get(key) or {}).get("rows"):
             lines += _text_table(monitor[key]) + [""]

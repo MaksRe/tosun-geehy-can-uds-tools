@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import time
+from copy import deepcopy
 from datetime import datetime
 
 import chamber_fit
@@ -36,16 +37,59 @@ TONE_WORD = {"ok": "в норме", "warn": "на грани", "bad": "вне д
 class AppControllerRunReportMixin(AppControllerContract):
     """Отчёт PDF о прогоне."""
 
+    def _run_report_level_visibility(self, result: dict) -> dict:
+        """Чтобы этапы обучения не давали ложный допуск, исключает оценку уровня до проверки готового профиля."""
+        context_of = getattr(self, "_chamber_monitor_level_context", None)
+        context = context_of() if callable(context_of) else {}
+        if context.get("levelEnabled") is not False:
+            failures = result.get("profileFailures") or []
+            if failures:
+                previous = result.get("verdict") or {}
+                lines = [previous["title"]] + previous.get("lines", []) if previous.get("title") else []
+                result["verdict"] = {"tone": "bad", "title": "Не подтверждена запись профилей: " + ", ".join(failures),
+                                     "lines": lines + ["Температурные точки сохранены. Повторите запись и сверку профиля из таблиц."]}
+            return result
+        error = getattr(self, "_chamber_monitor_storage_error", "")
+        result["verdict"] = {"tone": "warn" if error else "info", "title": "Уровень топлива на этом этапе не оценивается",
+                             "lines": [context.get("levelReason", "")] + ([error] if error else [])}
+        result["boards"] = []
+        result["charts"] = []
+        result.setdefault("nodes", {})["rows"] = []
+        result["tables"] = [table for table in result.get("tables", []) if table
+                            and not str(table.get("id", "")).startswith("monitor")]
+        for board in result.get("results", []):
+            board["tables"] = [table for table in board.get("tables", []) if table.get("id") != "level"]
+        failures = result.get("profileFailures") or []
+        if failures:
+            result["verdict"] = {"tone": "bad", "title": "Не подтверждена запись профилей: " + ", ".join(failures),
+                                 "lines": result["verdict"]["lines"] + ["Температурные точки сохранены. Повторите запись и сверку профиля из таблиц."]}
+        return result
+
     def _run_report_data(self) -> dict:
+        """Для повторной выгрузки возвращает сохранённый итог, а во время прогона собирает текущие данные."""
+        frozen = getattr(self, "_run_report_frozen", None)
+        if frozen is not None:
+            result = deepcopy(frozen)
+            error = getattr(self, "_chamber_monitor_storage_error", "")
+            if error and result.get("verdict", {}).get("tone") != "bad":
+                result["verdict"] = {"tone": "warn", "title": "Ошибка сохранения истории уровня", "lines": [error]}
+            return self._run_report_level_visibility(result)
         now = time.monotonic()
         scenario = getattr(self, "_climate_scenario", None) or {}
+        session = getattr(self, "_chamber_monitor_session", None)
+        if session is not None:
+            scenario = session.metadata.get("scenario") or scenario
         check = bool(scenario.get("check_only", getattr(self, "_chamber_check_only", False)))
+        stages = (session.metadata.get("board_stages") or {}) if session is not None else {}
+        if stages:
+            check = any(stage["check_only"] for stage in stages.values())
         collect = getattr(self, "_chamber_monitor_collect", None)
         monitor = collect() if collect is not None else []
         tone_of = getattr(self, "_chamber_monitor_tone", lambda value: "info")
 
         info = [("Сценарий", scenario.get("name") or "—"),
-                ("Режим", "проверка профиля (сухая трубка, профиль не пишется)" if check else
+                ("Режим", "этапы назначены по платам" if stages else
+                 "проверка профиля (пустая трубка после калибровки, профиль не пишется)" if check else
                  ("второй этап (трубка)" if any(str(label).casefold() in (chamber_fit.AIR_NOTE, chamber_fit.LIQUID_NOTE)
                                                for label in scenario.get("labels") or []) else "первый этап (плата)"))]
         settings = getattr(self, "_climate_settings", None) or {}
@@ -68,12 +112,24 @@ class AppControllerRunReportMixin(AppControllerContract):
                 text = ""
             if text:
                 info.append(("Узлы", text))
-        info.append(("Платы", ", ".join(board["label"] for board in monitor) or "—"))
+        labels = [board["label"] for board in session.metadata["boards"]] if stages else [board["label"] for board in monitor]
+        info.append(("Платы", ", ".join(labels) or "—"))
+        if check:
+            info.append(("Условия", "Без погружения после калибровки. Возможна плёнка топлива; её вклад не вычитается."))
+        profile_failures_of = getattr(self, "_mb_profile_failures", None)
+        profile_failures = profile_failures_of() if callable(profile_failures_of) else []
+        if not getattr(self, "_mb_on", lambda: False)() and getattr(self, "_chamber_auto_write", False) and getattr(self, "_profile_last_result", None) == "fail":
+            profile_failures = ["выбранная плата"]
+        if profile_failures:
+            info.append(("Запись профиля", "Не подтверждена: " + ", ".join(profile_failures)))
 
         audit = (getattr(self, "_profile_audit", None) or {}).get("results") or {}
+        session = getattr(self, "_chamber_monitor_session", None)
+        if session is not None:
+            audit = (session.metadata.get("profile_audit") or {}).get("results") or {}
         rows, verdict_lines, worst_tone = [], [], "info"
         for board in monitor:
-            result = audit.get(board.get("sa")) if board.get("sa") is not None else None
+            result = (audit.get(board.get("sa")) or audit.get(str(board.get("sa")))) if board.get("sa") is not None else None
             profile = "—"
             if result is not None:
                 profile = result.get("error") or result.get("summary") or "прочитан"
@@ -90,16 +146,31 @@ class AppControllerRunReportMixin(AppControllerContract):
                 verdict_lines.append(f"{board['label']}: {film}")
         bad = [row["label"] for row in rows if row["tone"] == "bad"]
         edge = [row["label"] for row in rows if row["tone"] == "warn"]
+        missing = [board["label"] for board in monitor if board.get("worst") is None]
+        session = getattr(self, "_chamber_monitor_session", None)
+        gaps = session.level_gaps() + session.metadata.get("damaged_records", 0) if session is not None else 0
+        storage_error = getattr(self, "_chamber_monitor_storage_error", "")
+        expected = {node for step in scenario.get("steps", []) if step.get("temp") is not None and step.get("capture", True)
+                    if (node := chamber_fit.nearest_node(int(round(step["temp"] * 10)))) is not None}
+        uncovered = [board["label"] for board in monitor if expected - set(board.get("stats") or {})] if check else []
         if not monitor or all(board.get("worst") is None for board in monitor):
             verdict = {"tone": "info", "title": "Уровень за прогон не оценён: прибор не отдал уровень или трубка не "
                                                 "была при +25 °C", "lines": verdict_lines}
         elif bad:
             verdict = {"tone": "bad", "title": f"Вне допуска ±1 %: {', '.join(bad)}", "lines": verdict_lines}
+        elif missing or gaps or storage_error:
+            verdict = {"tone": "warn", "title": "Проверка не полная: есть пропуски показаний или ошибка сохранения",
+                       "lines": verdict_lines + (["Нет уровня: " + ", ".join(missing)] if missing else [])
+                       + ([f"Пропусков показаний: {gaps}"] if gaps else []) + ([storage_error] if storage_error else [])}
+        elif uncovered:
+            verdict = {"tone": "warn", "title": "Проверены не все температуры: " + ", ".join(uncovered),
+                       "lines": verdict_lines}
         elif edge:
             verdict = {"tone": "warn", "title": f"В допуске ±1 %, но на грани (больше 0,5 %): {', '.join(edge)}",
                        "lines": verdict_lines}
         else:
-            verdict = {"tone": "ok", "title": "Все платы в допуске ±1 % с запасом (не больше 0,5 %)",
+            tested = "Все платы этапа «Проверка профиля»" if stages else "Все платы"
+            verdict = {"tone": "ok", "title": tested + " в допуске ±1 % с запасом (не больше 0,5 %)",
                        "lines": verdict_lines}
 
         # Средние по узлам: погрешность / сдвиг от +25 °C.
@@ -147,16 +218,17 @@ class AppControllerRunReportMixin(AppControllerContract):
                     "tables": board.get("tables") or []} for board in view.get("boards") or []]
         events = list(getattr(self, "_remote_events", []) or [])[:80]
         events.reverse()
-        return {
+        return self._run_report_level_visibility({
             "title": "Отчёт о прогоне в камере" + (": проверка профиля" if check else ""),
             "created": datetime.now().strftime("%d.%m.%Y %H:%M"),
-            "info": info, "verdict": verdict, "boards": rows,
+            "info": info, "verdict": verdict, "boards": rows, "profileFailures": profile_failures,
             "nodes": {"title": "Средние по узлам температуры трубки: погрешность / сдвиг от +25 °C, %",
                       "columns": node_columns, "rows": node_rows,
-                      "note": "В каждой ячейке - среднее за время, пока трубка была в узле (±3 °C). «—» - трубка в "
-                              "узле не была или настоящий уровень неизвестен."},
+                      "note": "В каждой ячейке - среднее сохранённых показаний в окне ±3 °C от узла. "
+                              "Сохраняются изменения уровня и контрольные записи каждые 5 с. «—» - данных нет. "
+                              "Вклад остаточной плёнки не вычитается."},
             "charts": charts, "tables": tables, "results": results, "events": events,
-        }
+        })
 
     @staticmethod
     def _run_report_film_hint(board: dict) -> str:
@@ -169,7 +241,7 @@ class AppControllerRunReportMixin(AppControllerContract):
         cold, hot = mean((-400, -200, 0)), mean((700, 850))
         if cold is not None and hot is not None and cold > 0.3 and abs(hot) < 0.15:
             return (f"холодные узлы завышены ({_pp(cold)} %), горячие нет ({_pp(hot)} %) - похоже на плёнку топлива "
-                    "на трубке: при нагреве она стекает и испаряется")
+                    "на трубке. По этому графику нельзя отделить её вклад от температурного дрейфа")
         return ""
 
     def _run_report_charts(self, monitor: list[dict]) -> list[dict]:
@@ -226,6 +298,9 @@ class AppControllerRunReportMixin(AppControllerContract):
 
     def _run_report_finish(self, why: str = "конец прогона"):
         """Отчёт PDF в конце прогона: файл и - тем, у кого в Telegram включены «файлы»."""
+        freeze = getattr(self, "_chamber_monitor_finish", None)
+        if freeze is not None:
+            freeze(why)
         path = self._run_report_write()
         if not path:
             return ""

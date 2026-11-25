@@ -3619,6 +3619,21 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         if not ok:
             self._addr_refuse(text)
 
+    @Slot(str, str, bool, bool)
+    def startBoardScan(self, start_text, end_text, repeat, auto):
+        """Для поиска плат с выключенным Tx запускает чтение заданного диапазона без смены адресов."""
+        self._addr_scan_start(str(start_text), str(end_text), bool(repeat), bool(auto))
+
+    @Slot(str, str, bool, bool)
+    def configureBoardScan(self, start_text, end_text, repeat, auto):
+        """Для следующего поиска сохраняет границы и параметры автоматического запуска."""
+        self._addr_scan_configure(str(start_text), str(end_text), bool(repeat), bool(auto))
+
+    @Slot()
+    def stopBoardScan(self):
+        """Для освобождения шины завершает текущий запрос и останавливает поиск плат."""
+        self._addr_scan_stop()
+
     @Slot(str)
     def setBoardAddressingMode(self, mode):
         """Цель функции в выборе режима мастера: адрес выбирает он сам («auto») или оператор («manual»)."""
@@ -3727,6 +3742,13 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
         """Цель функции в понятном имени платы: оно в имени её журнала и в сообщениях."""
         self._mb_rename_board(int(sa), str(name))
 
+    @Slot(int, str)
+    def setChamberBoardStage(self, sa, stage):
+        """Назначает выбранной плате этап общего температурного прогона."""
+        ok, message = self._mb_set_stage(int(sa), str(stage))
+        if not ok:
+            self.infoMessage.emit("Этап платы", message)
+
     @Slot(bool)
     def setBoardsStripVisible(self, visible):
         """Цель функции в признаке видимой ленты плат над разделами: пока она видна, опрашиваются все платы."""
@@ -3742,6 +3764,48 @@ class AppControllerPublicSlotsMixin(AppControllerContract):
     def openChamberJournal(self, path):
         """Цель функции в открытии журнала из списка, затем новые точки допишутся к нему; действие в журнале."""
         self._control_gui("journal_open", {"path": str(path)})
+
+    @Slot(result=str)
+    def findChamberTubeBaseline(self):
+        """Подбирает исходный журнал для сравнения с текущим замером трубок."""
+        return self._chamber_tube_find()
+
+    @Slot(result="QVariantMap")
+    def findChamberTubeBaselines(self):
+        """Подбирает отдельный журнал каждой плате, у которой ещё нет базы сравнения."""
+        addresses = self._chamber_tube_addresses()
+        missing = [sa for sa in addresses if not self._chamber_tube_sources.get(sa, {}).get("baseline")]
+        found = self._chamber_tube_find_bases(missing)
+        return {"found": len(found), "kept": len(addresses) - len(missing),
+                "missing": [f"0x{sa:02X}" for sa in missing if sa not in found]}
+
+    @Slot(bool)
+    def setChamberTubeVisible(self, visible):
+        """Запускает групповой опрос только на видимой вкладке и завершает её поиск при уходе."""
+        self._chamber_tube_visible = bool(visible)
+        if not visible and self._addr_scan["active"] and self._addr_scan.get("one_pass"):
+            self._addr_scan_stop("Поиск остановлен: вкладка закрыта.")
+        self._mb_apply_period()
+        self.chamberLiveChanged.emit()
+
+    @Slot(str, str)
+    def startChamberTubeScan(self, start_text, end_text):
+        """Находит платы одним проходом UDS, сохраняя настройки повторения поиска в разделе адресов."""
+        scan = self._addr_scan
+        if scan["active"]:
+            return
+        sa = self._resolve_calibration_target_sa()
+        with self._mb_live_context(sa):
+            before_scan = (sa, self._chamber_live_view()) if self._chamber_live_source_sa == sa else None
+        ok, _ = self._addr_scan_start(start_text, end_text, scan["repeat"], scan["auto"], one_pass=True)
+        if ok:
+            scan["before_scan"] = before_scan
+            self.chamberLiveChanged.emit()
+
+    @Slot(int, str, bool, result=str)
+    def loadChamberTubeJournal(self, sa, path, reference):
+        """Выбирает файл сравнения для адреса из диалога без изменения журнала прогона."""
+        return self._chamber_tube_load(sa, self._to_local_path(path) if path else "", reference)
 
     @Slot()
     def setChamberMonitorReference(self):

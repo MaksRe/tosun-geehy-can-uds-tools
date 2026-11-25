@@ -81,11 +81,29 @@ def test_results_include_boards_with_saved_data_without_live_connection(tmp_path
     for sa, _, _, _ in BOARDS:
         with stub._mb_context(sa, notify=False):
             stub._chamber_points = list(P6[:7])
+    # Участник прогона, пропавший с шины, остаётся в итогах.
+    stub._mb_run_sas = [sa for sa, _, _, _ in BOARDS]
     with stub._mb_context(BOARDS[1][0], notify=False):
         stub._chamber_live_reset()
     view = stub._chamber_results_view()
     assert len(view["boards"]) == len(BOARDS)
     assert len(view["combined"]["rows"]) == 7 * len(BOARDS)
+
+
+def test_results_skip_boards_from_other_runs(tmp_path):
+    """13.11.2026: в итогах стояли П3-П5 из прошлой камеры - в итогах только участники прогона или платы на шине."""
+    stub = _stub(tmp_path)
+    assert stub._mb_add_board("0x85", "П5")[0]
+    with stub._mb_context(0x85, notify=False):
+        stub._chamber_points = list(P6[:7])
+    shown = lambda: [board["sa"] for board in stub._chamber_results_view()["boards"]]
+    # Без прогона - те, что на шине: у 0x85 есть старые точки, но её нет на шине.
+    assert shown() == [f"0x{sa:02X}" for sa, _, _, _ in BOARDS]
+    # В прогоне и после него - его участники, даже если плата пропала с шины.
+    stub._mb_run_sas = [BOARDS[0][0], BOARDS[2][0]]
+    with stub._mb_context(BOARDS[2][0], notify=False):
+        stub._chamber_live_reset()
+    assert shown() == [f"0x{BOARDS[0][0]:02X}", f"0x{BOARDS[2][0]:02X}"]
 
 
 def test_run_timing_has_total_and_finish_and_suppresses_finish_on_pause(tmp_path):

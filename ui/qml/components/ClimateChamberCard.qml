@@ -6,7 +6,7 @@ import "."
 /*
   Раздел «Климатическая камера».
   Назначение:
-  - выбор камеры: ESPEC MC-811P (испытания платы), Vötsch VT 7100 / Weiss WK1 (изделие в сборе),
+  - выбор камеры для любого этапа: ESPEC MC-811P, Vötsch VT 7100 / Weiss WK1,
     имитатор (отладка на столе) или другая камера с Modbus;
   - карта регистров камеры: адреса вписываются из её документации;
   - температура, уставка, пуск и авария камеры, ручная уставка;
@@ -287,8 +287,8 @@ Card {
 
                 Repeater {
                     model: [
-                        { "key": "espec", "name": "ESPEC MC-811P", "purpose": "Испытания платы", "link": "RS-485, 4 провода", "accent": "#0f766e", "fill": "#ecfdf5" },
-                        { "key": "simcon_ascii2", "name": "Vötsch VT 7100 / Weiss WK1", "purpose": "Изделие в сборе: с трубками, в корпусе", "link": "RS-232, пульт S!MCON/32", "accent": "#1d4ed8", "fill": "#eff6ff" },
+                        { "key": "espec", "name": "ESPEC MC-811P", "purpose": "Платы и изделия в сборе", "link": "RS-485, 4 провода", "accent": "#0f766e", "fill": "#ecfdf5" },
+                        { "key": "simcon_ascii2", "name": "Vötsch VT 7100 / Weiss WK1", "purpose": "Платы и изделия в сборе", "link": "RS-232, пульт S!MCON/32", "accent": "#1d4ed8", "fill": "#eff6ff" },
                         { "key": "zundar_az1000", "name": "Zundar EEXTH1000U", "purpose": "Климатика: изделие в сборе или платы", "link": "Ethernet, Modbus TCP", "accent": "#7c3aed", "fill": "#f5f3ff" },
                         { "key": "simulator", "name": "Имитатор", "purpose": "Отладка на столе, без камеры", "link": "", "accent": "#9a3412", "fill": "#fff7ed" }
                     ]
@@ -882,6 +882,61 @@ Card {
                         }
                     }
 
+                    ColumnLayout {
+                        id: stageAssignments
+                        readonly property var assignments: root.auto.boardStages || ({})
+                        property var stageRows: []
+                        property var stageOptions: []
+                        onAssignmentsChanged: {
+                            // Сохраняет открытый список при очередном обновлении температуры.
+                            var rows = assignments.rows || []
+                            var options = assignments.options || []
+                            if (JSON.stringify(stageRows) !== JSON.stringify(rows))
+                                stageRows = rows
+                            if (JSON.stringify(stageOptions) !== JSON.stringify(options))
+                                stageOptions = options
+                        }
+                        Layout.fillWidth: true
+                        visible: assignments.enabled === true && (assignments.rows || []).length > 0
+                        spacing: 5
+
+                        BlockTitle { text: "Этапы плат" }
+                        Text {
+                            Layout.fillWidth: true
+                            text: "Этап задаёт точки и журнал каждой платы. При отдельных назначениях камера держит уставки сценария без доводки по средней температуре плат."
+                            color: root.textMain
+                            font.pixelSize: 12
+                            wrapMode: Text.WordWrap
+                        }
+                        Repeater {
+                            model: stageAssignments.stageRows
+                            RowLayout {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: modelData.label
+                                    elide: Text.ElideRight
+                                }
+                                ComboBox {
+                                    objectName: "boardStage_" + modelData.sa
+                                    Layout.preferredWidth: 260
+                                    enabled: !stageAssignments.assignments.locked
+                                    model: stageAssignments.stageOptions
+                                    textRole: "text"
+                                    valueRole: "key"
+                                    currentIndex: stageAssignments.stageOptions.findIndex(function(option) {
+                                        return option.key === modelData.stage
+                                    })
+                                    onActivated: function(index) {
+                                        if (root.appController)
+                                            root.appController.setChamberBoardStage(modelData.sa, valueAt(index))
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Ход автономного прогона: доля пройденных узлов, время, проблемы.
                     ColumnLayout {
                         Layout.fillWidth: true
@@ -1021,11 +1076,22 @@ Card {
 
                         NoticeLine {
                             appController: root.appController
-                            text: root.run.status || ""
+                            text: root.run.active ? "" : root.run.status || ""
                             tone: root.run.color || ""
                             kind: "Прогон"
                             fontSize: 13
                         }
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        visible: root.run.active === true
+                        text: root.run.status || ""
+                        color: root.run.color || root.textMain
+                        font.pixelSize: 13
+                        font.family: "Bahnschrift"
+                        wrapMode: Text.Wrap
+                        textFormat: Text.PlainText
                     }
 
                     // Камера только читается: прогон следует за её программой - шаги для пульта по нажатию.

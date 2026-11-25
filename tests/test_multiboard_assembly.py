@@ -170,7 +170,10 @@ def test_stage2_needs_stage1_journal_of_every_board(tmp_path: Path):
     assert check["ok"] and "у всех 5 плат" in check["text"], check["text"]
     assert rig.checks()["stage2_liquid"]["ok"]
     rig.stub._chamber_set_board_only(True)
-    assert not rig.checks()["stage2"]["ok"], "трубка при «Только плата» в профиль не попадёт"
+    # Чтобы прежний флаг окна не мешал старту, этап берётся из выбранного сценария.
+    assert rig.checks()["stage2"]["ok"]
+    rig.stub._climate_scenario_apply_chamber()
+    assert rig.stub._chamber_board_only is False
 
 
 @pytest.mark.parametrize("board_heat_c", [0.0, 12.0])

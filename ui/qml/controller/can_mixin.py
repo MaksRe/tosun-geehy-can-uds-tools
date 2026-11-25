@@ -62,6 +62,9 @@ class AppControllerCanMixin(AppControllerContract):
             uds_text = self._parse_isotp_summary(payload)
 
         if direction == "RX":
+            note_reply = getattr(self, "_remote_note_uds_response", None)
+            if is_uds_frame and callable(note_reply):
+                note_reply(identifier, payload)
             self._handle_source_address_frame(identifier, payload)
             self._handle_board_addressing_frame(identifier, payload)
             self._handle_communication_control_frame(identifier, payload)

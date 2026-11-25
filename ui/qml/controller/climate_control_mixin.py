@@ -688,6 +688,12 @@ class AppControllerClimateControlMixin(AppControllerContract):
             pdf = writer() if writer is not None else ""
             if pdf:
                 add(pdf, "отчёт")
+            # Для независимого пересчёта включает постоянную историю и снимок результата именно этого прогона.
+            session = getattr(self, "_chamber_monitor_session", None)
+            if session is not None:
+                for path in sorted(session.folder.iterdir()):
+                    if path.is_file() and path.suffix in (".json", ".jsonl", ".csv"):
+                        add(path, "история_уровня")
             with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
                 archive.writestr("итоги_прогона.txt", results.encode("utf-8-sig"))
                 for path, name in files:
@@ -740,7 +746,7 @@ class AppControllerClimateControlMixin(AppControllerContract):
         self._climate_run_retry_at = 0.0
         self._climate_run_enter("setpoint", now)
         if not self._climate_run_paused:
-            self._climate_run_tick(now)
+            self._climate_run_guarded_tick(now)
         self._climate_hook("_climate_auto_save", now)
 
     def _control_step_text(self, index: int) -> str:

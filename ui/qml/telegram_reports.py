@@ -117,6 +117,8 @@ LEVEL_MARK = {"ok": "✓", "warn": "!", "bad": "✗"}
 
 def _level_table(snapshot: dict) -> str:
     """Уровень у всех плат: погрешность и сдвиг от +25 °C, коротко - для /status и /level."""
+    if (snapshot.get("monitor") or {}).get("levelEnabled") is False:
+        return ""
     rows = ((snapshot.get("monitor") or {}).get("live")) or []
     if not rows:
         return ""
@@ -129,6 +131,8 @@ def _level_table(snapshot: dict) -> str:
 def level_report(snapshot: dict) -> str:
     """Уровень топлива у всех плат сразу: что выдаёт прибор по записанному профилю."""
     monitor = snapshot.get("monitor") or {}
+    if monitor.get("levelEnabled") is False:
+        return "<b>Уровень топлива</b>\n" + escape(monitor.get("levelReason") or "Проверка готового профиля не включена.")
     rows = monitor.get("live") or []
     if not rows:
         return ("<b>Уровень топлива</b>\nДанных пока нет: прибор ещё не отдал уровень, или прогон не идёт.")

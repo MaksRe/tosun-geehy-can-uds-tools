@@ -1079,7 +1079,22 @@ class AppControllerPropertiesMixin(AppControllerContract):
     @Property("QVariantMap", notify=chamberLiveChanged)
     def chamberLive(self):
         """Цель функции в показе живых показаний прогона, затем рядом с текущим видно среднее для точки."""
+        if self._mb_tube_polling() and self._mb_on():
+            with self._mb_live_context(self._resolve_calibration_target_sa()):
+                return self._chamber_live_view()
         return self._chamber_live_view()
+
+    @Property("QVariantMap", notify=chamberLiveChanged)
+    def chamberTubeCheck(self):
+        """Показывает результаты проверки трубок у всех отвечающих плат."""
+        return self._chamber_tube_group_view()
+
+    @Property("QVariantMap", notify=boardAddressingChanged)
+    def chamberTubeScan(self):
+        """Показывает настройки и состояние поиска плат без таблицы мастера адресов."""
+        scan = self._addr_scan
+        return {"startText": f"0x{scan['start']:02X}", "endText": f"0x{scan['end']:02X}",
+                "active": scan["active"], "stopping": scan["stopping"], "status": scan["status"], "tone": scan["tone"]}
 
     @Property(bool, notify=chamberLiveChanged)
     def chamberWaiting(self):

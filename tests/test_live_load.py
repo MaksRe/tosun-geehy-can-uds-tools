@@ -64,13 +64,14 @@ def test_monitor_summary_recomputed_only_on_new_sample(monkeypatch):
     # У другой платы - свои итоги.
     monitor._chamber_monitor_summary("0x82", history, ref)
     assert len(passes) == 2 * count
-    # Новая запись или новое показание при +25 °C - пересчёт.
+    # Для длинного прогона дополняет итог только новой записью, не перечитывая всю историю.
     history.append(_sample(500))
     stats, worst_shift, _worst_error = monitor._chamber_monitor_summary("0x81", history, ref)
-    assert len(passes) == 3 * count + 1
+    assert len(passes) == 2 * count + 1
     assert worst_shift[0] == 0.4
     monitor._chamber_monitor_summary("0x81", history, dict(ref, level=2, auto=False))
-    assert len(passes) == 4 * count + 2
+    # После смены опоры пересчитывает все отсчёты, поскольку изменился смысл сдвига.
+    assert len(passes) == 3 * count + 2
 
 
 def test_on_bus_does_not_switch_board_fields(tmp_path):

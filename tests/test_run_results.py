@@ -55,7 +55,8 @@ def test_journal_keeps_date_and_window_statistics(tmp_path: Path):
     path = tmp_path / "j.csv"
     assert stub._chamber_write_csv(str(path)) is None
     header = path.read_text(encoding="utf-8-sig").splitlines()[0]
-    assert header.endswith("Дата;Показаний в среднем;Разброс основного (отсч.);Разброс вида топлива (отсч.)")
+    assert header.endswith("Дата;Показаний в среднем;Разброс основного (отсч.);Разброс вида топлива (отсч.)"
+                           ";Уровень прибора (%);Итог периода (отсч.)")
     back = stub._chamber_parse_journal(path.read_text(encoding="utf-8-sig"))[0]
     assert (back["date"], back["samples"], back["main_spread"], back["media_spread"]) == ("2026-11-06", 9, 2, 1)
     old = ("Время;Что подключено;Период основного контура;Период контура вида топлива;"

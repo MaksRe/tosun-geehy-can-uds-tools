@@ -43,6 +43,11 @@
 - На шине видно, передаёт ли плата кадры J1939 сейчас и сколько в секунду.
 
 НА ШИНЕ ЛИ ПЛАТА
+Поиск по диапазону находит и ещё не добавленные в список платы с выключенным
+Tx. Он читает адрес, обе температуры и уровень; адреса, EEPROM и трафик не
+меняет. Диапазон, повторный поиск и запуск при открытии раздела сохраняются.
+Запросы используют шину последовательно; при закрытии раздела поиск завершается.
+
 Пока раздел открыт, программа по кругу спрашивает адрес у каждой платы списка
 (чтение 0x0011, раз в 0,4 с одной плате; плата с выключенной передачей молчит,
 поэтому нужен именно запрос). Плата считается отключённой, только если не
@@ -94,6 +99,7 @@ from j1939.j1939_can_identifier import J1939CanIdentifier
 from uds.uds_identifiers import UdsIdentifiers
 
 from .bus_guard import background_request_recent, note_background_request, uds_exchange_busy
+from .board_scan_mixin import AppControllerBoardScanMixin
 from .contract import AppControllerContract
 
 # Шаги одной платы: ключ - подпись для окна.
@@ -148,6 +154,7 @@ COMM_STATE_TEXT = {mode: state for mode, _button, state, _hint in COMM_MODES}
 ADDR_INFO_DIDS = (
     (0x003B, "boardTemp", 2, True, 10.0),
     (0x0019, "fuelTemp", 2, True, 10.0),
+    (0x0018, "level", 2, True, 10.0),
     (0x0014, "main", 2, False, 1.0),
     (0x0067, "media", 2, False, 1.0),
     (0x005E, "profileCrc", 2, False, 1.0),
@@ -174,7 +181,7 @@ def _parse_hex_sa(text: str) -> int | None:
         return None
 
 
-class AppControllerBoardAddressingMixin(AppControllerContract):
+class AppControllerBoardAddressingMixin(AppControllerBoardScanMixin, AppControllerContract):
     ADDR_STEP_TIMEOUT_S = 1.5
     ADDR_ATTEMPTS = 3
     # Сколько слушать шину после выключения передачи: ни одного кадра от платы.
@@ -269,6 +276,7 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         # Обмен местами двух плат после разделения: оставшиеся смены адреса.
         self._addr_swap: dict | None = None
         self._addr_reset_done: list[str] = []
+        self._addr_scan_init()
         self._addr_load_settings()
         self._addr_start_timer()
 
@@ -284,6 +292,9 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
             payload = json.loads(path.read_text(encoding="utf-8")) if path is not None else {}
         except (OSError, ValueError):
             return
+        if not isinstance(payload, dict):
+            return
+        self._addr_scan_load(payload)
         if payload.get("mode") in ADDR_MODES:
             self._addr_mode = payload["mode"]
         for key, item in (payload.get("boards") or {}).items():
@@ -314,7 +325,8 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps({"mode": self._addr_mode, "start_sa": int(self._addr_start_sa),
-                                        "boards": boards},
+                                        "boards": boards,
+                                        "scan": {key: self._addr_scan[key] for key in ("start", "end", "repeat", "auto")}},
                                        ensure_ascii=False, indent=2), encoding="utf-8")
         except OSError:
             pass
@@ -337,13 +349,15 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
 
     def _addr_stepping(self) -> bool:
         """Цель функции в признаке шага с платой (адрес или выключение передачи), затем ничто не вклинивается."""
-        return bool(self._addr_active) and self._addr_stage in ADDR_REQUEST_STEPS + ("check_quiet", "probe", "dup")
+        return self._addr_scan["active"] or (bool(self._addr_active) and self._addr_stage in
+                                             ADDR_REQUEST_STEPS + ("check_quiet", "probe", "dup"))
 
     def _addr_exchange_busy(self) -> bool:
         """Цель функции в признаке обмена мастера с платой, затем другие опросы не вклиниваются в него."""
         stepping = bool(self._addr_active) and self._addr_stage in ADDR_REQUEST_STEPS + ("probe", "dup")
         comm_waiting = self._addr_comm is not None and self._addr_comm.get("stage") == "ack"
-        return stepping or comm_waiting or self._addr_info_sa is not None or self._addr_ping_pending()
+        scan_waiting = self._addr_scan["pending"] is not None
+        return scan_waiting or stepping or comm_waiting or self._addr_info_sa is not None or self._addr_ping_pending()
 
     def _addr_ping_pending(self) -> bool:
         """Цель функции в признаке опроса «на шине ли», ответ на который ещё в пути."""
@@ -509,18 +523,20 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
             if src not in self._addr_tester_sas():
                 self._addr_note_traffic(src, now)
             return
-        if pgn != (int(UdsIdentifiers.rx.pgn) & 0x3FFFF):
+        if pgn != (int(UdsIdentifiers.rx.pgn) & 0x3FFFF) or int(parsed.dst) != int(UdsIdentifiers.rx.dst):
             return
         if not isinstance(payload, (list, tuple)) or len(payload) < 2 or ((int(payload[0]) >> 4) & 0x0F) != 0:
             return
         length = int(payload[0]) & 0x0F
         body = [int(value) & 0xFF for value in payload[1:1 + length]]
-        if not body:
+        if len(body) != length or not body or not 0x40 <= body[0] <= 0x7F:
             return
         # Любой ответ по адресу платы: она на шине (даже с выключенной передачей J1939).
         self._addr_answered[src] = now
         self._addr_misses[src] = 0
         self._addr_ping_wait.pop(src, None)
+        if self._addr_scan_answer(src, body, now):
+            return
         dup = self._addr_dup
         if dup is not None and self._addr_stage == "dup" and src in (dup["sa"], dup.get("new")):
             # Разделение: ответы собираются целиком - их может быть два на один запрос.
@@ -616,6 +632,10 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
     def _on_addr_tick(self):
         """Цель функции в такте мастера, затем таймауты, поиск новой платы, проверка тишины, трафик и карточки."""
         now = self._addr_clock()
+        self._addr_scan_auto_tick(now)
+        if self._addr_scan["active"]:
+            self._addr_scan_tick(now)
+            return
         self._addr_comm_tick(now)
         self._addr_info_tick(now)
         self._addr_presence_tick(now)
@@ -924,6 +944,8 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
 
     def _addr_set_comm(self, sa: int, mode: int) -> tuple[bool, str]:
         """Цель функции в режиме трафика J1939 одной платы (0x28), затем команда ждёт подтверждения и проверки."""
+        if self._addr_scan["active"]:
+            return False, "сначала остановите поиск плат"
         sa, mode = int(sa) & 0xFF, int(mode)
         if mode not in COMM_STATE_TEXT:
             return False, "неизвестный режим трафика"
@@ -1015,6 +1037,8 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
 
     def _addr_comm_all(self, mode: int) -> bool:
         """Цель функции в режиме трафика сразу всем платам (функционально, без ответа)."""
+        if self._addr_scan["active"]:
+            return False
         mode = int(mode)
         if mode not in COMM_STATE_TEXT:
             return False
@@ -1100,6 +1124,8 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
 
     def _addr_start(self, start_text: str = "") -> tuple[bool, str]:
         """Цель функции в запуске мастера, затем он ждёт первую плату и назначает адреса с заданного."""
+        if self._addr_scan["active"]:
+            return False, "сначала остановите поиск плат"
         if self._addr_active:
             return False, "мастер уже запущен"
         text = str(start_text or "").strip()
@@ -1235,6 +1261,9 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
         if visible and not self._addr_visible:
             self._addr_visible_since = self._addr_clock()
             self._addr_pinged = {}
+            self._addr_scan["auto_wait"] = self._addr_scan["auto"]
+        if not visible and self._addr_scan["active"]:
+            self._addr_scan_stop("Поиск остановлен: раздел закрыт.")
         self._addr_visible = visible
         self._addr_changed()
 
@@ -1760,6 +1789,7 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
                 "sa": sa, "saText": f"0x{sa:02X}", "name": str(board.get("name", "")),
                 "history": " · ".join(history) if history else "назначен не мастером: история адреса неизвестна",
                 "boardTemp": temp(info.get("boardTemp")), "fuelTemp": temp(info.get("fuelTemp")),
+                "levelText": "—" if info.get("level") is None else f"{info['level']:+.1f} %".replace(".", ","),
                 "main": number(info.get("main")), "media": number(info.get("media")),
                 "profileCrc": "—" if crc is None else f"0x{int(crc):04X}",
                 "profileGeneration": number(info.get("profileGeneration")),
@@ -1803,4 +1833,5 @@ class AppControllerBoardAddressingMixin(AppControllerContract):
             "resetting": self._addr_job == "reset", "factorySa": f"0x{FACTORY_SA:02X}",
             "commModes": [{"mode": mode, "button": button, "state": state, "hint": hint}
                           for mode, button, state, hint in COMM_MODES],
+            "scan": self._addr_scan_view(),
         }

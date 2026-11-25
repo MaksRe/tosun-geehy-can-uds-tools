@@ -214,6 +214,12 @@ def _mon_stub(tmp_path: Path) -> _MonStub:
     for sa, name, _offset, _main in BOARDS:
         assert stub._mb_add_board(f"0x{sa:02X}", name)[0]
     assert stub._mb_set_enabled(True)[0]
+    # Для проверок уровня моделирует уже записанный и подтверждённый профиль каждой платы.
+    from ui.qml import climate_scenario
+    stub._climate_scenario = climate_scenario.check_scenario()
+    stub._profile_audit = {"results": {sa: {"error": "", "problems": [],
+                                         "values": {"status": 0x0F, "empty": 15000, "full": 27000}}
+                                      for sa, *_ in BOARDS}}
     return stub
 
 
@@ -253,8 +259,9 @@ def test_monitor_tracks_level_deviation_by_node(tmp_path: Path):
     assert rows["0x81 (П2)"]["tone"] == "bad" and rows["0x81 (П2)"]["cells"]["status"] == "вне допуска"
     assert rows["0x81 (П2)"]["cells"]["dev"] == "−1,40"
     nodes = {row["cells"]["label"]: row for row in view["nodes"]["rows"]}
-    assert nodes["0x80 (П1)"]["cells"]["-400"] == "+0,30 (1)"
-    assert nodes["0x81 (П2)"]["cells"]["850"] == "−1,40 (1)" and nodes["0x81 (П2)"]["tone"] == "bad"
+    # Пометка не «воздух» и не «жидкость»: настоящий уровень неизвестен - в узлах сдвиг от +25 °C.
+    assert nodes["0x80 (П1)"]["cells"]["-400"] == "сдвиг +0,30 (1)"
+    assert nodes["0x81 (П2)"]["cells"]["850"] == "сдвиг −1,40 (1)" and nodes["0x81 (П2)"]["tone"] == "bad"
     assert view["worst"] == "1,40" and view["tone"] == "bad"
 
     # Опора по кнопке и сброс.

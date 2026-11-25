@@ -47,6 +47,7 @@ class AppControllerChamberLiveMixin(AppControllerContract):
     # 12.11.2026: в круг добавлены уровень и итог периода самого прибора - для монитора отклонений
     # (chamber_monitor_mixin). Прошивка без них после двух отказов их больше не спрашивает.
     CHAMBER_LIVE_ORDER = ("main", "media", "main", "media", "fuel_temp", "board_temp", "comp", "level")
+    CHAMBER_TUBE_LIVE_ORDER = ("main", "media", "board_temp", "fuel_temp")
     # После стольких отказов подряд параметр считается отсутствующим в прошивке.
     CHAMBER_LIVE_REFUSAL_LIMIT = 2
 
@@ -111,17 +112,38 @@ class AppControllerChamberLiveMixin(AppControllerContract):
         self._chamber_live_pending = None
         self._chamber_live_pending_s = 0.0
         self._chamber_live_index = 0
+        self._chamber_live_source_sa = None
 
     # ------------------------------------------------------------------ накопление
 
     def _chamber_live_note(self, key: str, value: int, now: float | None = None):
         """Кладёт показание в окно среднего и отслеживает смену эталона."""
+        resolve = getattr(self, "_resolve_calibration_target_sa", None)
+        if callable(resolve):
+            source = resolve()
+            previous = getattr(self, "_chamber_live_source_sa", None)
+            if previous is not None and previous != source:
+                # При смене узла начинает новое окно, сохраняя состояние текущего обмена.
+                pending, pending_s = self._chamber_live_pending, self._chamber_live_pending_s
+                self._chamber_live_reset()
+                self._chamber_live_pending, self._chamber_live_pending_s = pending, pending_s
+            self._chamber_live_source_sa = source
         now = time.monotonic() if now is None else float(now)
         value = int(value)
         self._chamber_live_last[key] = value
+        if key in ("board_temp", "fuel_temp"):
+            note = getattr(self, "_mb_note_stage_temperature", None)
+            if note is not None:
+                note(key, now, value, self._chamber_live_seen.get(key))
+        if (key in self.CHAMBER_CHANNEL_KEYS and getattr(self, "_mb_run_sas", None)
+                and getattr(self, "_climate_run_stage", "") and self._mb_on()
+                and now - self._chamber_live_seen.get(key, 0.0) > self._chamber_live_stale_s()):
+            # После перерыва отсчёты контура должны набраться заново для этого адреса.
+            self._chamber_live_recent[key] = []
+            self._chamber_live_outliers[key] = []
         self._chamber_live_seen[key] = now
 
-        window = float(self._chamber_window_s)
+        window = self._chamber_live_window_s()
         recent = [(stamp, sample) for stamp, sample in self._chamber_live_recent.get(key, [])
                   if now - stamp <= window]
 
@@ -146,11 +168,15 @@ class AppControllerChamberLiveMixin(AppControllerContract):
         recent.append((now, value))
         # Предел длины нужен только от разрастания при очень длинном окне.
         self._chamber_live_recent[key] = recent[-1000:]
+        if key == "level":
+            monitor = getattr(self, "_chamber_monitor_note_level", None)
+            if monitor is not None:
+                monitor(now)
 
     def _chamber_live_stats(self, key: str, now: float | None = None) -> dict | None:
         """Среднее, число показаний, разброс и охват окна по одной величине."""
         now = time.monotonic() if now is None else float(now)
-        window = float(self._chamber_window_s)
+        window = self._chamber_live_window_s()
         recent = [(stamp, sample) for stamp, sample in self._chamber_live_recent.get(key, [])
                   if now - stamp <= window]
         if not recent:
@@ -169,26 +195,43 @@ class AppControllerChamberLiveMixin(AppControllerContract):
             return False
         return now - float(self._chamber_live_seen.get(key, 0.0)) <= self._chamber_live_stale_s()
 
+    def _chamber_live_window_s(self) -> float:
+        """Даёт каждому участнику группового опроса время на три свежих замера контура."""
+        window = float(self._chamber_window_s)
+        if getattr(self, "_climate_run_stage", "") and getattr(self, "_mb_run_sas", None) and self._mb_on():
+            return max(window, self.CHAMBER_MIN_SAMPLES * self._chamber_live_stale_s())
+        tube_polling = getattr(self, "_mb_tube_polling", None)
+        if tube_polling is not None and tube_polling():
+            round_s = len(self._mb_boards) * len(self.CHAMBER_TUBE_LIVE_ORDER) * self.MB_LIVE_PERIOD_MS / 1000
+            return max(window, 3.0 * round_s)
+        return window
+
     def _chamber_live_stale_s(self) -> float:
         """Цель функции в пороге «показание устарело», затем при нескольких платах он растёт с длиной круга опроса."""
         stale_of = getattr(self, "_mb_stale_s", None)
         if stale_of is None:
             return float(self.CHAMBER_LIVE_STALE_S)
-        return float(stale_of(self.CHAMBER_LIVE_STALE_S, len(self.CHAMBER_LIVE_ORDER)))
+        order = self.CHAMBER_TUBE_LIVE_ORDER if self._mb_tube_polling() else self.CHAMBER_LIVE_ORDER
+        return float(stale_of(self.CHAMBER_LIVE_STALE_S, len(order)))
 
     def _chamber_live_point(self, now: float | None = None):
         """Собирает точку из средних. Возвращает (точка, пояснение) или (None, чего не хватает)."""
         now = time.monotonic() if now is None else float(now)
 
-        main = self._chamber_live_stats("main", now)
-        if main is None or main["count"] < self.CHAMBER_MIN_SAMPLES or not self._chamber_live_fresh("main", now):
-            return None, "среднее основного контура ещё набирается"
-
-        media = None
-        if "media" not in self._chamber_live_missing:
-            media = self._chamber_live_stats("media", now)
-            if media is None or media["count"] < self.CHAMBER_MIN_SAMPLES or not self._chamber_live_fresh("media", now):
-                return None, "среднее контура вида топлива ещё набирается"
+        channels = {}
+        for key, title in (("main", "основного контура"), ("media", "контура вида топлива")):
+            if key == "media" and key in self._chamber_live_missing:
+                continue
+            stats = self._chamber_live_stats(key, now)
+            count = stats["count"] if stats else 0
+            recent = self._chamber_live_recent.get(key) or []
+            if not recent or now - recent[-1][0] > self._chamber_live_stale_s():
+                return None, f"нет свежего отсчёта {title}"
+            if count < self.CHAMBER_MIN_SAMPLES:
+                return None, (f"среднее {title} ещё набирается: {count} из {self.CHAMBER_MIN_SAMPLES} "
+                              f"за окно {self._chamber_live_window_s():g} с")
+            channels[key] = stats
+        main, media = channels["main"], channels.get("media")
 
         temps = {}
         for key in ("fuel_temp", "board_temp"):
@@ -206,6 +249,12 @@ class AppControllerChamberLiveMixin(AppControllerContract):
             "main_spread": main["spread"],
             "media_spread": None if media is None else media["spread"],
         }
+        # 14.11.2026: уровень прибора (0x0018, десятые доли %) и итог периода (0x0062) - в точку журнала:
+        # по ним в итогах видна погрешность уровня в каждой точке. Без них точка всё равно снимается.
+        for key, field in (("level", "level_x10"), ("comp", "comp")):
+            stats = self._chamber_live_stats(key, now)
+            if stats is not None and self._chamber_live_fresh(key, now):
+                point[field] = round(float(stats["mean"]), 1) if key == "level" else int(round(stats["mean"]))
         detail =f"среднее за {_decimal(main['span_s'], 0)} с по {main['count']} показаниям, разброс {main['spread']}"
         if media is not None:
             detail += f" / {media['spread']}"
@@ -235,6 +284,8 @@ class AppControllerChamberLiveMixin(AppControllerContract):
 
         if self._chamber_live_try_store():
             return True
+        if getattr(self, "_climate_run_paused", False) and getattr(self, "_climate_run_stage", "") == "capture":
+            return False
 
         if not self._can.is_connect:
             self.infoMessage.emit("Прогон в камере", "Сначала подключите CAN-адаптер.")
@@ -257,12 +308,14 @@ class AppControllerChamberLiveMixin(AppControllerContract):
         if point is None:
             return False
         self._chamber_capture_waiting = False
-        self._chamber_append_point(point, detail)
-        return True
+        return self._chamber_append_point(point, detail) is not False
 
     def _chamber_live_check_waiting(self, now: float):
         """Продолжает ожидание среднего после нажатия кнопки."""
         if not self._chamber_capture_waiting:
+            return
+        if getattr(self, "_climate_run_stage", "") == "capturing" and (
+                self._climate_run_paused or self._climate_camera_issue(now)):
             return
         if self._chamber_live_try_store():
             return
@@ -319,11 +372,12 @@ class AppControllerChamberLiveMixin(AppControllerContract):
         self.chamberLiveChanged.emit()
         return True
 
-    def _chamber_live_next_request(self):
+    def _chamber_live_next_request(self, order=None):
         """Следующая величина по кругу опроса, пропуская те, которых нет в прошивке."""
         variables = {key: (var, signed) for key, var, signed in self._chamber_live_vars()}
-        for _attempt in range(len(self.CHAMBER_LIVE_ORDER)):
-            key = self.CHAMBER_LIVE_ORDER[self._chamber_live_index % len(self.CHAMBER_LIVE_ORDER)]
+        order = self.CHAMBER_LIVE_ORDER if order is None else order
+        for _attempt in range(len(order)):
+            key = order[self._chamber_live_index % len(order)]
             self._chamber_live_index += 1
             if key in self._chamber_live_missing or key not in variables:
                 continue
@@ -385,7 +439,7 @@ class AppControllerChamberLiveMixin(AppControllerContract):
         if bool(getattr(self, "_calibration_active", False)) and not bool(getattr(self, "_calibration_session_ready", True)):
             return
         # Несколько плат в камере: опрос по кругу по всем платам (multiboard_mixin).
-        multi = getattr(self, "_mb_on", None)
+        multi = getattr(self, "_mb_live_group", None)
         if multi is not None and multi():
             self._mb_live_tick(now)
             return
@@ -393,6 +447,8 @@ class AppControllerChamberLiveMixin(AppControllerContract):
         picked = self._chamber_live_next_request()
         if picked is None:
             return
+        if hasattr(self, "_mb_pending_sa"):
+            self._mb_pending_sa = None
         self._chamber_live_pending = picked
         self._chamber_live_pending_s = now
         note_background_request(self)
@@ -416,10 +472,9 @@ class AppControllerChamberLiveMixin(AppControllerContract):
     def _handle_chamber_live_frame(self, identifier: int, payload):
         """Подхватывает показания точки из любого ответа прибора, кто бы их ни запросил."""
         # Несколько плат: ответ идёт в средние той платы, от которой пришёл.
-        multi = getattr(self, "_mb_on", None)
-        if multi is not None and multi():
-            if self._chamber_live_wanted:
-                self._mb_handle_live_frame(identifier, payload)
+        multi = getattr(self, "_mb_live_group", None)
+        if multi is not None and (multi() or (self._mb_pending_sa is not None and self._chamber_live_pending)):
+            self._mb_handle_live_frame(identifier, payload)
             return
         self._chamber_live_frame_apply(identifier, payload)
 
@@ -463,6 +518,7 @@ class AppControllerChamberLiveMixin(AppControllerContract):
                 continue
             self._chamber_live_note(key, self._chamber_live_decode(body[3:], var, signed), now)
             self._chamber_live_refusals.pop(key, None)
+            self._chamber_live_missing.discard(key)
             if self._chamber_live_pending is not None and self._chamber_live_pending[0] == key:
                 self._chamber_live_pending = None
             # Окно узнает о новом показании на ближайшем такте опроса (не позже чем через 0,5 с):
@@ -475,6 +531,14 @@ class AppControllerChamberLiveMixin(AppControllerContract):
         """Живые показания для окна: текущее, среднее и пояснение по каждой величине."""
         now = time.monotonic()
         connected = bool(self._can.is_connect) and bool(self._can.is_trace)
+        scan = getattr(self, "_addr_scan", None) or {}
+        snapshot = scan.get("before_scan") if scan.get("active") and connected else None
+        if snapshot and snapshot[0] == self._resolve_calibration_target_sa():
+            before = snapshot[1]
+            return dict(before, ready=False, freshOk=False,
+                        main=dict(before["main"], info="перед поиском", ok=False),
+                        media=dict(before["media"], info="перед поиском", ok=False),
+                        freshText="Идёт поиск адресов. Показаны значения перед поиском.")
 
         def channel(key: str) -> dict:
             if key in self._chamber_live_missing:
@@ -512,6 +576,9 @@ class AppControllerChamberLiveMixin(AppControllerContract):
         if not connected:
             fresh_text = "Нет связи: подключите адаптер и включите трассировку"
             fresh_ok = False
+        elif (getattr(self, "_addr_scan", None) or {}).get("active"):
+            fresh_text = "Идёт поиск адресов. Опрос контуров продолжится после поиска."
+            fresh_ok = False
         elif not seen:
             fresh_text = "Жду первый ответ прибора..."
             fresh_ok = False
@@ -536,7 +603,8 @@ class AppControllerChamberLiveMixin(AppControllerContract):
             "media": media_view,
             "fuelTemp": temperature("fuel_temp"),
             "boardTemp": temperature("board_temp"),
-            "windowText": _decimal(float(self._chamber_window_s), 0),
+            "windowText": _decimal(self._chamber_live_window_s(), 0),
+            "configuredWindowText": _decimal(float(self._chamber_window_s), 0),
             "freshText": fresh_text,
             "freshOk": fresh_ok,
             "ready": point is not None,

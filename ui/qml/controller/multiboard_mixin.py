@@ -29,21 +29,33 @@ import copy
 import json
 import pathlib
 import time
-from contextlib import contextmanager
+from collections import deque
+from contextlib import contextmanager, nullcontext
 from datetime import datetime
 
 import chamber_fit
 from uds.uds_identifiers import UdsIdentifiers
+from ui.qml.climate_scenario import REFILL_NOTES
 
 from .bus_guard import note_background_request
 from .chamber_mixin import is_stage1_point, journal_makeup, journal_sa, stage1_nodes
 from .contract import AppControllerContract
+from .stability import countdown, is_stable, quiet_on_average, rate_and_spread
+
+BOARD_STAGES = {
+    "scenario": "По сценарию",
+    "board_cycle": "Испытание платы, один цикл",
+    "refill": "Добор точек",
+    "assembly": "Изделие в сборе",
+    "check": "Проверка профиля",
+}
 
 # Поля одной платы: всё, что прогон в камере хранит о приборе. Подставляются целиком.
 BOARD_ATTRS = (
     # Живой опрос и средние.
     "_chamber_live_last", "_chamber_live_seen", "_chamber_live_recent", "_chamber_live_outliers",
     "_chamber_live_restart_s", "_chamber_live_refusals", "_chamber_live_missing",
+    "_chamber_live_source_sa",
     # Очередная величина опроса: общий номер при 2, 3, 4 и 6 платах отдавал бы плате не все величины.
     "_chamber_live_index",
     "_chamber_capture_waiting", "_chamber_capture_wait_since",
@@ -98,6 +110,8 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         self._mb_temp_depth = 0
         self._mb_poll_index = 0
         self._mb_pending_sa: int | None = None
+        # Для плат без рассылки хранит присутствие по ответам UDS независимо от свежести температуры.
+        self._mb_uds_seen: dict[int, float] = {}
         self._mb_quiet_last_s = 0.0
         self._mb_quiet_on = False
         self._mb_capture_stage_since: float | None = None
@@ -106,6 +120,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         self._mb_profile_current: int | None = None
         self._mb_profile_since = 0.0
         self._mb_profile_results: dict[int, str] = {}
+        self._mb_profile_outcomes: dict[int, bool | None] = {}
         self._mb_switch_since: float | None = None
         self._mb_status = ""
         # Отчёт последнего нажатия «Журналы первого этапа всем платам»: строка на плату.
@@ -125,6 +140,9 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         # Участники прогона: платы списка, которые были на шине при старте. Остальные платы списка
         # (снятые, в другой камере) прогону не мешают. None - прогона с участниками ещё не было.
         self._mb_run_sas: list[int] | None = None
+        self._mb_run_stages: dict[int, dict] = {}
+        self._mb_stage_history = {}
+        self._mb_stage_excluded = set()
         self._mb_load()
         self._mb_apply_period()
 
@@ -146,6 +164,9 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                 continue
             if sa not in [board["sa"] for board in boards]:
                 board = {"sa": sa, "name": str(item.get("name") or f"0x{sa:02X}")[:24]}
+                stage = item.get("stage")
+                if isinstance(stage, str) and stage in BOARD_STAGES:
+                    board["stage"] = stage
                 # Размах платы помнится между запусками: его меряют на столе один раз.
                 for key in ("span_main", "span_media"):
                     try:
@@ -156,10 +177,8 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                         pass
                 boards.append(board)
         self._mb_boards = boards
-        self._mb_enabled = bool(payload.get("enabled", False)) and len(boards) >= 2
+        self._mb_previously_enabled = bool(payload.get("enabled", False))
         self._mb_quiet_bus = bool(payload.get("quiet_bus", True))
-        if self._mb_enabled:
-            self._mb_activate(boards[0]["sa"], force=True)
 
     def _mb_save(self):
         try:
@@ -176,6 +195,182 @@ class AppControllerMultiBoardMixin(AppControllerContract):
 
     def _mb_board(self, sa: int) -> dict | None:
         return next((board for board in self._mb_boards if board["sa"] == int(sa) & 0xFF), None)
+
+    def _mb_stages_locked(self) -> bool:
+        """Чтобы продолжение не меняло условия опыта, закрепляет назначения до окончания прогона."""
+        return any(getattr(self, key, None) for key in (
+            "_climate_run_stage", "_climate_auto_finishing", "_climate_auto_resume")) or self._mb_profiles_busy()
+
+    def _mb_set_stage(self, sa: int, stage: str) -> tuple[bool, str]:
+        """Сохраняет выбор этапа за адресом платы между запусками программы."""
+        board = self._mb_board(sa)
+        if board is None or stage not in BOARD_STAGES:
+            return False, "Неизвестная плата или этап."
+        if self._mb_stages_locked():
+            return False, "Этапы можно менять после окончания или отмены прогона."
+        board["stage"] = stage
+        self._mb_save()
+        self._mb_changed()
+        return True, BOARD_STAGES[stage]
+
+    def _mb_stage_view(self) -> dict:
+        """Показывает назначения подключённых плат без пересчёта журнальных таблиц."""
+        locked = self._mb_stages_locked()
+        if not self._mb_on():
+            return {"enabled": False, "rows": []}
+        rows = []
+        for board in self._mb_working_boards():
+            sa = board["sa"]
+            stage = self._mb_stage_for(sa) if locked else None
+            choice = (stage or board).get("stage", "scenario")
+            rows.append({"sa": sa, "label": self._mb_label(sa), "stage": choice, "stageText": BOARD_STAGES[choice]})
+        return {"enabled": True, "locked": locked, "rows": rows,
+                "options": [{"key": key, "text": name} for key, name in BOARD_STAGES.items()]}
+
+    def _mb_stage_plan(self, now: float, plan: dict) -> dict[int, dict]:
+        """Строит назначения участников по общему сценарию и журналу каждой платы."""
+        if not self._mb_on():
+            return {}
+        boards = [board for board in self._mb_boards if self._mb_start_ready(board["sa"], now)]
+        if not any(board.get("stage", "scenario") != "scenario" for board in boards):
+            return {}
+        scenario = getattr(self, "_climate_scenario", None) or {}
+        default_label = next(iter(plan["labels"]), "")
+        result = {}
+        for board in boards:
+            sa, stage = board["sa"], board.get("stage", "scenario")
+            inherited = stage == "scenario"
+            check = stage == "check" or (inherited and bool(scenario.get("check_only")))
+            board_only = stage in ("board_cycle", "refill") or (inherited and bool(scenario.get("board_only")))
+            label = default_label if inherited else ("0/0" if board_only else chamber_fit.AIR_NOTE)
+            nodes = None
+            if stage == "refill":
+                points = self._mb_context_value(sa, "_chamber_points") or []
+                covered = set(stage1_nodes(points))
+                controls = {int(temp * 10) for temp in REFILL_NOTES}
+                nodes = sorted((set(chamber_fit.NODES_X10) - covered) | controls)
+            result[sa] = {
+                "stage": stage, "label": label, "board_only": board_only, "check_only": check,
+                "auto_write": bool(scenario.get("auto_write", getattr(self, "_chamber_auto_write", False))) and not check,
+                "extend_liquid": bool(getattr(self, "_chamber_extend_liquid", False)),
+                "single_model": scenario.get("single_model", getattr(self, "_chamber_single_model", chamber_fit.SINGLE_GAIN)),
+                "nodes": nodes,
+            }
+        return result
+
+    def _mb_stage_for(self, sa: int | None) -> dict | None:
+        """Возвращает закреплённый этап участника последнего прогона."""
+        return (getattr(self, "_mb_run_stages", None) or {}).get(sa)
+
+    def _mb_stage_name(self, sa: int) -> str:
+        """Подписывает фактический этап сохранённых результатов платы."""
+        stage = self._mb_stage_for(sa)
+        return BOARD_STAGES[stage["stage"]] if stage else ""
+
+    @contextmanager
+    def _mb_stage_context(self, sa: int):
+        """Передаёт в расчёт и журнал настройки одной платы и затем возвращает общие настройки."""
+        stage = self._mb_stage_for(sa)
+        if stage is None:
+            yield
+            return
+        fields = ("label", "board_only", "check_only", "auto_write", "extend_liquid", "single_model")
+        previous = {field: getattr(self, "_chamber_" + field, None) for field in fields}
+        try:
+            for field in fields:
+                setattr(self, "_chamber_" + field, stage[field])
+            yield
+        finally:
+            for field, value in previous.items():
+                setattr(self, "_chamber_" + field, value)
+
+    def _mb_prepare_stage_journals(self):
+        """Начинает чистый журнал нового цикла и проверки, сохраняя журналы добора и сборки."""
+        for sa, stage in self._mb_run_stages.items():
+            if stage["stage"] != "board_cycle" and not stage["check_only"]:
+                continue
+            with self._mb_context(sa, notify=False), self._mb_stage_context(sa):
+                self._chamber_clear_points()
+                how = "журнал проверки профиля" if stage["check_only"] else "новый журнал первого этапа"
+                self._chamber_journal_origin = {"how": how, "at": datetime.now().strftime("%d.%m %H:%M")}
+
+    def _mb_stage_uses_step(self, stage: dict, temp: float) -> bool:
+        """Для добора выбирает только запланированные узлы, оставляя остальные шаги камеры общими."""
+        return stage["nodes"] is None or chamber_fit.nearest_node(int(round(temp * 10))) in stage["nodes"]
+
+    def _mb_step_sensors(self, node: float) -> dict:
+        """Определяет рабочий датчик каждого участника, которому нужна точка текущего шага."""
+        return {sa: ("fuel_temp" if stage["label"].casefold() in (chamber_fit.AIR_NOTE, chamber_fit.LIQUID_NOTE)
+                     else "board_temp") for sa, stage in self._mb_run_stages.items()
+                if self._mb_stage_uses_step(stage, node)}
+
+    def _mb_steering_group(self, sensors: dict) -> str:
+        """Выбирает ведущую группу по датчикам шага и настройке смешанного прогона."""
+        groups = set(sensors.values())
+        if len(groups) == 1:
+            return next(iter(groups))
+        return (getattr(self, "_climate_scenario", None) or {}).get("mixed_steering", "fixed")
+
+    def _mb_note_stage_temperature(self, key, now, value, previous):
+        """Сохраняет историю реальных ответов датчика для оценки устойчивости на текущей уставке."""
+        sa = getattr(self, "_mb_active_sa", None)
+        if (getattr(self, "_climate_run_stage", "") not in ("settle", "hold", "points", "capture")
+                or self._climate_run_paused or sa not in self._mb_run_stages):
+            return
+        series = self._mb_stage_history.setdefault((sa, key), deque())
+        if previous is None or now - previous > self._chamber_live_stale_s():
+            series.clear()
+        window = self._climate_run_param("settle_min") * 60 / self._climate_speed()
+        while series and now - series[0][0] > 3 * window:
+            series.popleft()
+        if not series or now - series[-1][0] >= min(self.CLIMATE_BOARD_STEP_S, window / 20):
+            series.append((now, value / 10))
+
+    def _mb_stage_conditions(self, now, node, window, rate_limit):
+        """Проверяет свежесть, устойчивость обоих датчиков сборки и допуск рабочего датчика каждой платы."""
+        states = {}
+        speed = self._climate_speed()
+        tolerance = self._climate_run_param("board_tolerance_c")
+        target = self._climate_run_board_target(node)
+        for sa, primary in self._mb_step_sensors(node).items():
+            state = {"key": primary, "reasons": [], "ready": False, "value": None, "rate": None, "inRange": False, "stable": True}
+            state["missing_s"] = 0.0
+            states[sa] = state
+            seen = self._mb_context_value(sa, "_chamber_live_seen") or {}
+            latest = self._mb_context_value(sa, "_chamber_live_last") or {}
+            for key in (("board_temp", "fuel_temp") if primary == "fuel_temp" else ("board_temp",)):
+                sensor = "трубка" if key == "fuel_temp" else "плата"
+                series = self._mb_stage_history.get((sa, key))
+                if latest.get(key) is None or key not in seen or now - seen[key] > self._chamber_live_stale_s():
+                    age = now - max(seen.get(key, 0.0), self._climate_run_since)
+                    state["missing_s"] = max(state["missing_s"], age)
+                    state["stable"] = False
+                    state["reasons"].append(f"{sensor} — нет свежего ответа CAN")
+                    continue
+                samples = series or ()
+                if series and seen[key] > series[-1][0] and key in latest:
+                    samples = [*series, (seen[key], latest[key] / 10)]
+                result = rate_and_spread(samples, now, window)
+                covered = result[2] if result else 0
+                if covered < 0.9 * window:
+                    reason = f"набирается история, ещё ≈ {countdown(0.9 * window - covered)}"
+                elif is_stable(result, window, rate_limit, self.CLIMATE_STABLE_SPREAD_C) or quiet_on_average(
+                        samples, now, window, rate_limit):
+                    reason = ""
+                elif abs(result[0]) >= rate_limit:
+                    reason = f"скорость {result[0] / speed:+.3f} °C/мин, предел {rate_limit / speed:g}"
+                else:
+                    reason = f"разброс {result[1]:.2f} °C, предел {self.CLIMATE_STABLE_SPREAD_C:g}"
+                if reason:
+                    state["stable"] = False
+                    state["reasons"].append(f"{sensor} — {reason}")
+                if key == primary and series:
+                    value = latest[key] / 10
+                    state.update(ready=not reason, value=value, rate=result[0] / speed if result else None,
+                                 inRange=abs(value - target) <= tolerance + 1e-9 and not self._climate_board_clamped(value))
+                    if not state["inRange"]:
+                        state["reasons"].append(f"{sensor} {value:+.1f} °C, цель {target:+g} ±{tolerance:g} °C")
+        return states
 
     def _mb_name(self, sa: int | None) -> str:
         board = self._mb_board(sa) if sa is not None else None
@@ -319,7 +514,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
     # ------------------------------------------------------------------ список плат
 
     def _mb_set_enabled(self, enabled: bool) -> tuple[bool, str]:
-        if getattr(self, "_climate_run_stage", ""):
+        if self._mb_stages_locked():
             return False, "идёт прогон: режим нескольких плат меняется после него"
         if enabled and len(self._mb_boards) < 2:
             return False, "добавьте хотя бы две платы с разными адресами"
@@ -348,7 +543,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             return False, f"0x{sa:02X} - адрес самой программы на шине"
         if self._mb_board(sa) is not None:
             return False, f"плата 0x{sa:02X} уже в списке"
-        if getattr(self, "_climate_run_stage", ""):
+        if self._mb_stages_locked():
             return False, "идёт прогон: список плат меняется после него"
         name = str(name or "").strip()[:24] or f"Плата {len(self._mb_boards) + 1}"
         self._mb_boards.append({"sa": sa, "name": name})
@@ -361,7 +556,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         board = self._mb_board(sa)
         if board is None:
             return False, "такой платы нет"
-        if getattr(self, "_climate_run_stage", ""):
+        if self._mb_stages_locked():
             return False, "идёт прогон: список плат меняется после него"
         if self._mb_active_sa == sa:
             others = [item["sa"] for item in self._mb_boards if item["sa"] != sa]
@@ -392,7 +587,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         """Цель функции в новом адресе платы после его смены в приборе, затем её журнал, таблицы и профиль - с ней."""
         old, new = int(old) & 0xFF, int(new) & 0xFF
         board = self._mb_board(old)
-        if board is None or self._mb_board(new) is not None or getattr(self, "_climate_run_stage", ""):
+        if board is None or self._mb_board(new) is not None or self._mb_stages_locked():
             return False
         board["sa"] = new
         if old in self._mb_contexts:
@@ -427,7 +622,35 @@ class AppControllerMultiBoardMixin(AppControllerContract):
     def _mb_apply_period(self):
         timer = getattr(self, "_chamber_live_timer", None)
         if timer is not None:
-            timer.setInterval(self.MB_LIVE_PERIOD_MS if self._mb_on() else self.CHAMBER_LIVE_PERIOD_MS)
+            grouped = self._mb_on() or self._mb_tube_polling()
+            timer.setInterval(self.MB_LIVE_PERIOD_MS if grouped else self.CHAMBER_LIVE_PERIOD_MS)
+
+    def _mb_tube_polling(self) -> bool:
+        """Для проверки монтажа разрешает групповой опрос на открытой вкладке вне прогона."""
+        return bool(getattr(self, "_chamber_tube_visible", False)) and not self._mb_stages_locked()
+
+    def _mb_live_group(self) -> bool:
+        """Для чтения контуров включает опрос по адресам без смены режима прогона."""
+        return self._mb_on() or (self._mb_tube_polling() and bool(self._mb_boards))
+
+    @contextmanager
+    def _mb_live_context(self, sa: int):
+        """В одиночном режиме обновляет показания выбранного адреса прямо в верхней панели."""
+        resolve = getattr(self, "_resolve_calibration_target_sa", None)
+        if self._mb_on() or not callable(resolve):
+            with self._mb_context(sa, notify=False):
+                yield
+        elif sa == resolve():
+            yield
+        else:
+            # У другого адреса своё окно измерений. Одиночный режим может хранить прежний активный адрес.
+            previous = self._mb_active_sa
+            self._mb_active_sa = None
+            try:
+                with self._mb_context(sa, notify=False):
+                    yield
+            finally:
+                self._mb_active_sa = previous
 
     # ------------------------------------------------------------------ опрос по кругу
 
@@ -437,13 +660,25 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         return bool(getattr(self, "_climate_run_stage", "")) and self._mb_run_sas is not None
 
     def _mb_on_bus(self, sa: int, now: float | None = None) -> bool:
-        """Плата присылала температуру за последнюю минуту."""
+        """Для присутствия учитывает недавнюю температуру и ответы UDS, включая чтение профиля."""
         now = time.monotonic() if now is None else now
+        can = getattr(self, "_can", None)
+        if can is not None and (not getattr(can, "is_connect", False) or not getattr(can, "is_trace", False)):
+            return False
         # Без переключения полей на плату: оно стоит ~45 присваиваний полей контроллера, а вызывается
         # десятки раз на каждое обновление окна и снимок сайта (13.11.2026: тормоза при трёх платах).
         seen_map = self._mb_context_value(sa, "_chamber_live_seen") or {}
-        seen = float(seen_map.get("board_temp", 0.0) or 0.0)
+        replies = getattr(self, "_mb_uds_seen", None) or {}
+        addressed = getattr(self, "_addr_answered", None) or {}
+        seen = max(float(seen_map.get("board_temp", 0.0) or 0.0), float(replies.get(int(sa), 0.0)),
+                   float(addressed.get(int(sa), 0.0)))
         return seen > 0.0 and now - seen <= self.MB_PRESENT_S
+
+    def _mb_start_ready(self, sa: int, now: float) -> bool:
+        """Для одинаковой проверки и старта требует присутствие платы и хотя бы одну прочитанную температуру."""
+        values = self._mb_context_value(sa, "_chamber_live_last") or {}
+        missing = self._mb_context_value(sa, "_chamber_live_missing") or set()
+        return self._mb_on_bus(sa, now) and values.get("board_temp") is not None and "board_temp" not in missing
 
     def _mb_working_boards(self, now: float | None = None) -> list[dict]:
         """Платы, с которыми идёт работа: в прогоне - его участники, вне прогона - те, что на шине.
@@ -460,7 +695,12 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         """Кого опрашивать: в прогоне - только участников (опрос чаще), иначе всех - чтобы найти, кто на шине."""
         if self._mb_run_active():
             return [board for board in self._mb_boards if board["sa"] in self._mb_run_sas] or list(self._mb_boards)
-        return list(self._mb_boards)
+        boards = list(self._mb_boards)
+        if self._mb_tube_polling() and not self._mb_on():
+            selected = self._resolve_calibration_target_sa()
+            if selected is not None and self._mb_board(selected) is None:
+                boards.append({"sa": selected})
+        return boards
 
     def _mb_profile_boards(self) -> list[dict]:
         """Кому писать профиль и о ком итог: участникам прогона (после него - тем из них, кто на шине)."""
@@ -469,14 +709,33 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             return working
         return [board for board in working if board["sa"] in self._mb_run_sas] or working
 
-    def _mb_run_begin(self, now: float) -> tuple[list[str], list[str]]:
+    def _mb_result_boards(self, now: float | None = None) -> list[dict]:
+        """Чьи итоги показывать: участники прогона (и после него), без прогона - платы на шине.
+
+        13.11.2026: итоги шли по всему списку плат камеры, и в мини-приложении рядом с тремя платами
+        прогона стояли П3-П5 из прошлой камеры. Участник прогона, пропавший с шины, остаётся в итогах.
+        Если на шине никого (адаптер выключен) - платы, у которых есть точки, иначе весь список.
+        """
+        run_sas = getattr(self, "_mb_run_sas", None)
+        if run_sas:
+            boards = [board for board in self._mb_boards if int(board["sa"]) in run_sas]
+            if boards:
+                return boards
+        working = self._mb_working_boards(now)
+        if working:
+            return working
+        with_points = [board for board in self._mb_boards
+                       if self._mb_context_value(board["sa"], "_chamber_points")]
+        return with_points or list(self._mb_boards)
+
+    def _mb_run_begin(self, now: float, stages: dict[int, dict] | None = None) -> tuple[list[str], list[str]]:
         """Старт прогона: участники - платы, приславшие температуру. (кто вошёл, кто без связи)."""
         alive, silent = [], []
         for board in self._mb_boards:
-            with self._mb_context(board["sa"], notify=False):
-                fresh = self._chamber_live_fresh("board_temp", now)
-            (alive if fresh else silent).append(board)
+            (alive if self._mb_start_ready(board["sa"], now) else silent).append(board)
         self._mb_run_sas = [int(board["sa"]) for board in alive]
+        self._mb_run_stages = {sa: stage for sa, stage in (stages or {}).items() if sa in self._mb_run_sas}
+        self._mb_profile_outcomes = {}
         self._mb_changed()
         return ([self._mb_label(board["sa"]) for board in alive],
                 [self._mb_label(board["sa"]) for board in silent])
@@ -487,6 +746,27 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         self._mb_run_sas = [int(board["sa"]) for board in self._mb_boards if int(board["sa"]) in wanted] or None
         self._mb_changed()
 
+    def _mb_prepare_resume(self, chamber: dict):
+        """Возвращает групповой опрос только для продолжения сохранённого группового прогона."""
+        previous = getattr(self, "_mb_previously_enabled", False)
+        grouped = bool(chamber["boards"]) if "boards" in chamber else previous
+        if grouped and not self._mb_on() and len(getattr(self, "_mb_boards", None) or []) >= 2:
+            self._mb_enabled = True
+            self._mb_activate(self._mb_boards[0]["sa"], force=True)
+            self._mb_apply_period()
+
+    def _mb_restore_stage_plans(self, boards):
+        """После перезапуска восстанавливает назначения и список узлов добора из сохранённого прогона."""
+        self._mb_run_stages = {}
+        for board in boards:
+            stage = board.get("stage_plan")
+            try:
+                sa = int(board["sa"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if isinstance(stage, dict) and stage.get("stage") in BOARD_STAGES:
+                self._mb_run_stages[sa] = stage
+
     def _mb_stale_s(self, base: float, order_length: int) -> float:
         """Цель функции в пороге «показание устарело» при нескольких платах: опрос по кругу идёт дольше.
 
@@ -494,7 +774,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         круга; при пяти платах её показание обновляется раз в 2,7 с, и прежний порог 3 с давал бы
         ложное «прибор не отдал температуру» от одного потерянного ответа.
         """
-        if not self._mb_on():
+        if not self._mb_live_group():
             return float(base)
         round_s = float(order_length) * len(self._mb_polled_boards()) * self.MB_LIVE_PERIOD_MS / 1000.0
         return max(float(base), self.MB_STALE_ROUNDS * round_s)
@@ -507,13 +787,18 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         if self._chamber_live_pending is not None and now - self._chamber_live_pending_s < self.CHAMBER_LIVE_PENDING_S:
             return
         boards = [board["sa"] for board in self._mb_polled_boards()]
+        order = self.CHAMBER_TUBE_LIVE_ORDER if self._mb_tube_polling() else None
         for _attempt in range(len(boards)):
             sa = boards[self._mb_poll_index % len(boards)]
             self._mb_poll_index += 1
             if self._mb_skip_silent(sa, now):
                 continue
-            with self._mb_context(sa, notify=False):
-                picked = self._chamber_live_next_request()
+            with self._mb_live_context(sa):
+                # Для быстрого обнаружения и восстановления связи сначала получает температуру платы.
+                priority = next((item for item in self._chamber_live_vars() if item[0] == "board_temp"
+                                 and item[0] not in self._chamber_live_missing), None)
+                picked = (priority if priority is not None and not self._chamber_live_fresh("board_temp", now)
+                          else self._chamber_live_next_request(order))
                 if picked is None:
                     continue
                 self._chamber_live_pending = picked
@@ -545,13 +830,20 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         parsed = self._parse_calibration_response_identifier(identifier)
         if parsed is None:
             return False
-        _pgn, _dst, src = parsed
-        if self._mb_board(src) is None:
+        pgn, dst, src = parsed
+        if (pgn >> 8) != (int(UdsIdentifiers.rx.pgn) >> 8) or dst != int(UdsIdentifiers.rx.dst):
             return False
+        if self._mb_board(src) is None and not (self._mb_tube_polling() and src == self._resolve_calibration_target_sa()):
+            return False
+        if isinstance(payload, (list, tuple)) and len(payload) >= 3:
+            pci = int(payload[0]) >> 4 & 0x0F
+            sid = int(payload[1 if pci == 0 else 2]) & 0xFF
+            if (pci in (0, 1) and 0x40 <= sid <= 0x7F) or pci == 2:
+                self._mb_uds_seen[int(src)] = time.monotonic()
         pending = self._chamber_live_pending
         mine = self._mb_pending_sa == (int(src) & 0xFF)
         # Без сигнала окну на каждый ответ: показ обновится на ближайшем такте опроса.
-        with self._mb_context(src, notify=False):
+        with self._mb_live_context(src):
             if not mine:
                 self._chamber_live_pending = None
             self._chamber_live_frame_apply(identifier, payload)
@@ -582,9 +874,8 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         """Платы, которые не присылают температуру: без них прогон не начать."""
         silent = []
         for board in self._mb_boards:
-            with self._mb_context(board["sa"], notify=False):
-                if not self._chamber_live_fresh("board_temp", now):
-                    silent.append(self._mb_label(board["sa"]))
+            if not self._mb_start_ready(board["sa"], now):
+                silent.append(self._mb_label(board["sa"]))
         return silent
 
     # ------------------------------------------------------------------ тишина на шине
@@ -635,22 +926,42 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             self._mb_captured = set()
         wanted = None if node is None else chamber_fit.nearest_node(int(round(float(node) * 10)))
         boards = [board for board in self._mb_working_boards(now) if only is None or board["sa"] in only]
+        individual = node is not None and self._mb_run_active() and bool(self._mb_run_stages)
+        if individual:
+            speed = self._climate_speed()
+            states = self._mb_stage_conditions(now, node, self._climate_run_param("settle_min") * 60 / speed,
+                                               self._climate_run_param("settle_rate") * speed)
+            boards = [board for board in boards if board["sa"] in states and board["sa"] not in self._mb_stage_excluded]
         waiting = []
         for board in boards:
             sa = board["sa"]
             if sa in self._mb_captured:
                 continue
-            with self._mb_context(sa, notify=False):
+            if individual and states[sa]["reasons"]:
+                waiting.append(f"{self._mb_label(sa)}: {', '.join(states[sa]['reasons'])}")
+                continue
+            with self._mb_context(sa, notify=False), self._mb_stage_context(sa) if individual else nullcontext():
                 point, detail = self._chamber_live_point(now)
                 if point is None:
                     waiting.append(f"{self._mb_label(sa)}: {detail or 'среднее ещё не готово'}")
                     continue
-                self._chamber_append_point(point, detail)
-                self._mb_captured.add(sa)
                 # Узел точки - по тому датчику, по которому её разложит расчёт (трубка - по датчику топлива).
                 steer = getattr(self, "_climate_steer_key", None)
-                field = "fuel_temp_x10" if steer is not None and steer() == "fuel_temp" else "board_temp_x10"
+                if individual:
+                    tube = self._chamber_label.casefold() in (chamber_fit.AIR_NOTE, chamber_fit.LIQUID_NOTE)
+                else:
+                    tube = steer is not None and steer() == "fuel_temp"
+                field = "fuel_temp_x10" if tube else "board_temp_x10"
+                if individual and abs(point[field] / 10 - self._climate_run_board_target(node)) > self._climate_run_param("board_tolerance_c") + 1e-9:
+                    waiting.append(f"{self._mb_label(sa)}: среднее {point[field] / 10:+.1f} °C вне допуска шага")
+                    continue
                 got = chamber_fit.nearest_node(point[field])
+                if individual and wanted is not None and got != wanted and not self._chamber_check_only:
+                    waiting.append(f"{self._mb_label(sa)}: {point[field] / 10:+.1f} °C вне узла {chamber_fit.node_text(wanted)}")
+                    continue
+                if self._chamber_append_point(point, detail) is False:
+                    return False
+                self._mb_captured.add(sa)
                 if wanted is not None and got != wanted:
                     what = "трубки" if field == "fuel_temp_x10" else "платы"
                     self._climate_event(f"плата {self._mb_label(sa)}: точка при {point[field] / 10:+.1f} °C ({what}) - "
@@ -667,8 +978,12 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             return True
         if now - self._mb_capture_stage_since >= self.MB_CAPTURE_WAIT_S:
             names = ", ".join(self._mb_label(board["sa"]) for board in missing)
-            self._climate_event(f"нет среднего от плат {names} за {self.MB_CAPTURE_WAIT_S:g} с: точка шага у них не "
-                                "снята, прогон идёт дальше. Проверьте их связь.", "warn")
+            reason = "; ".join(waiting)
+            self._climate_event(f"у плат {names} за {self.MB_CAPTURE_WAIT_S:g} с не снята точка: {reason}. "
+                                "Прогон идёт дальше.", "warn")
+            problems = getattr(self, "_climate_auto_problems", None)
+            if individual and problems is not None:
+                problems.append(f"Не снята точка {node:+g} °C: {reason}.")
             self._mb_capture_stage_since = None
             return True
         return False
@@ -734,17 +1049,23 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         """Запись профиля в каждую плату, у которой таблицы полные (конец прогона или кнопка). Возвращает итог."""
         if not self._mb_on():
             return ""
-        if not manual and not bool(getattr(self, "_chamber_auto_write", False)):
+        if not manual and not self._mb_run_stages and not bool(getattr(self, "_chamber_auto_write", False)):
             return ""
         if self._mb_profiles_busy():
             return "профили уже пишутся"
         queue = []
-        for board in self._mb_profile_boards():
+        self._mb_profile_outcomes = {}
+        for board in self._mb_result_boards():
+            stage = self._mb_stage_for(board["sa"]) or {}
+            if stage.get("check_only") or (stage and not manual and not stage["auto_write"]):
+                continue
+            self._mb_profile_outcomes[board["sa"]] = None
             with self._mb_context(board["sa"], notify=False):
                 if self._chamber_tables_complete:
                     queue.append(board["sa"])
                 else:
                     self._mb_profile_results[board["sa"]] = "таблицы неполные - профиль не записан"
+                    self._mb_profile_outcomes[board["sa"]] = False
         self._mb_profile_queue = queue
         self._mb_profile_current = None
         names = ", ".join(self._mb_label(sa) for sa in queue)
@@ -814,6 +1135,8 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             if stage and now - self._mb_profile_since < self.MB_CHAIN_WAIT_S:
                 return
             self._mb_profile_results[current] = str(getattr(self, "_chamber_chain_status", "") or "")
+            steps = getattr(self, "_chamber_chain_steps", None) or {}
+            self._mb_profile_outcomes[current] = not stage and steps.get("file") == "ok"
             self._mb_profile_current = None
             if stage:
                 self._mb_profile_results[current] = "запись профиля не закончилась вовремя"
@@ -823,6 +1146,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                 reread(current)
             if not self._mb_profile_queue:
                 # Последняя плата: калибровка закрывается, плата возвращается в обычный сеанс.
+                self._mb_quiet_release()
                 self._mb_calibration_close()
         if not self._mb_profile_queue or self._mb_profile_current is not None:
             return
@@ -840,6 +1164,9 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             problem = problem_of() if problem_of is not None else ""
             self._mb_profile_results[sa] = (f"профиль не записан: {problem}" if problem
                                             else "этот профиль уже записан в плату ранее")
+            self._mb_profile_outcomes[sa] = not bool(problem)
+            if not self._mb_profile_queue:
+                self._mb_quiet_release()
             self._mb_changed()
             return
         self._mb_profile_current = sa
@@ -894,7 +1221,11 @@ class AppControllerMultiBoardMixin(AppControllerContract):
         result = []
         for board in self._mb_working_boards():
             with self._mb_context(board["sa"], notify=False):
-                result.append({"sa": int(board["sa"]), "journal": str(self._chamber_file_path or "")})
+                sa = int(board["sa"])
+                item = {"sa": sa, "journal": str(self._chamber_file_path or "")}
+                if (stage := self._mb_stage_for(sa)) is not None:
+                    item["stage_plan"] = stage
+                result.append(item)
         return result
 
     def _mb_find_run_journals(self, since: float | None) -> list[dict]:
@@ -1166,7 +1497,7 @@ class AppControllerMultiBoardMixin(AppControllerContract):
             journal = str(item.get("journal") or "")
             if self._mb_board(sa) is None or not journal:
                 continue
-            with self._mb_context(sa, notify=False):
+            with self._mb_context(sa, notify=False), self._mb_stage_context(sa):
                 if journal == str(self._chamber_file_path or ""):
                     continue
                 if loader is not None and pathlib.Path(journal).is_file() and loader(journal):
@@ -1175,16 +1506,34 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                     events.append(f"{self._mb_label(sa)}: журнал {journal} не загрузился")
         return events
 
+    def _mb_note_profile_result(self, text: str, success: bool):
+        """Чтобы ручная повторная запись обновляла общий итог, сохраняет подтверждённый результат целевой платы."""
+        if not self._mb_on():
+            return
+        sa = self._mb_profile_current if self._mb_profile_current is not None else self._mb_active_sa
+        if sa is None or self._mb_board(sa) is None:
+            return
+        self._mb_profile_results[sa] = str(text)
+        self._mb_profile_outcomes[sa] = bool(success)
+        self._mb_changed()
+
+    def _mb_profile_failures(self) -> list[str]:
+        """Чтобы итог не скрывал ошибку записи, перечисляет все профили без подтверждённой сверки и файла."""
+        outcomes = getattr(self, "_mb_profile_outcomes", None) or {}
+        return [self._mb_label(sa) for sa, ok in outcomes.items() if ok is not True]
+
     def _mb_summary_text(self) -> str:
         """Итог по платам для сообщения о конце прогона."""
         if not self._mb_on():
             return ""
         parts = []
-        for board in self._mb_profile_boards():
+        for board in self._mb_result_boards():
             with self._mb_context(board["sa"], notify=False):
                 points = len(self._chamber_points)
             result = self._mb_profile_results.get(board["sa"], "")
-            parts.append(f"{self._mb_label(board['sa'])}: точек {points}" + (f", {result}" if result else ""))
+            stage = self._mb_stage_name(board["sa"])
+            prefix = stage + ", " if stage else ""
+            parts.append(f"{self._mb_label(board['sa'])}: {prefix}точек {points}" + (f", {result}" if result else ""))
         return " По платам: " + "; ".join(parts) + "."
 
     # ------------------------------------------------------------------ показ
@@ -1210,6 +1559,9 @@ class AppControllerMultiBoardMixin(AppControllerContract):
                     "fresh": bool(fresh),
                     # В работе: участник прогона, а вне прогона - на шине. Лента, сайт и бот - только такие.
                     "working": int(board["sa"]) in working,
+                    "stage": board.get("stage", "scenario"),
+                    "stageText": BOARD_STAGES[((self._mb_stage_for(board["sa"]) if self._mb_stages_locked() else None)
+                                               or board).get("stage", "scenario")],
                     "boardTemp": "—" if temp is None else f"{temp['mean'] / 10.0:+.1f} °C".replace(".", ","),
                     "main": "—" if main is None else str(int(round(main["mean"]))),
                     "media": "—" if media is None else str(int(round(media["mean"]))),
